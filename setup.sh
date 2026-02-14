@@ -265,6 +265,8 @@ wizard() {
     # ── 3. Pricing ──────────────────────────────────────────
     print_section "3/10  Subscription Pricing"
     print_info "Set prices in your local currency units."
+    ask "Plan label (shown on buttons)" "Unlimited" "PLAN_LABEL"
+    ask "Currency code" "MMK" "CURRENCY"
     ask_number "Price for 1 month" "10000" "PRICE_1"
     ask_number "Price for 3 months" "28000" "PRICE_3"
     ask_number "Price for 6 months" "52000" "PRICE_6"
@@ -384,6 +386,8 @@ REMNAWAVE_MODE=${CFG[REMNAWAVE_MODE]}
 REMNAWAVE_TAG=$(echo "${CFG[REMNAWAVE_TAG]}" | tr '[:lower:]' '[:upper:]')
 
 # ── Subscription Pricing ────────────────────────────────────
+PLAN_LABEL=${CFG[PLAN_LABEL]}
+CURRENCY=${CFG[CURRENCY]}
 PRICE_1=${CFG[PRICE_1]}
 PRICE_3=${CFG[PRICE_3]}
 PRICE_6=${CFG[PRICE_6]}

@@ -49,6 +49,8 @@ type config struct {
 	mobileBankingPhone                                        string
 	geminiAPIKey                                              string
 	geminiModel                                               string
+	planLabel                                                 string
+	currency                                                  string
 }
 
 var conf config
@@ -241,6 +243,14 @@ func GeminiAPIKey() string {
 
 func GeminiModel() string {
 	return conf.geminiModel
+}
+
+func PlanLabel() string {
+	return conf.planLabel
+}
+
+func Currency() string {
+	return conf.currency
 }
 
 const bytesInGigabyte = 1073741824
@@ -498,4 +508,7 @@ func InitConfig() {
 		conf.geminiAPIKey = mustEnv("GEMINI_API_KEY")
 		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
 	}
+
+	conf.planLabel = envStringDefault("PLAN_LABEL", "Unlimited")
+	conf.currency = envStringDefault("CURRENCY", "MMK")
 }

@@ -17,36 +17,57 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 )
 
+func formatPrice(price int) string {
+	s := strconv.Itoa(price)
+	n := len(s)
+	if n <= 3 {
+		return s
+	}
+	var result strings.Builder
+	for i, c := range s {
+		if i > 0 && (n-i)%3 == 0 {
+			result.WriteByte(',')
+		}
+		result.WriteRune(c)
+	}
+	return result.String()
+}
+
 func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
 	langCode := update.CallbackQuery.From.LanguageCode
 
 	var priceButtons []models.InlineKeyboardButton
 
+	formatPlanButton := func(months int, price int) string {
+		days := months * config.DaysInMonth()
+		return fmt.Sprintf("%s %d Days - %s %s", config.PlanLabel(), days, formatPrice(price), config.Currency())
+	}
+
 	if config.Price1() > 0 {
 		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         h.translation.GetText(langCode, "month_1"),
+			Text:         formatPlanButton(1, config.Price1()),
 			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 1, config.Price1()),
 		})
 	}
 
 	if config.Price3() > 0 {
 		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         h.translation.GetText(langCode, "month_3"),
+			Text:         formatPlanButton(3, config.Price3()),
 			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 3, config.Price3()),
 		})
 	}
 
 	if config.Price6() > 0 {
 		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         h.translation.GetText(langCode, "month_6"),
+			Text:         formatPlanButton(6, config.Price6()),
 			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 6, config.Price6()),
 		})
 	}
 
 	if config.Price12() > 0 {
 		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         h.translation.GetText(langCode, "month_12"),
+			Text:         formatPlanButton(12, config.Price12()),
 			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 12, config.Price12()),
 		})
 	}
