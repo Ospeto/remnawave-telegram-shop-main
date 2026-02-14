@@ -1,0 +1,48 @@
+services:
+  bot:
+    image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:latest
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./translations:/translations
+
+  db:
+    image: postgres:17
+    container_name: 'remnawave-telegram-shop-db'
+    hostname: remnawave-telegram-shop-db
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=UTC
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - remnawave-telegram-shop-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ 'CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}' ]
+      interval: 3s
+      timeout: 10s
+      retries: 3
+
+#  ngrok:
+#    image: ngrok/ngrok:latest
+#    command:
+#      - "http"
+#      - "http://bot:8080"
+#    environment:
+#      NGROK_AUTHTOKEN: TOKEN
+#    ports:
+#      - 4040:4040
+
+volumes:
+  remnawave-telegram-shop-db-data:
+    driver: local
+    external: false
+    name: remnawave-telegram-shop-db-data
