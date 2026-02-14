@@ -600,8 +600,9 @@ do_edit_pricing() {
 
     # Read current values from .env
     local cur_currency cur_plans
-    cur_currency=$(grep -E '^CURRENCY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "MMK")
-    cur_plans=$(grep -E '^PLANS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
+    cur_currency=$({ grep -E '^CURRENCY=' "$ENV_FILE" || true; } | cut -d= -f2-)
+    cur_currency="${cur_currency:-MMK}"
+    cur_plans=$({ grep -E '^PLANS=' "$ENV_FILE" || true; } | cut -d= -f2-)
 
     print_section "Edit Plans"
 
