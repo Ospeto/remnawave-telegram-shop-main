@@ -23,6 +23,7 @@
   "renew_subscription_button": "🔄 Renew Subscription",
   "trial_button": "🔥 Try for free",
   "trial_activated": "Trial period activated",
+  "trial_failed": "❌ Failed to activate trial. Please try again or contact support.",
   "trial_text": "Your trial version is active",
   "activate_trial_button": "Activate trial version",
   "referral_button": "🤝 Referrals",

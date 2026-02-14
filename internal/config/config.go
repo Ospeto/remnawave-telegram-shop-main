@@ -307,9 +307,9 @@ func InitConfig() {
 
 	conf.miniApp = envStringDefault("MINI_APP_URL", "")
 
-	conf.remnawaveTag = envStringDefault("REMNAWAVE_TAG", "")
+	conf.remnawaveTag = strings.ToUpper(envStringDefault("REMNAWAVE_TAG", ""))
 
-	conf.trialRemnawaveTag = envStringDefault("TRIAL_REMNAWAVE_TAG", "")
+	conf.trialRemnawaveTag = strings.ToUpper(envStringDefault("TRIAL_REMNAWAVE_TAG", ""))
 
 	conf.trialTrafficLimitResetStrategy = envStringDefault("TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY", "MONTH")
 	conf.trafficLimitResetStrategy = envStringDefault("TRAFFIC_LIMIT_RESET_STRATEGY", "MONTH")

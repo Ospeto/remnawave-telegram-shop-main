@@ -1,6 +1,9 @@
 services:
   bot:
-    image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:latest
     env_file:
       - .env
     depends_on:

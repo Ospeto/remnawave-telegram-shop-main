@@ -213,6 +213,40 @@ show_menu() {
 
 # ──── Fresh Install Wizard ──────────────────────────────────
 wizard() {
+    # If .env already exists, ask whether to skip
+    if [[ -f "$ENV_FILE" ]]; then
+        echo ""
+        print_info "An existing .env file was found."
+        echo ""
+        echo -e "    ${GREEN}1${NC})  Keep current .env and start services"
+        echo -e "    ${GREEN}2${NC})  Overwrite with fresh wizard"
+        echo -e "    ${GREEN}3${NC})  Edit current .env in text editor"
+        echo ""
+        echo -ne "  ${ARROW}  Your choice [1]: "
+        local env_choice
+        read -r env_choice
+        env_choice="${env_choice:-1}"
+        case "$env_choice" in
+            1)
+                print_success "Keeping existing .env."
+                do_start
+                return
+                ;;
+            3)
+                do_edit
+                return
+                ;;
+            2)
+                print_info "Starting fresh wizard..."
+                ;;
+            *)
+                print_success "Keeping existing .env."
+                do_start
+                return
+                ;;
+        esac
+    fi
+
     # Use bash associative array to collect all config values
     declare -A CFG
 
@@ -347,7 +381,7 @@ ADMIN_TELEGRAM_ID=${CFG[ADMIN_TELEGRAM_ID]}
 REMNAWAVE_URL=${CFG[REMNAWAVE_URL]}
 REMNAWAVE_TOKEN=${CFG[REMNAWAVE_TOKEN]}
 REMNAWAVE_MODE=${CFG[REMNAWAVE_MODE]}
-REMNAWAVE_TAG=${CFG[REMNAWAVE_TAG]}
+REMNAWAVE_TAG=$(echo "${CFG[REMNAWAVE_TAG]}" | tr '[:lower:]' '[:upper:]')
 
 # ── Subscription Pricing ────────────────────────────────────
 PRICE_1=${CFG[PRICE_1]}
@@ -378,7 +412,7 @@ TRIAL_TRAFFIC_LIMIT=${CFG[TRIAL_TRAFFIC_LIMIT]}
 TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY=${CFG[TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY]}
 TRIAL_INTERNAL_SQUADS=${CFG[TRIAL_INTERNAL_SQUADS]}
 TRIAL_EXTERNAL_SQUAD_UUID=${CFG[TRIAL_EXTERNAL_SQUAD_UUID]}
-TRIAL_REMNAWAVE_TAG=${CFG[TRIAL_REMNAWAVE_TAG]}
+TRIAL_REMNAWAVE_TAG=$(echo "${CFG[TRIAL_REMNAWAVE_TAG]}" | tr '[:lower:]' '[:upper:]')
 
 # ── Squads ───────────────────────────────────────────────────
 SQUAD_UUIDS=${CFG[SQUAD_UUIDS]}
@@ -454,9 +488,9 @@ do_start() {
         return
     fi
 
-    print_arrow "Starting services..."
+    print_arrow "Building and starting services..."
     echo ""
-    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d)
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build)
     echo ""
     print_success "Services are running!"
     print_info "Use option 5 to view logs."
@@ -480,15 +514,15 @@ do_logs() {
 
 # ──── Update ────────────────────────────────────────────────
 do_update() {
-    print_arrow "Pulling latest images..."
+    print_arrow "Rebuilding from source..."
     echo ""
-    (cd "$SCRIPT_DIR" && $COMPOSE_CMD pull)
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD build --no-cache)
     echo ""
     print_arrow "Restarting services..."
     echo ""
     (cd "$SCRIPT_DIR" && $COMPOSE_CMD down && $COMPOSE_CMD up -d)
     echo ""
-    print_success "Update complete! Services are running with the latest image."
+    print_success "Update complete! Services are running with the latest build."
 }
 
 # ──── Uninstall ─────────────────────────────────────────────

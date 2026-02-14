@@ -61,9 +61,25 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 		return
 	}
 	callback := update.CallbackQuery.Message.Message
+	langCode := update.CallbackQuery.From.LanguageCode
 	ctxWithUsername := context.WithValue(ctx, "username", update.CallbackQuery.From.Username)
 	_, err = h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
-	langCode := update.CallbackQuery.From.LanguageCode
+	if err != nil {
+		slog.Error("Error activating trial", "error", err)
+		_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    callback.Chat.ID,
+			MessageID: callback.ID,
+			Text:      h.translation.GetText(langCode, "trial_failed"),
+			ParseMode: models.ParseModeHTML,
+			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
+			}},
+		})
+		if err != nil {
+			slog.Error("Error sending trial failure message", "error", err)
+		}
+		return
+	}
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      callback.Chat.ID,
 		MessageID:   callback.ID,
