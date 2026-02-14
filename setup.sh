@@ -718,7 +718,7 @@ do_edit_pricing() {
     update_var() {
         local key="$1" val="$2"
         if grep -qE "^${key}=" "$ENV_FILE"; then
-            sed -i.bak "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+            awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k{$0=k"="v}1' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
         else
             echo "${key}=${val}" >> "$ENV_FILE"
         fi
