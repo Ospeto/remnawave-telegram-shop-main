@@ -15,24 +15,18 @@ import (
 type config struct {
 	telegramToken                                             string
 	price1, price3, price6, price12                           int
-	starsPrice1, starsPrice3, starsPrice6, starsPrice12       int
 	remnawaveUrl, remnawaveToken, remnawaveMode, remnawaveTag string
 	defaultLanguage                                           string
 	databaseURL                                               string
 	cryptoPayURL, cryptoPayToken                              string
 	botURL                                                    string
-	yookasaURL, yookasaShopId, yookasaSecretKey, yookasaEmail string
-	moynalogURL, moynalogUsername, moynalogPassword           string
 	trafficLimit, trialTrafficLimit                           int
 	feedbackURL                                               string
 	channelURL                                                string
 	serverStatusURL                                           string
 	supportURL                                                string
 	tosURL                                                    string
-	isYookasaEnabled                                          bool
 	isCryptoEnabled                                           bool
-	isTelegramStarsEnabled                                    bool
-	isMoynalogEnabled                                         bool
 	adminTelegramId                                           int64
 	trialDays                                                 int
 	trialRemnawaveTag                                         string
@@ -41,18 +35,20 @@ type config struct {
 	miniApp                                                   string
 	enableAutoPayment                                         bool
 	healthCheckPort                                           int
-	tributeWebhookUrl, tributeAPIKey, tributePaymentUrl       string
 	isWebAppLinkEnabled                                       bool
 	daysInMonth                                               int
 	externalSquadUUID                                         uuid.UUID
 	blockedTelegramIds                                        map[int64]bool
 	whitelistedTelegramIds                                    map[int64]bool
-	requirePaidPurchaseForStars                               bool
 	trialInternalSquads                                       map[uuid.UUID]uuid.UUID
 	trialExternalSquadUUID                                    uuid.UUID
 	remnawaveHeaders                                          map[string]string
 	trialTrafficLimitResetStrategy                            string
 	trafficLimitResetStrategy                                 string
+	mobileBankingEnabled                                      bool
+	mobileBankingPhone                                        string
+	geminiAPIKey                                              string
+	geminiModel                                               string
 }
 
 var conf config
@@ -70,16 +66,6 @@ func TrialRemnawaveTag() string {
 
 func DefaultLanguage() string {
 	return conf.defaultLanguage
-}
-func GetTributeWebHookUrl() string {
-	return conf.tributeWebhookUrl
-}
-func GetTributeAPIKey() string {
-	return conf.tributeAPIKey
-}
-
-func GetTributePaymentUrl() string {
-	return conf.tributePaymentUrl
 }
 
 func GetReferralDays() int {
@@ -143,10 +129,6 @@ func TosURL() string {
 	return conf.tosURL
 }
 
-func YookasaEmail() string {
-	return conf.yookasaEmail
-}
-
 func Price1() int {
 	return conf.price1
 }
@@ -186,20 +168,6 @@ func Price(month int) int {
 	}
 }
 
-func StarsPrice(month int) int {
-	switch month {
-	case 1:
-		return conf.starsPrice1
-	case 3:
-		return conf.starsPrice3
-	case 6:
-		return conf.starsPrice6
-	case 12:
-		return conf.starsPrice12
-	default:
-		return conf.starsPrice1
-	}
-}
 func TelegramToken() string {
 	return conf.telegramToken
 }
@@ -227,33 +195,12 @@ func BotURL() string {
 func SetBotURL(botURL string) {
 	conf.botURL = botURL
 }
-func YookasaUrl() string {
-	return conf.yookasaURL
-}
-func YookasaShopId() string {
-	return conf.yookasaShopId
-}
-func YookasaSecretKey() string {
-	return conf.yookasaSecretKey
-}
 func TrafficLimit() int {
 	return conf.trafficLimit * bytesInGigabyte
 }
 
 func IsCryptoPayEnabled() bool {
 	return conf.isCryptoEnabled
-}
-
-func IsYookasaEnabled() bool {
-	return conf.isYookasaEnabled
-}
-
-func IsTelegramStarsEnabled() bool {
-	return conf.isTelegramStarsEnabled
-}
-
-func RequirePaidPurchaseForStars() bool {
-	return conf.requirePaidPurchaseForStars
 }
 
 func GetAdminTelegramId() int64 {
@@ -280,23 +227,23 @@ func TrafficLimitResetStrategy() string {
 	return conf.trafficLimitResetStrategy
 }
 
+func IsMobileBankingEnabled() bool {
+	return conf.mobileBankingEnabled
+}
+
+func MobileBankingPhone() string {
+	return conf.mobileBankingPhone
+}
+
+func GeminiAPIKey() string {
+	return conf.geminiAPIKey
+}
+
+func GeminiModel() string {
+	return conf.geminiModel
+}
+
 const bytesInGigabyte = 1073741824
-
-func MoynalogUrl() string {
-	return conf.moynalogURL
-}
-
-func MoynalogUsername() string {
-	return conf.moynalogUsername
-}
-
-func MoynalogPassword() string {
-	return conf.moynalogPassword
-}
-
-func IsMoynalogEnabled() bool {
-	return conf.isMoynalogEnabled
-}
 
 func mustEnv(key string) string {
 	v := os.Getenv(key)
@@ -395,17 +342,6 @@ func InitConfig() {
 	conf.price6 = mustEnvInt("PRICE_6")
 	conf.price12 = mustEnvInt("PRICE_12")
 
-	conf.isTelegramStarsEnabled = envBool("TELEGRAM_STARS_ENABLED")
-	if conf.isTelegramStarsEnabled {
-		conf.starsPrice1 = envIntDefault("STARS_PRICE_1", conf.price1)
-		conf.starsPrice3 = envIntDefault("STARS_PRICE_3", conf.price3)
-		conf.starsPrice6 = envIntDefault("STARS_PRICE_6", conf.price6)
-		conf.starsPrice12 = envIntDefault("STARS_PRICE_12", conf.price12)
-
-	}
-
-	conf.requirePaidPurchaseForStars = envBool("REQUIRE_PAID_PURCHASE_FOR_STARS")
-
 	conf.remnawaveUrl = mustEnv("REMNAWAVE_URL")
 
 	conf.remnawaveMode = func() string {
@@ -429,14 +365,6 @@ func InitConfig() {
 	if conf.isCryptoEnabled {
 		conf.cryptoPayURL = mustEnv("CRYPTO_PAY_URL")
 		conf.cryptoPayToken = mustEnv("CRYPTO_PAY_TOKEN")
-	}
-
-	conf.isYookasaEnabled = envBool("YOOKASA_ENABLED")
-	if conf.isYookasaEnabled {
-		conf.yookasaURL = mustEnv("YOOKASA_URL")
-		conf.yookasaShopId = mustEnv("YOOKASA_SHOP_ID")
-		conf.yookasaSecretKey = mustEnv("YOOKASA_SECRET_KEY")
-		conf.yookasaEmail = mustEnv("YOOKASA_EMAIL")
 	}
 
 	conf.trafficLimit = mustEnvInt("TRAFFIC_LIMIT")
@@ -467,12 +395,6 @@ func InitConfig() {
 			return map[uuid.UUID]uuid.UUID{}
 		}
 	}()
-
-	conf.tributeWebhookUrl = os.Getenv("TRIBUTE_WEBHOOK_URL")
-	if conf.tributeWebhookUrl != "" {
-		conf.tributeAPIKey = mustEnv("TRIBUTE_API_KEY")
-		conf.tributePaymentUrl = mustEnv("TRIBUTE_PAYMENT_URL")
-	}
 
 	conf.blockedTelegramIds = func() map[int64]bool {
 		v := os.Getenv("BLOCKED_TELEGRAM_IDS")
@@ -570,10 +492,10 @@ func InitConfig() {
 		return map[string]string{}
 	}()
 
-	conf.isMoynalogEnabled = envBool("MOYNALOG_ENABLED")
-	if conf.isMoynalogEnabled {
-		conf.moynalogURL = envStringDefault("MOYNALOG_URL", "https://moynalog.ru/api/v1")
-		conf.moynalogUsername = mustEnv("MOYNALOG_USERNAME")
-		conf.moynalogPassword = mustEnv("MOYNALOG_PASSWORD")
+	conf.mobileBankingEnabled = envBool("MOBILE_BANKING_ENABLED")
+	if conf.mobileBankingEnabled {
+		conf.mobileBankingPhone = mustEnv("MOBILE_BANKING_PHONE")
+		conf.geminiAPIKey = mustEnv("GEMINI_API_KEY")
+		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
 	}
 }

@@ -44,6 +44,12 @@ func (c *Cache) Get(key int64) (int, bool) {
 	return item.Value, true
 }
 
+func (c *Cache) Delete(key int64) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	delete(c.data, key)
+}
+
 func (c *Cache) cleanupExpired() {
 	ticker := time.NewTicker(5 * time.Minute)
 	for range ticker.C {

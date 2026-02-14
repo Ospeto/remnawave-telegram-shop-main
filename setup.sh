@@ -217,34 +217,28 @@ wizard() {
     declare -A CFG
 
     # ── 1. Telegram ─────────────────────────────────────────
-    print_section "1/14  Telegram Bot"
+    print_section "1/10  Telegram Bot"
     ask_required "Bot Token" "" "TELEGRAM_TOKEN"
     ask_required "Admin Telegram ID" "" "ADMIN_TELEGRAM_ID"
 
     # ── 2. Remnawave ────────────────────────────────────────
-    print_section "2/14  Remnawave Panel"
+    print_section "2/10  Remnawave Panel"
     ask_required "Panel URL" "https://example.com" "REMNAWAVE_URL"
     ask_required "API Token" "" "REMNAWAVE_TOKEN"
     ask "Mode (remote/local)" "remote" "REMNAWAVE_MODE"
     ask "Remnawave Tag" "TEST_PUPA" "REMNAWAVE_TAG"
 
     # ── 3. Pricing ──────────────────────────────────────────
-    print_section "3/14  Subscription Pricing"
+    print_section "3/10  Subscription Pricing"
     print_info "Set prices in your local currency units."
     ask_number "Price for 1 month" "99" "PRICE_1"
     ask_number "Price for 3 months" "321" "PRICE_3"
     ask_number "Price for 6 months" "674" "PRICE_6"
     ask_number "Price for 12 months" "1200" "PRICE_12"
-    echo ""
-    print_info "Set prices in Telegram Stars."
-    ask_number "Stars price for 1 month" "99" "STARS_PRICE_1"
-    ask_number "Stars price for 3 months" "321" "STARS_PRICE_3"
-    ask_number "Stars price for 6 months" "674" "STARS_PRICE_6"
-    ask_number "Stars price for 12 months" "1200" "STARS_PRICE_12"
     ask_number "Days in month" "30" "DAYS_IN_MONTH"
 
     # ── 4. CryptoPay ───────────────────────────────────────
-    print_section "4/14  Payment — CryptoPay"
+    print_section "4/11  Payment — CryptoPay"
     ask_bool "Enable CryptoPay?" "true" "CRYPTO_PAY_ENABLED"
     if [[ "${CFG[CRYPTO_PAY_ENABLED]}" == "true" ]]; then
         ask_required "CryptoPay Token" "" "CRYPTO_PAY_TOKEN"
@@ -255,63 +249,22 @@ wizard() {
         print_info "CryptoPay disabled — skipping."
     fi
 
-    # ── 5. YooKassa ─────────────────────────────────────────
-    print_section "5/14  Payment — YooKassa"
-    ask_bool "Enable YooKassa?" "false" "YOOKASA_ENABLED"
-    if [[ "${CFG[YOOKASA_ENABLED]}" == "true" ]]; then
-        ask_required "YooKassa Secret Key" "" "YOOKASA_SECRET_KEY"
-        ask_required "YooKassa Shop ID" "" "YOOKASA_SHOP_ID"
-        ask "YooKassa API URL" "https://api.yookassa.ru/v3" "YOOKASA_URL"
-        ask "YooKassa Email" "" "YOOKASA_EMAIL"
+    # ── 5. Mobile Banking ──────────────────────────────────
+    print_section "5/11  Payment — Mobile Banking (KPay/WavePay/AyaPay)"
+    ask_bool "Enable Mobile Banking?" "false" "MOBILE_BANKING_ENABLED"
+    if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
+        ask_required "Receiving Phone Number" "" "MOBILE_BANKING_PHONE"
+        ask_required "Gemini API Key" "" "GEMINI_API_KEY"
+        ask "Gemini Model" "gemini-2.5-flash" "GEMINI_MODEL"
     else
-        CFG[YOOKASA_SECRET_KEY]="key"
-        CFG[YOOKASA_SHOP_ID]="id"
-        CFG[YOOKASA_URL]="https://api.yookassa.ru/v3"
-        CFG[YOOKASA_EMAIL]=""
-        print_info "YooKassa disabled — skipping."
+        CFG[MOBILE_BANKING_PHONE]=""
+        CFG[GEMINI_API_KEY]=""
+        CFG[GEMINI_MODEL]="gemini-2.5-flash"
+        print_info "Mobile Banking disabled — skipping."
     fi
 
-    # ── 6. Telegram Stars ───────────────────────────────────
-    print_section "6/14  Payment — Telegram Stars"
-    ask_bool "Enable Telegram Stars?" "true" "TELEGRAM_STARS_ENABLED"
-    ask_bool "Require paid purchase before Stars?" "false" "REQUIRE_PAID_PURCHASE_FOR_STARS"
-
-    # ── 7. Tribute ──────────────────────────────────────────
-    print_section "7/14  Payment — Tribute"
-    echo -ne "     ${BOLD}Enable Tribute? (true/false)${NC} ${DIM}[false]${NC}: "
-    local tribute_input
-    read -r tribute_input
-    tribute_input="${tribute_input:-false}"
-    tribute_input="$(echo "$tribute_input" | tr '[:upper:]' '[:lower:]')"
-    if [[ "$tribute_input" == "true" ]]; then
-        ask_required "Tribute Webhook URL path (e.g. /tribute/webhook)" "" "TRIBUTE_WEBHOOK_URL"
-        ask_required "Tribute API Key" "" "TRIBUTE_API_KEY"
-        ask_required "Tribute Payment URL" "" "TRIBUTE_PAYMENT_URL"
-        ask_number "Health Check Port" "82251" "HEALTH_CHECK_PORT"
-    else
-        CFG[TRIBUTE_WEBHOOK_URL]=""
-        CFG[TRIBUTE_API_KEY]=""
-        CFG[TRIBUTE_PAYMENT_URL]=""
-        CFG[HEALTH_CHECK_PORT]=""
-        print_info "Tribute disabled — skipping."
-    fi
-
-    # ── 8. Tax / Moynalog ───────────────────────────────────
-    print_section "8/14  Tax — Moynalog"
-    ask_bool "Enable Moynalog?" "false" "MOYNALOG_ENABLED"
-    if [[ "${CFG[MOYNALOG_ENABLED]}" == "true" ]]; then
-        ask_required "Moynalog Username" "" "MOYNALOG_USERNAME"
-        ask_required "Moynalog Password" "" "MOYNALOG_PASSWORD"
-        ask "Moynalog API URL" "https://lknpd.nalog.ru/api/v1" "MOYNALOG_URL"
-    else
-        CFG[MOYNALOG_USERNAME]=""
-        CFG[MOYNALOG_PASSWORD]=""
-        CFG[MOYNALOG_URL]="https://lknpd.nalog.ru/api/v1"
-        print_info "Moynalog disabled — skipping."
-    fi
-
-    # ── 9. Trial ────────────────────────────────────────────
-    print_section "9/14  Trial Subscriptions"
+    # ── 6. Trial ────────────────────────────────────────────
+    print_section "6/11  Trial Subscriptions"
     ask_number "Trial days (0 = disabled)" "0" "TRIAL_DAYS"
     if [[ "${CFG[TRIAL_DAYS]}" -gt 0 ]]; then
         ask_number "Trial traffic limit (GB)" "20" "TRIAL_TRAFFIC_LIMIT"
@@ -328,20 +281,20 @@ wizard() {
         print_info "Trials disabled — skipping."
     fi
 
-    # ── 10. Traffic & Referral ──────────────────────────────
-    print_section "10/14  Traffic & Referral"
+    # ── 7. Traffic & Referral ──────────────────────────────
+    print_section "7/11  Traffic & Referral"
     ask_number "Traffic limit (GB, 0 = unlimited)" "100" "TRAFFIC_LIMIT"
     ask_reset_strategy "Traffic reset strategy" "MONTH" "TRAFFIC_LIMIT_RESET_STRATEGY"
     ask_number "Referral bonus days (0 = disabled)" "7" "REFERRAL_DAYS"
 
-    # ── 11. Squads ──────────────────────────────────────────
-    print_section "11/14  Squad Assignment"
+    # ── 8. Squads ──────────────────────────────────────────
+    print_section "8/11  Squad Assignment"
     print_info "Leave empty to assign all available squads."
     ask "Squad UUIDs (comma-separated)" "" "SQUAD_UUIDS"
     ask "External Squad UUID" "" "EXTERNAL_SQUAD_UUID"
 
-    # ── 12. URLs ────────────────────────────────────────────
-    print_section "12/14  Optional URLs"
+    # ── 9. URLs ────────────────────────────────────────────
+    print_section "9/11  Optional URLs"
     print_info "Leave empty to hide the corresponding button."
     ask "Server Status URL" "" "SERVER_STATUS_URL"
     ask "Support URL" "" "SUPPORT_URL"
@@ -349,13 +302,13 @@ wizard() {
     ask "Channel URL" "" "CHANNEL_URL"
     ask "Terms of Service URL" "" "TOS_URL"
 
-    # ── 13. Blocked / Whitelisted IDs ───────────────────────
-    print_section "13/14  Access Control"
+    # ── 10. Blocked / Whitelisted IDs ───────────────────────
+    print_section "10/11  Access Control"
     ask "Blocked Telegram IDs (comma-separated)" "" "BLOCKED_TELEGRAM_IDS"
     ask "Whitelisted Telegram IDs (comma-separated)" "" "WHITELISTED_TELEGRAM_IDS"
 
-    # ── 14. Database & Advanced ─────────────────────────────
-    print_section "14/14  Database & Advanced"
+    # ── 11. Database & Advanced ─────────────────────────────
+    print_section "11/11  Database & Advanced"
     ask "PostgreSQL User" "postgres" "POSTGRES_USER"
     ask "PostgreSQL Password" "postgres" "POSTGRES_PASSWORD"
     ask "PostgreSQL Database" "postgres" "POSTGRES_DB"
@@ -401,10 +354,6 @@ PRICE_1=${CFG[PRICE_1]}
 PRICE_3=${CFG[PRICE_3]}
 PRICE_6=${CFG[PRICE_6]}
 PRICE_12=${CFG[PRICE_12]}
-STARS_PRICE_1=${CFG[STARS_PRICE_1]}
-STARS_PRICE_3=${CFG[STARS_PRICE_3]}
-STARS_PRICE_6=${CFG[STARS_PRICE_6]}
-STARS_PRICE_12=${CFG[STARS_PRICE_12]}
 DAYS_IN_MONTH=${CFG[DAYS_IN_MONTH]}
 
 # ── Payment — CryptoPay ─────────────────────────────────────
@@ -412,28 +361,11 @@ CRYPTO_PAY_ENABLED=${CFG[CRYPTO_PAY_ENABLED]}
 CRYPTO_PAY_TOKEN=${CFG[CRYPTO_PAY_TOKEN]}
 CRYPTO_PAY_URL=${CFG[CRYPTO_PAY_URL]}
 
-# ── Payment — YooKassa ───────────────────────────────────────
-YOOKASA_ENABLED=${CFG[YOOKASA_ENABLED]}
-YOOKASA_SECRET_KEY=${CFG[YOOKASA_SECRET_KEY]}
-YOOKASA_SHOP_ID=${CFG[YOOKASA_SHOP_ID]}
-YOOKASA_URL=${CFG[YOOKASA_URL]}
-YOOKASA_EMAIL=${CFG[YOOKASA_EMAIL]}
-
-# ── Payment — Telegram Stars ────────────────────────────────
-TELEGRAM_STARS_ENABLED=${CFG[TELEGRAM_STARS_ENABLED]}
-REQUIRE_PAID_PURCHASE_FOR_STARS=${CFG[REQUIRE_PAID_PURCHASE_FOR_STARS]}
-
-# ── Payment — Tribute ───────────────────────────────────────
-TRIBUTE_WEBHOOK_URL=${CFG[TRIBUTE_WEBHOOK_URL]}
-TRIBUTE_API_KEY=${CFG[TRIBUTE_API_KEY]}
-TRIBUTE_PAYMENT_URL=${CFG[TRIBUTE_PAYMENT_URL]}
-HEALTH_CHECK_PORT=${CFG[HEALTH_CHECK_PORT]}
-
-# ── Tax — Moynalog ──────────────────────────────────────────
-MOYNALOG_ENABLED=${CFG[MOYNALOG_ENABLED]}
-MOYNALOG_USERNAME=${CFG[MOYNALOG_USERNAME]}
-MOYNALOG_PASSWORD=${CFG[MOYNALOG_PASSWORD]}
-MOYNALOG_URL=${CFG[MOYNALOG_URL]}
+# ── Payment — Mobile Banking ────────────────────────────────
+MOBILE_BANKING_ENABLED=${CFG[MOBILE_BANKING_ENABLED]}
+MOBILE_BANKING_PHONE=${CFG[MOBILE_BANKING_PHONE]}
+GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
+GEMINI_MODEL=${CFG[GEMINI_MODEL]}
 
 # ── Traffic & Referral ──────────────────────────────────────
 TRAFFIC_LIMIT=${CFG[TRAFFIC_LIMIT]}
