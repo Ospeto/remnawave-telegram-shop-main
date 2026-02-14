@@ -265,10 +265,10 @@ wizard() {
     # ── 3. Pricing ──────────────────────────────────────────
     print_section "3/10  Subscription Pricing"
     print_info "Set prices in your local currency units."
-    ask_number "Price for 1 month" "99" "PRICE_1"
-    ask_number "Price for 3 months" "321" "PRICE_3"
-    ask_number "Price for 6 months" "674" "PRICE_6"
-    ask_number "Price for 12 months" "1200" "PRICE_12"
+    ask_number "Price for 1 month" "10000" "PRICE_1"
+    ask_number "Price for 3 months" "28000" "PRICE_3"
+    ask_number "Price for 6 months" "52000" "PRICE_6"
+    ask_number "Price for 12 months" "100000" "PRICE_12"
     ask_number "Days in month" "30" "DAYS_IN_MONTH"
 
     # ── 4. CryptoPay ───────────────────────────────────────
@@ -317,7 +317,7 @@ wizard() {
 
     # ── 7. Traffic & Referral ──────────────────────────────
     print_section "7/11  Traffic & Referral"
-    ask_number "Traffic limit (GB, 0 = unlimited)" "100" "TRAFFIC_LIMIT"
+    ask_number "Traffic limit (GB, 0 = unlimited)" "0" "TRAFFIC_LIMIT"
     ask_reset_strategy "Traffic reset strategy" "MONTH" "TRAFFIC_LIMIT_RESET_STRATEGY"
     ask_number "Referral bonus days (0 = disabled)" "7" "REFERRAL_DAYS"
 
