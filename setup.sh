@@ -200,11 +200,12 @@ show_menu() {
     echo ""
     echo -e "    ${GREEN}1${NC})  🚀  Fresh Install ${DIM}(guided wizard)${NC}"
     echo -e "    ${GREEN}2${NC})  ✏️   Edit Configuration"
-    echo -e "    ${GREEN}3${NC})  ▶️   Start / Restart Services"
-    echo -e "    ${GREEN}4${NC})  ⏹   Stop Services"
-    echo -e "    ${GREEN}5${NC})  📋  View Logs"
-    echo -e "    ${GREEN}6${NC})  🔄  Update ${DIM}(pull latest image)${NC}"
-    echo -e "    ${GREEN}7${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
+    echo -e "    ${GREEN}3${NC})  💰  Edit Pricing"
+    echo -e "    ${GREEN}4${NC})  ▶️   Start / Restart Services"
+    echo -e "    ${GREEN}5${NC})  ⏹   Stop Services"
+    echo -e "    ${GREEN}6${NC})  📋  View Logs"
+    echo -e "    ${GREEN}7${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
+    echo -e "    ${GREEN}8${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
     echo ""
     echo -e "    ${RED}0${NC})  🚪  Exit"
     echo ""
@@ -565,6 +566,70 @@ do_uninstall() {
     fi
 }
 
+# ──── Edit Pricing Only ─────────────────────────────────────
+do_edit_pricing() {
+    if [[ ! -f "$ENV_FILE" ]]; then
+        print_error "No .env file found. Run 'Fresh Install' first (option 1)."
+        return
+    fi
+
+    # Read current values from .env as defaults
+    local cur_label cur_currency cur_p1 cur_p3 cur_p6 cur_p12 cur_days cur_traffic
+    cur_label=$(grep -E '^PLAN_LABEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "Unlimited")
+    cur_currency=$(grep -E '^CURRENCY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "MMK")
+    cur_p1=$(grep -E '^PRICE_1=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "10000")
+    cur_p3=$(grep -E '^PRICE_3=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "28000")
+    cur_p6=$(grep -E '^PRICE_6=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "52000")
+    cur_p12=$(grep -E '^PRICE_12=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "100000")
+    cur_days=$(grep -E '^DAYS_IN_MONTH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "30")
+    cur_traffic=$(grep -E '^TRAFFIC_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "0")
+
+    declare -A CFG
+    print_section "Edit Pricing"
+    print_info "Press Enter to keep current value."
+    echo ""
+    ask "Plan label" "${cur_label:-Unlimited}" "PLAN_LABEL"
+    ask "Currency code" "${cur_currency:-MMK}" "CURRENCY"
+    ask_number "Price for 1 month" "${cur_p1:-10000}" "PRICE_1"
+    ask_number "Price for 3 months" "${cur_p3:-28000}" "PRICE_3"
+    ask_number "Price for 6 months" "${cur_p6:-52000}" "PRICE_6"
+    ask_number "Price for 12 months" "${cur_p12:-100000}" "PRICE_12"
+    ask_number "Days in month" "${cur_days:-30}" "DAYS_IN_MONTH"
+    ask_number "Traffic limit (GB, 0 = unlimited)" "${cur_traffic:-0}" "TRAFFIC_LIMIT"
+
+    # Update values in .env using sed
+    local update_var
+    update_var() {
+        local key="$1" val="$2"
+        if grep -qE "^${key}=" "$ENV_FILE"; then
+            sed -i.bak "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+        else
+            echo "${key}=${val}" >> "$ENV_FILE"
+        fi
+    }
+
+    update_var "PLAN_LABEL"    "${CFG[PLAN_LABEL]}"
+    update_var "CURRENCY"      "${CFG[CURRENCY]}"
+    update_var "PRICE_1"       "${CFG[PRICE_1]}"
+    update_var "PRICE_3"       "${CFG[PRICE_3]}"
+    update_var "PRICE_6"       "${CFG[PRICE_6]}"
+    update_var "PRICE_12"      "${CFG[PRICE_12]}"
+    update_var "DAYS_IN_MONTH" "${CFG[DAYS_IN_MONTH]}"
+    update_var "TRAFFIC_LIMIT" "${CFG[TRAFFIC_LIMIT]}"
+
+    rm -f "${ENV_FILE}.bak"
+    echo ""
+    print_success "Pricing updated!"
+
+    echo -ne "  ${ARROW}  Restart services now? ${DIM}(y/n)${NC} [y]: "
+    local restart
+    read -r restart
+    restart="${restart:-y}"
+    if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+        do_start
+    fi
+}
+
 # ──── Main Loop ─────────────────────────────────────────────
 main() {
     show_banner
@@ -584,11 +649,12 @@ main() {
         case "$choice" in
             1) wizard ;;
             2) do_edit ;;
-            3) do_start ;;
-            4) do_stop ;;
-            5) do_logs ;;
-            6) do_update ;;
-            7) do_uninstall ;;
+            3) do_edit_pricing ;;
+            4) do_start ;;
+            5) do_stop ;;
+            6) do_logs ;;
+            7) do_update ;;
+            8) do_uninstall ;;
             0)
                 echo ""
                 print_success "Goodbye! 👋"
