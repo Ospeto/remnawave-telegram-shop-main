@@ -37,48 +37,21 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 	callback := update.CallbackQuery.Message.Message
 	langCode := update.CallbackQuery.From.LanguageCode
 
+	plans := config.Plans()
 	var priceButtons []models.InlineKeyboardButton
 
-	formatPlanButton := func(months int, price int) string {
-		days := months * config.DaysInMonth()
-		return fmt.Sprintf("%s %d Days - %s %s", config.PlanLabel(), days, formatPrice(price), config.Currency())
-	}
-
-	if config.Price1() > 0 {
+	for i, plan := range plans {
+		label := fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(plan.Price), config.Currency())
 		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         formatPlanButton(1, config.Price1()),
-			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 1, config.Price1()),
-		})
-	}
-
-	if config.Price3() > 0 {
-		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         formatPlanButton(3, config.Price3()),
-			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 3, config.Price3()),
-		})
-	}
-
-	if config.Price6() > 0 {
-		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         formatPlanButton(6, config.Price6()),
-			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 6, config.Price6()),
-		})
-	}
-
-	if config.Price12() > 0 {
-		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         formatPlanButton(12, config.Price12()),
-			CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, 12, config.Price12()),
+			Text:         label,
+			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, i),
 		})
 	}
 
 	keyboard := [][]models.InlineKeyboardButton{}
-
-	if len(priceButtons) == 4 {
-		keyboard = append(keyboard, priceButtons[:2])
-		keyboard = append(keyboard, priceButtons[2:])
-	} else if len(priceButtons) > 0 {
-		keyboard = append(keyboard, priceButtons)
+	// One button per row for better readability
+	for _, btn := range priceButtons {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
 	}
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
@@ -104,20 +77,19 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 	callback := update.CallbackQuery.Message.Message
 	callbackQuery := parseCallbackData(update.CallbackQuery.Data)
 	langCode := update.CallbackQuery.From.LanguageCode
-	month := callbackQuery["month"]
-	amount := callbackQuery["amount"]
+	planIdx := callbackQuery["plan"]
 
 	var keyboard [][]models.InlineKeyboardButton
 
 	if config.IsCryptoPayEnabled() {
 		keyboard = append(keyboard, []models.InlineKeyboardButton{
-			{Text: h.translation.GetText(langCode, "crypto_button"), CallbackData: fmt.Sprintf("%s?month=%s&invoiceType=%s&amount=%s", CallbackPayment, month, database.InvoiceTypeCrypto, amount)},
+			{Text: h.translation.GetText(langCode, "crypto_button"), CallbackData: fmt.Sprintf("%s?plan=%s&invoiceType=%s", CallbackPayment, planIdx, database.InvoiceTypeCrypto)},
 		})
 	}
 
 	if config.IsMobileBankingEnabled() {
 		keyboard = append(keyboard, []models.InlineKeyboardButton{
-			{Text: h.translation.GetText(langCode, "mobile_banking_button"), CallbackData: fmt.Sprintf("%s?month=%s&invoiceType=%s&amount=%s", CallbackPayment, month, database.InvoiceTypeMobileBanking, amount)},
+			{Text: h.translation.GetText(langCode, "mobile_banking_button"), CallbackData: fmt.Sprintf("%s?plan=%s&invoiceType=%s", CallbackPayment, planIdx, database.InvoiceTypeMobileBanking)},
 		})
 	}
 
@@ -141,14 +113,19 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
 	callbackQuery := parseCallbackData(update.CallbackQuery.Data)
-	month, err := strconv.Atoi(callbackQuery["month"])
+	planIdx, err := strconv.Atoi(callbackQuery["plan"])
 	if err != nil {
-		slog.Error("Error getting month from query", "error", err)
+		slog.Error("Error getting plan index from query", "error", err)
+		return
+	}
+
+	plan := config.PlanByIndex(planIdx)
+	if plan == nil {
+		slog.Error("Invalid plan index", "index", planIdx)
 		return
 	}
 
 	invoiceType := database.InvoiceType(callbackQuery["invoiceType"])
-	price := config.Price(month)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -167,7 +144,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 	if invoiceType == database.InvoiceTypeMobileBanking {
 		// Mobile banking: create purchase, show instructions, wait for screenshot
-		_, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(price), month, customer, database.InvoiceTypeMobileBanking)
+		_, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking)
 		if err != nil {
 			slog.Error("Error creating mobile banking purchase", "error", err)
 			return
@@ -178,7 +155,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 		instructions := fmt.Sprintf(
 			h.translation.GetText(langCode, "mobile_pay_instructions"),
-			price,
+			plan.Price,
 			config.MobileBankingPhone(),
 		)
 
@@ -190,7 +167,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 			ReplyMarkup: models.InlineKeyboardMarkup{
 				InlineKeyboard: [][]models.InlineKeyboardButton{
 					{
-						{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, month, price)},
+						{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
 					},
 				},
 			},
@@ -202,7 +179,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	}
 
 	// CryptoPay flow
-	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(price), month, customer, database.InvoiceTypeCrypto)
+	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto)
 	if err != nil {
 		slog.Error("Error creating payment", "error", err)
 		return
@@ -215,7 +192,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{
 					{Text: h.translation.GetText(langCode, "pay_button"), URL: paymentURL},
-					{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?month=%d&amount=%d", CallbackSell, month, price)},
+					{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
 				},
 			},
 		},

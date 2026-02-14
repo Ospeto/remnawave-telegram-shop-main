@@ -1,0 +1,2 @@
+ALTER TABLE purchase DROP COLUMN IF EXISTS traffic_limit_gb;
+ALTER TABLE purchase DROP COLUMN IF EXISTS days;

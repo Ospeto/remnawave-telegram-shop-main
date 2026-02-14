@@ -264,15 +264,47 @@ wizard() {
     ask "Remnawave Tag" "TEST_PUPA" "REMNAWAVE_TAG"
 
     # ── 3. Pricing ──────────────────────────────────────────
-    print_section "3/10  Subscription Pricing"
-    print_info "Set prices in your local currency units."
-    ask "Plan label (shown on buttons)" "Unlimited" "PLAN_LABEL"
+    print_section "3/10  Subscription Plans"
+    print_info "Add plans one by one. Format: Label, Days, Price, Traffic (GB, 0=unlimited)."
     ask "Currency code" "MMK" "CURRENCY"
-    ask_number "Price for 1 month" "10000" "PRICE_1"
-    ask_number "Price for 3 months" "28000" "PRICE_3"
-    ask_number "Price for 6 months" "52000" "PRICE_6"
-    ask_number "Price for 12 months" "100000" "PRICE_12"
-    ask_number "Days in month" "30" "DAYS_IN_MONTH"
+    echo ""
+
+    local PLANS_LIST=""
+    local plan_num=1
+    while true; do
+        echo -e "  ${CYAN}── Plan ${plan_num} ──${NC}"
+        local p_label p_days p_price p_traffic
+        echo -ne "  ${ARROW} Label ${DIM}[Unlimited]${NC}: "
+        read -r p_label
+        p_label="${p_label:-Unlimited}"
+        echo -ne "  ${ARROW} Duration in days ${DIM}[30]${NC}: "
+        read -r p_days
+        p_days="${p_days:-30}"
+        echo -ne "  ${ARROW} Price ${DIM}[10000]${NC}: "
+        read -r p_price
+        p_price="${p_price:-10000}"
+        echo -ne "  ${ARROW} Traffic GB (0=unlimited) ${DIM}[0]${NC}: "
+        read -r p_traffic
+        p_traffic="${p_traffic:-0}"
+
+        if [[ -n "$PLANS_LIST" ]]; then
+            PLANS_LIST="${PLANS_LIST},${p_label}|${p_days}|${p_price}|${p_traffic}"
+        else
+            PLANS_LIST="${p_label}|${p_days}|${p_price}|${p_traffic}"
+        fi
+        echo -e "  ${GREEN}✓${NC} Added: ${p_label} ${p_days}d ${p_price} ${CFG[CURRENCY]} ${p_traffic}GB"
+        echo ""
+
+        echo -ne "  ${ARROW}  Add another plan? ${DIM}(y/n)${NC} [n]: "
+        local more
+        read -r more
+        if [[ "$more" != "y" && "$more" != "Y" ]]; then
+            break
+        fi
+        ((plan_num++))
+        echo ""
+    done
+    CFG[PLANS]="$PLANS_LIST"
 
     # ── 4. CryptoPay ───────────────────────────────────────
     print_section "4/11  Payment — CryptoPay"
@@ -320,7 +352,6 @@ wizard() {
 
     # ── 7. Traffic & Referral ──────────────────────────────
     print_section "7/11  Traffic & Referral"
-    ask_number "Traffic limit (GB, 0 = unlimited)" "0" "TRAFFIC_LIMIT"
     ask_reset_strategy "Traffic reset strategy" "MONTH" "TRAFFIC_LIMIT_RESET_STRATEGY"
     ask_number "Referral bonus days (0 = disabled)" "7" "REFERRAL_DAYS"
 
@@ -386,14 +417,9 @@ REMNAWAVE_TOKEN=${CFG[REMNAWAVE_TOKEN]}
 REMNAWAVE_MODE=${CFG[REMNAWAVE_MODE]}
 REMNAWAVE_TAG=$(echo "${CFG[REMNAWAVE_TAG]}" | tr '[:lower:]' '[:upper:]')
 
-# ── Subscription Pricing ────────────────────────────────────
-PLAN_LABEL=${CFG[PLAN_LABEL]}
+# ── Subscription Plans ──────────────────────────────────────
 CURRENCY=${CFG[CURRENCY]}
-PRICE_1=${CFG[PRICE_1]}
-PRICE_3=${CFG[PRICE_3]}
-PRICE_6=${CFG[PRICE_6]}
-PRICE_12=${CFG[PRICE_12]}
-DAYS_IN_MONTH=${CFG[DAYS_IN_MONTH]}
+PLANS=${CFG[PLANS]}
 
 # ── Payment — CryptoPay ─────────────────────────────────────
 CRYPTO_PAY_ENABLED=${CFG[CRYPTO_PAY_ENABLED]}
@@ -407,7 +433,6 @@ GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
 GEMINI_MODEL=${CFG[GEMINI_MODEL]}
 
 # ── Traffic & Referral ──────────────────────────────────────
-TRAFFIC_LIMIT=${CFG[TRAFFIC_LIMIT]}
 TRAFFIC_LIMIT_RESET_STRATEGY=${CFG[TRAFFIC_LIMIT_RESET_STRATEGY]}
 REFERRAL_DAYS=${CFG[REFERRAL_DAYS]}
 
@@ -573,31 +598,121 @@ do_edit_pricing() {
         return
     fi
 
-    # Read current values from .env as defaults
-    local cur_label cur_currency cur_p1 cur_p3 cur_p6 cur_p12 cur_days cur_traffic
-    cur_label=$(grep -E '^PLAN_LABEL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "Unlimited")
+    # Read current values from .env
+    local cur_currency cur_plans
     cur_currency=$(grep -E '^CURRENCY=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "MMK")
-    cur_p1=$(grep -E '^PRICE_1=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "10000")
-    cur_p3=$(grep -E '^PRICE_3=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "28000")
-    cur_p6=$(grep -E '^PRICE_6=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "52000")
-    cur_p12=$(grep -E '^PRICE_12=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "100000")
-    cur_days=$(grep -E '^DAYS_IN_MONTH=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "30")
-    cur_traffic=$(grep -E '^TRAFFIC_LIMIT=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || echo "0")
+    cur_plans=$(grep -E '^PLANS=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)
 
-    declare -A CFG
-    print_section "Edit Pricing"
-    print_info "Press Enter to keep current value."
+    print_section "Edit Plans"
+
+    # Show existing plans
+    if [[ -n "$cur_plans" ]]; then
+        echo -e "  ${CYAN}Current plans:${NC}"
+        local idx=1
+        IFS=',' read -ra plan_arr <<< "$cur_plans"
+        for entry in "${plan_arr[@]}"; do
+            IFS='|' read -r label days price traffic <<< "$entry"
+            local traffic_str="unlimited"
+            [[ "$traffic" != "0" ]] && traffic_str="${traffic}GB/mo"
+            echo -e "    ${idx}. ${label} — ${days} days — ${price} ${cur_currency} — ${traffic_str}"
+            ((idx++))
+        done
+        echo ""
+    fi
+
+    # Ask for currency
+    echo -ne "  ${ARROW} Currency ${DIM}[${cur_currency}]${NC}: "
+    local new_currency
+    read -r new_currency
+    new_currency="${new_currency:-$cur_currency}"
+
     echo ""
-    ask "Plan label" "${cur_label:-Unlimited}" "PLAN_LABEL"
-    ask "Currency code" "${cur_currency:-MMK}" "CURRENCY"
-    ask_number "Price for 1 month" "${cur_p1:-10000}" "PRICE_1"
-    ask_number "Price for 3 months" "${cur_p3:-28000}" "PRICE_3"
-    ask_number "Price for 6 months" "${cur_p6:-52000}" "PRICE_6"
-    ask_number "Price for 12 months" "${cur_p12:-100000}" "PRICE_12"
-    ask_number "Days in month" "${cur_days:-30}" "DAYS_IN_MONTH"
-    ask_number "Traffic limit (GB, 0 = unlimited)" "${cur_traffic:-0}" "TRAFFIC_LIMIT"
+    echo -e "  ${CYAN}Options:${NC}"
+    echo -e "    ${GREEN}1${NC}) Keep existing plans"
+    echo -e "    ${GREEN}2${NC}) Add a new plan"
+    echo -e "    ${GREEN}3${NC}) Replace all plans"
+    echo ""
+    echo -ne "  ${ARROW} Choice [1]: "
+    local plan_choice
+    read -r plan_choice
+    plan_choice="${plan_choice:-1}"
 
-    # Update values in .env using sed
+    local new_plans="$cur_plans"
+
+    case "$plan_choice" in
+        2)
+            # Add plans to existing
+            while true; do
+                echo ""
+                echo -e "  ${CYAN}── Add Plan ──${NC}"
+                local p_label p_days p_price p_traffic
+                echo -ne "  ${ARROW} Label ${DIM}[Unlimited]${NC}: "
+                read -r p_label
+                p_label="${p_label:-Unlimited}"
+                echo -ne "  ${ARROW} Duration in days ${DIM}[30]${NC}: "
+                read -r p_days
+                p_days="${p_days:-30}"
+                echo -ne "  ${ARROW} Price ${DIM}[10000]${NC}: "
+                read -r p_price
+                p_price="${p_price:-10000}"
+                echo -ne "  ${ARROW} Traffic GB (0=unlimited) ${DIM}[0]${NC}: "
+                read -r p_traffic
+                p_traffic="${p_traffic:-0}"
+
+                if [[ -n "$new_plans" ]]; then
+                    new_plans="${new_plans},${p_label}|${p_days}|${p_price}|${p_traffic}"
+                else
+                    new_plans="${p_label}|${p_days}|${p_price}|${p_traffic}"
+                fi
+                echo -e "  ${GREEN}✓${NC} Added: ${p_label} ${p_days}d ${p_price} ${new_currency} ${p_traffic}GB"
+
+                echo -ne "  ${ARROW}  Add another? ${DIM}(y/n)${NC} [n]: "
+                local more
+                read -r more
+                [[ "$more" != "y" && "$more" != "Y" ]] && break
+            done
+            ;;
+        3)
+            # Replace all
+            new_plans=""
+            local plan_num=1
+            while true; do
+                echo ""
+                echo -e "  ${CYAN}── Plan ${plan_num} ──${NC}"
+                local p_label p_days p_price p_traffic
+                echo -ne "  ${ARROW} Label ${DIM}[Unlimited]${NC}: "
+                read -r p_label
+                p_label="${p_label:-Unlimited}"
+                echo -ne "  ${ARROW} Duration in days ${DIM}[30]${NC}: "
+                read -r p_days
+                p_days="${p_days:-30}"
+                echo -ne "  ${ARROW} Price ${DIM}[10000]${NC}: "
+                read -r p_price
+                p_price="${p_price:-10000}"
+                echo -ne "  ${ARROW} Traffic GB (0=unlimited) ${DIM}[0]${NC}: "
+                read -r p_traffic
+                p_traffic="${p_traffic:-0}"
+
+                if [[ -n "$new_plans" ]]; then
+                    new_plans="${new_plans},${p_label}|${p_days}|${p_price}|${p_traffic}"
+                else
+                    new_plans="${p_label}|${p_days}|${p_price}|${p_traffic}"
+                fi
+                echo -e "  ${GREEN}✓${NC} Added: ${p_label} ${p_days}d ${p_price} ${new_currency} ${p_traffic}GB"
+
+                echo -ne "  ${ARROW}  Add another? ${DIM}(y/n)${NC} [n]: "
+                local more
+                read -r more
+                [[ "$more" != "y" && "$more" != "Y" ]] && break
+                ((plan_num++))
+            done
+            ;;
+        *)
+            print_info "Keeping existing plans."
+            ;;
+    esac
+
+    # Update .env in-place
     local update_var
     update_var() {
         local key="$1" val="$2"
@@ -608,16 +723,10 @@ do_edit_pricing() {
         fi
     }
 
-    update_var "PLAN_LABEL"    "${CFG[PLAN_LABEL]}"
-    update_var "CURRENCY"      "${CFG[CURRENCY]}"
-    update_var "PRICE_1"       "${CFG[PRICE_1]}"
-    update_var "PRICE_3"       "${CFG[PRICE_3]}"
-    update_var "PRICE_6"       "${CFG[PRICE_6]}"
-    update_var "PRICE_12"      "${CFG[PRICE_12]}"
-    update_var "DAYS_IN_MONTH" "${CFG[DAYS_IN_MONTH]}"
-    update_var "TRAFFIC_LIMIT" "${CFG[TRAFFIC_LIMIT]}"
-
+    update_var "CURRENCY" "$new_currency"
+    update_var "PLANS"    "$new_plans"
     rm -f "${ENV_FILE}.bak"
+
     echo ""
     print_success "Pricing updated!"
 

@@ -85,7 +85,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		}
 	}
 
-	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, config.TrafficLimit(), purchase.Month*config.DaysInMonth(), false)
+	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*1073741824, purchase.Days, false)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 	if err != nil {
 		return err
 	}
-	refereeUser, err := s.remnawaveClient.CreateOrUpdateUser(ctxReferee, refereeCustomer.ID, refereeCustomer.TelegramID, config.TrafficLimit(), config.GetReferralDays(), false)
+	refereeUser, err := s.remnawaveClient.CreateOrUpdateUser(ctxReferee, refereeCustomer.ID, refereeCustomer.TelegramID, 0, config.GetReferralDays(), false)
 	if err != nil {
 		return err
 	}
@@ -183,25 +183,27 @@ func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]m
 	return inlineCustomerKeyboard
 }
 
-func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, months int, customer *database.Customer, invoiceType database.InvoiceType) (url string, purchaseId int64, err error) {
+func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType) (url string, purchaseId int64, err error) {
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
-		return s.createCryptoInvoice(ctx, amount, months, customer)
+		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer)
 	case database.InvoiceTypeMobileBanking:
-		return s.createMobileBankingPurchase(ctx, amount, months, customer)
+		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
 }
 
-func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64, months int, customer *database.Customer) (url string, purchaseId int64, err error) {
+func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
-		InvoiceType: database.InvoiceTypeCrypto,
-		Status:      database.PurchaseStatusNew,
-		Amount:      amount,
-		Currency:    "RUB",
-		CustomerID:  customer.ID,
-		Month:       months,
+		InvoiceType:    database.InvoiceTypeCrypto,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
 	})
 	if err != nil {
 		slog.Error("Error creating purchase", "error", err)
@@ -214,7 +216,7 @@ func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64,
 		Amount:         fmt.Sprintf("%d", int(amount)),
 		AcceptedAssets: "USDT",
 		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, ctx.Value("username")),
-		Description:    fmt.Sprintf("Subscription on %d month", months),
+		Description:    fmt.Sprintf("Subscription for %d days", days),
 		PaidBtnName:    "callback",
 		PaidBtnUrl:     config.BotURL(),
 	})
@@ -270,14 +272,16 @@ func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (st
 
 }
 
-func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, months int, customer *database.Customer) (url string, purchaseId int64, err error) {
+func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
-		InvoiceType: database.InvoiceTypeMobileBanking,
-		Status:      database.PurchaseStatusPending,
-		Amount:      amount,
-		Currency:    "MMK",
-		CustomerID:  customer.ID,
-		Month:       months,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Status:         database.PurchaseStatusPending,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
 	})
 	if err != nil {
 		slog.Error("Error creating mobile banking purchase", "error", err)

@@ -12,15 +12,22 @@ import (
 	"github.com/joho/godotenv"
 )
 
+type Plan struct {
+	Label          string
+	Days           int
+	Price          int
+	TrafficLimitGB int
+}
+
 type config struct {
 	telegramToken                                             string
-	price1, price3, price6, price12                           int
+	plans                                                     []Plan
 	remnawaveUrl, remnawaveToken, remnawaveMode, remnawaveTag string
 	defaultLanguage                                           string
 	databaseURL                                               string
 	cryptoPayURL, cryptoPayToken                              string
 	botURL                                                    string
-	trafficLimit, trialTrafficLimit                           int
+	trialTrafficLimit                                         int
 	feedbackURL                                               string
 	channelURL                                                string
 	serverStatusURL                                           string
@@ -36,7 +43,6 @@ type config struct {
 	enableAutoPayment                                         bool
 	healthCheckPort                                           int
 	isWebAppLinkEnabled                                       bool
-	daysInMonth                                               int
 	externalSquadUUID                                         uuid.UUID
 	blockedTelegramIds                                        map[int64]bool
 	whitelistedTelegramIds                                    map[int64]bool
@@ -49,7 +55,6 @@ type config struct {
 	mobileBankingPhone                                        string
 	geminiAPIKey                                              string
 	geminiModel                                               string
-	planLabel                                                 string
 	currency                                                  string
 }
 
@@ -131,43 +136,19 @@ func TosURL() string {
 	return conf.tosURL
 }
 
-func Price1() int {
-	return conf.price1
+func Plans() []Plan {
+	return conf.plans
 }
 
-func Price3() int {
-	return conf.price3
-}
-
-func Price6() int {
-	return conf.price6
-}
-
-func Price12() int {
-	return conf.price12
-}
-
-func DaysInMonth() int {
-	return conf.daysInMonth
+func PlanByIndex(idx int) *Plan {
+	if idx < 0 || idx >= len(conf.plans) {
+		return nil
+	}
+	return &conf.plans[idx]
 }
 
 func ExternalSquadUUID() uuid.UUID {
 	return conf.externalSquadUUID
-}
-
-func Price(month int) int {
-	switch month {
-	case 1:
-		return conf.price1
-	case 3:
-		return conf.price3
-	case 6:
-		return conf.price6
-	case 12:
-		return conf.price12
-	default:
-		return conf.price1
-	}
 }
 
 func TelegramToken() string {
@@ -197,8 +178,28 @@ func BotURL() string {
 func SetBotURL(botURL string) {
 	conf.botURL = botURL
 }
-func TrafficLimit() int {
-	return conf.trafficLimit * bytesInGigabyte
+func TrafficLimitResetStrategy() string {
+	return conf.trafficLimitResetStrategy
+}
+
+func IsMobileBankingEnabled() bool {
+	return conf.mobileBankingEnabled
+}
+
+func MobileBankingPhone() string {
+	return conf.mobileBankingPhone
+}
+
+func GeminiAPIKey() string {
+	return conf.geminiAPIKey
+}
+
+func GeminiModel() string {
+	return conf.geminiModel
+}
+
+func Currency() string {
+	return conf.currency
 }
 
 func IsCryptoPayEnabled() bool {
@@ -223,34 +224,6 @@ func RemnawaveHeaders() map[string]string {
 
 func TrialTrafficLimitResetStrategy() string {
 	return conf.trialTrafficLimitResetStrategy
-}
-
-func TrafficLimitResetStrategy() string {
-	return conf.trafficLimitResetStrategy
-}
-
-func IsMobileBankingEnabled() bool {
-	return conf.mobileBankingEnabled
-}
-
-func MobileBankingPhone() string {
-	return conf.mobileBankingPhone
-}
-
-func GeminiAPIKey() string {
-	return conf.geminiAPIKey
-}
-
-func GeminiModel() string {
-	return conf.geminiModel
-}
-
-func PlanLabel() string {
-	return conf.planLabel
-}
-
-func Currency() string {
-	return conf.currency
 }
 
 const bytesInGigabyte = 1073741824
@@ -326,8 +299,6 @@ func InitConfig() {
 
 	conf.defaultLanguage = envStringDefault("DEFAULT_LANGUAGE", "ru")
 
-	conf.daysInMonth = envIntDefault("DAYS_IN_MONTH", 30)
-
 	externalSquadUUIDStr := os.Getenv("EXTERNAL_SQUAD_UUID")
 	if externalSquadUUIDStr != "" {
 		parsedUUID, err := uuid.Parse(externalSquadUUIDStr)
@@ -347,10 +318,64 @@ func InitConfig() {
 
 	conf.enableAutoPayment = envBool("ENABLE_AUTO_PAYMENT")
 
-	conf.price1 = mustEnvInt("PRICE_1")
-	conf.price3 = mustEnvInt("PRICE_3")
-	conf.price6 = mustEnvInt("PRICE_6")
-	conf.price12 = mustEnvInt("PRICE_12")
+	// Parse PLANS env var: label|days|price|traffic_gb,...
+	plansStr := os.Getenv("PLANS")
+	if plansStr != "" {
+		for _, entry := range strings.Split(plansStr, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			parts := strings.Split(entry, "|")
+			if len(parts) != 4 {
+				panic(fmt.Sprintf("invalid PLANS entry %q — expected label|days|price|traffic_gb", entry))
+			}
+			days, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err != nil {
+				panic(fmt.Sprintf("invalid days in PLANS entry %q: %v", entry, err))
+			}
+			price, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+			if err != nil {
+				panic(fmt.Sprintf("invalid price in PLANS entry %q: %v", entry, err))
+			}
+			trafficGB, err := strconv.Atoi(strings.TrimSpace(parts[3]))
+			if err != nil {
+				panic(fmt.Sprintf("invalid traffic_gb in PLANS entry %q: %v", entry, err))
+			}
+			conf.plans = append(conf.plans, Plan{
+				Label:          strings.TrimSpace(parts[0]),
+				Days:           days,
+				Price:          price,
+				TrafficLimitGB: trafficGB,
+			})
+		}
+		slog.Info("Loaded plans from PLANS env", "count", len(conf.plans))
+	} else {
+		// Backward compat: fall back to PRICE_1/3/6/12
+		daysInMonth := envIntDefault("DAYS_IN_MONTH", 30)
+		trafficLimit := envIntDefault("TRAFFIC_LIMIT", 0)
+		label := envStringDefault("PLAN_LABEL", "Unlimited")
+		for _, m := range []int{1, 3, 6, 12} {
+			key := fmt.Sprintf("PRICE_%d", m)
+			pStr := os.Getenv(key)
+			if pStr == "" {
+				continue
+			}
+			p, err := strconv.Atoi(pStr)
+			if err != nil {
+				panic(fmt.Sprintf("invalid %s: %v", key, err))
+			}
+			if p > 0 {
+				conf.plans = append(conf.plans, Plan{
+					Label:          label,
+					Days:           m * daysInMonth,
+					Price:          p,
+					TrafficLimitGB: trafficLimit,
+				})
+			}
+		}
+		slog.Info("Loaded plans from PRICE_X env (legacy)", "count", len(conf.plans))
+	}
 
 	conf.remnawaveUrl = mustEnv("REMNAWAVE_URL")
 
@@ -377,7 +402,6 @@ func InitConfig() {
 		conf.cryptoPayToken = mustEnv("CRYPTO_PAY_TOKEN")
 	}
 
-	conf.trafficLimit = mustEnvInt("TRAFFIC_LIMIT")
 	conf.referralDays = mustEnvInt("REFERRAL_DAYS")
 
 	conf.serverStatusURL = os.Getenv("SERVER_STATUS_URL")
@@ -509,6 +533,5 @@ func InitConfig() {
 		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
 	}
 
-	conf.planLabel = envStringDefault("PLAN_LABEL", "Unlimited")
 	conf.currency = envStringDefault("CURRENCY", "MMK")
 }
