@@ -142,7 +142,7 @@ func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, teleg
 
 	users := usersResp.GetResponse()
 	if len(users) == 0 {
-		return r.createUser(ctx, customerId, telegramId, trafficLimit, days, isTrialUser)
+		return r.createUser(ctx, customerId, telegramId, trafficLimit, days, isTrialUser, 0)
 	}
 
 	var existingUser *remapi.User
@@ -160,6 +160,12 @@ func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, teleg
 	}
 
 	return r.updateUser(ctx, existingUser, trafficLimit, days)
+}
+
+// ForceCreateNewUser always creates a brand new Remnawave user with a unique indexed username.
+// keyIndex should be the count of existing keys + 1 (e.g. if user has 2 keys, pass 3).
+func (r *Client) ForceCreateNewUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, keyIndex int) (*remapi.User, error) {
+	return r.createUser(ctx, customerId, telegramId, trafficLimit, days, false, keyIndex)
 }
 
 func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, trafficLimit int, days int) (*remapi.User, error) {
@@ -228,15 +234,15 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 	return &updateUser.(*remapi.UserResponse).Response, nil
 }
 
-func (r *Client) createUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool) (*remapi.User, error) {
+func (r *Client) createUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool, keyIndex int) (*remapi.User, error) {
 	expireAt := time.Now().UTC().AddDate(0, 0, days)
 
-	// Build systematic username: {tg_username}_{last4_customerId}_{telegramId}
+	// Build systematic username: {tg_username}_{last4_customerId}_{telegramId}[_{keyIndex}]
 	var tgUsername string
 	if ctx.Value("username") != nil {
 		tgUsername = ctx.Value("username").(string)
 	}
-	username := generateUsername(tgUsername, customerId, telegramId)
+	username := generateUsername(tgUsername, customerId, telegramId, keyIndex)
 
 	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
 	if err != nil {
@@ -306,15 +312,19 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 }
 
 // generateUsername creates a systematic subscription key name.
-// Format: {tg_username}_{last4_customerId}_{telegramId}
-// Examples: john_0042_987654321, user_0001_123456789
-func generateUsername(tgUsername string, customerId int64, telegramId int64) string {
+// Format: {tg_username}_{last4_customerId}_{telegramId}[_{keyIndex}]
+// Examples: john_0042_987654321, john_0042_987654321_2
+func generateUsername(tgUsername string, customerId int64, telegramId int64, keyIndex int) string {
 	name := sanitizeUsername(tgUsername)
 	if name == "" {
 		name = "user"
 	}
 	suffix := fmt.Sprintf("%04d", customerId%10000)
-	return fmt.Sprintf("%s_%s_%d", name, suffix, telegramId)
+	base := fmt.Sprintf("%s_%s_%d", name, suffix, telegramId)
+	if keyIndex > 1 {
+		base = fmt.Sprintf("%s_%d", base, keyIndex)
+	}
+	return base
 }
 
 // sanitizeUsername makes a Telegram username safe for use as a subscription key part.

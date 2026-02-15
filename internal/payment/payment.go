@@ -122,15 +122,17 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 			return err
 		}
 	} else {
-		// CREATE new key
-		remnawaveUser, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
+		// CREATE new key — always creates a fresh Remnawave user
+		keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
+		keyIndex := int(keyCount) + 1
+
+		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex)
 		if err != nil {
 			return err
 		}
 		// Insert into subscription_key table
 		if s.subKeyRepo != nil {
-			keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
-			label := fmt.Sprintf("Key %d", keyCount+1)
+			label := fmt.Sprintf("Key %d", keyIndex)
 			_, _ = s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
 				CustomerID:      customer.ID,
 				RemnawaveUUID:   remnawaveUser.UUID,
