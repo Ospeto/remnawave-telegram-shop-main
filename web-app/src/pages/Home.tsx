@@ -14,13 +14,19 @@ interface UserData {
 }
 
 export function Home() {
-    const { tg, initData, openLink } = useTelegram();
+    const { ready, initData, openLink } = useTelegram();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!initData) return;
+        // Wait for the hook to finish checking the SDK
+        if (!ready) return;
+
+        if (!initData) {
+            setLoading(false);
+            return;
+        }
 
         fetch('/api/me', {
             headers: {
@@ -37,14 +43,20 @@ export function Home() {
                 setError(err.message);
             })
             .finally(() => setLoading(false));
-    }, [initData]);
-
-    if (!tg) {
-        return <div className="p-4 text-center">Please open this app inside Telegram.</div>;
-    }
+    }, [ready, initData]);
 
     if (loading) {
         return <div className="flex items-center justify-center h-screen animate-pulse">Loading...</div>;
+    }
+
+    if (!initData) {
+        return (
+            <div className="flex flex-col items-center justify-center h-screen gap-4 p-6 text-center">
+                <div className="text-5xl">📱</div>
+                <h1 className="text-xl font-bold">Remnawave Shop</h1>
+                <p className="text-gray-500">Please open this app inside Telegram using the Menu Button.</p>
+            </div>
+        );
     }
 
     if (error) {

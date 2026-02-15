@@ -81,9 +81,8 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Expected format: "tma <initData>" directory from Telegram
-		// But usually we just send the initData string. Let's assume the raw initData string is passed.
-		initData := strings.TrimPrefix(authHeader, "tma ")
+		// Expected format: "twa <initData>" from Telegram Web App frontend
+		initData := strings.TrimPrefix(authHeader, "twa ")
 
 		telegramID, username, err := validateInitData(initData, config.TelegramToken())
 		if err != nil {
