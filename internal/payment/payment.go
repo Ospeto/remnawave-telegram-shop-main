@@ -30,6 +30,7 @@ type PaymentService struct {
 	cache                  *cache.Cache
 	geminiClient           *gemini.Client
 	mobilePaymentRepo      *database.MobilePaymentRepository
+	subKeyRepo             *database.SubscriptionKeyRepository
 }
 
 func NewPaymentService(
@@ -43,6 +44,7 @@ func NewPaymentService(
 	cache *cache.Cache,
 	geminiClient *gemini.Client,
 	mobilePaymentRepo *database.MobilePaymentRepository,
+	subKeyRepo *database.SubscriptionKeyRepository,
 ) *PaymentService {
 	return &PaymentService{
 		purchaseRepository:     purchaseRepository,
@@ -55,6 +57,7 @@ func NewPaymentService(
 		cache:                  cache,
 		geminiClient:           geminiClient,
 		mobilePaymentRepo:      mobilePaymentRepo,
+		subKeyRepo:             subKeyRepo,
 	}
 }
 
@@ -91,9 +94,61 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 	}
 
 	const bytesInGB = 1073741824
-	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
-	if err != nil {
-		return err
+
+	if purchase.ExtendKeyID != nil {
+		// EXTEND existing key
+		existingKey, err := s.subKeyRepo.FindByID(ctx, *purchase.ExtendKeyID)
+		if err != nil || existingKey == nil {
+			return fmt.Errorf("subscription key %d not found", *purchase.ExtendKeyID)
+		}
+		// Use CreateOrUpdateUser which will find and extend the existing Remnawave user
+		remnawaveUser, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
+		if err != nil {
+			return err
+		}
+		// Update the subscription_key expiry
+		if s.subKeyRepo != nil {
+			_ = s.subKeyRepo.UpdateExpiry(ctx, existingKey.ID, remnawaveUser.ExpireAt)
+			_ = s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl)
+		}
+		// Update customer expire_at to the latest
+		customerFilesToUpdate := map[string]interface{}{
+			"subscription_link": remnawaveUser.SubscriptionUrl,
+			"expire_at":         remnawaveUser.ExpireAt,
+		}
+		err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
+		if err != nil {
+			return err
+		}
+	} else {
+		// CREATE new key
+		remnawaveUser, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
+		if err != nil {
+			return err
+		}
+		// Insert into subscription_key table
+		if s.subKeyRepo != nil {
+			keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
+			label := fmt.Sprintf("Key %d", keyCount+1)
+			_, _ = s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
+				CustomerID:      customer.ID,
+				RemnawaveUUID:   remnawaveUser.UUID,
+				Username:        remnawaveUser.Username,
+				SubscriptionURL: remnawaveUser.SubscriptionUrl,
+				ExpireAt:        &remnawaveUser.ExpireAt,
+				Status:          "active",
+				Label:           label,
+			})
+		}
+		// Update customer
+		customerFilesToUpdate := map[string]interface{}{
+			"subscription_link": remnawaveUser.SubscriptionUrl,
+			"expire_at":         remnawaveUser.ExpireAt,
+		}
+		err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = s.purchaseRepository.MarkAsPaid(ctx, purchase.ID)
@@ -101,21 +156,10 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		return err
 	}
 
-	customerFilesToUpdate := map[string]interface{}{
-		"subscription_link": user.SubscriptionUrl,
-		"expire_at":         user.ExpireAt,
-	}
-
-	err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
-	if err != nil {
-		return err
-	}
-
-	// Refresh customer so subscription_link is up-to-date for the keyboard
+	// Refresh customer
 	customer, err = s.customerRepository.FindById(ctx, customer.ID)
 	if err != nil {
 		slog.Error("Error refreshing customer after purchase", "error", err)
-		// Non-fatal: proceed with potentially stale customer
 	}
 
 	_, err = s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{

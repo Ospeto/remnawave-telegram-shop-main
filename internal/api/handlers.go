@@ -16,13 +16,23 @@ import (
 	"github.com/go-telegram/bot"
 )
 
+type KeyResponse struct {
+	ID              int64      `json:"id"`
+	Label           string     `json:"label"`
+	Username        string     `json:"username"`
+	SubscriptionURL string     `json:"subscription_url"`
+	HappLink        string     `json:"happ_link"`
+	ExpireAt        *time.Time `json:"expire_at"`
+	DaysRemaining   int        `json:"days_remaining"`
+	Status          string     `json:"status"`
+}
+
 type ValidationResponse struct {
 	User            *database.Customer `json:"user"`
-	SubscriptionUrl *string            `json:"subscription_url"`
+	Keys            []KeyResponse      `json:"keys"`
 	IsActive        bool               `json:"is_active"`
 	ExpireAt        *time.Time         `json:"expire_at"`
 	DaysRemaining   int                `json:"days_remaining"`
-	HappLink        string             `json:"happ_link,omitempty"`
 }
 
 type PlanResponse struct {
@@ -38,19 +48,22 @@ type APIHandler struct {
 	paymentService *payment.PaymentService
 	telegramBot    *bot.Bot
 	translation    *translation.Manager
+	subKeyRepo     *database.SubscriptionKeyRepository
 }
 
-func NewAPIHandler(customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager) *APIHandler {
+func NewAPIHandler(customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository) *APIHandler {
 	return &APIHandler{
 		customerRepo:   customerRepo,
 		paymentService: paymentService,
 		telegramBot:    telegramBot,
 		translation:    tm,
+		subKeyRepo:     subKeyRepo,
 	}
 }
 
 type CreatePurchaseRequest struct {
-	PlanIndex int `json:"plan_index"`
+	PlanIndex   int    `json:"plan_index"`
+	ExtendKeyID *int64 `json:"extend_key_id,omitempty"`
 }
 
 type CreatePurchaseResponse struct {
@@ -102,10 +115,20 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	invoiceType := database.InvoiceTypeMobileBanking
 
 	ctxWithUsername := context.WithValue(r.Context(), "username", username)
+
+	// Build purchase with optional extend_key_id
 	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType)
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// If extend_key_id was provided, update the purchase record
+	if req.ExtendKeyID != nil {
+		purchaseRepo := h.paymentService.GetPurchaseRepository()
+		_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, map[string]interface{}{
+			"extend_key_id": *req.ExtendKeyID,
+		})
 	}
 
 	instructions := fmt.Sprintf(
@@ -151,18 +174,54 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		daysRemaining = int(time.Until(*customer.ExpireAt).Hours() / 24)
 	}
 
-	happLink := ""
-	if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
-		happLink = "happ://add/" + *customer.SubscriptionLink
+	// Fetch all subscription keys
+	var keys []KeyResponse
+	if h.subKeyRepo != nil {
+		subKeys, err := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		if err == nil {
+			for _, k := range subKeys {
+				kDays := 0
+				kStatus := k.Status
+				if k.ExpireAt != nil {
+					if k.ExpireAt.After(time.Now()) {
+						kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
+					} else {
+						kStatus = "expired"
+					}
+				}
+				keys = append(keys, KeyResponse{
+					ID:              k.ID,
+					Label:           k.Label,
+					Username:        k.Username,
+					SubscriptionURL: k.SubscriptionURL,
+					HappLink:        "happ://add/" + k.SubscriptionURL,
+					ExpireAt:        k.ExpireAt,
+					DaysRemaining:   kDays,
+					Status:          kStatus,
+				})
+			}
+		}
+	}
+
+	// Fallback: if no keys in table but customer has a subscription link, show it
+	if len(keys) == 0 && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+		keys = append(keys, KeyResponse{
+			ID:              0,
+			Label:           "Key 1",
+			SubscriptionURL: *customer.SubscriptionLink,
+			HappLink:        "happ://add/" + *customer.SubscriptionLink,
+			ExpireAt:        customer.ExpireAt,
+			DaysRemaining:   daysRemaining,
+			Status:          func() string { if isActive { return "active" }; return "expired" }(),
+		})
 	}
 
 	resp := ValidationResponse{
-		User:            customer,
-		SubscriptionUrl: customer.SubscriptionLink,
-		IsActive:        isActive,
-		ExpireAt:        customer.ExpireAt,
-		DaysRemaining:   daysRemaining,
-		HappLink:        happLink,
+		User:          customer,
+		Keys:          keys,
+		IsActive:      isActive,
+		ExpireAt:      customer.ExpireAt,
+		DaysRemaining: daysRemaining,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

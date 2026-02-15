@@ -2,17 +2,26 @@ import { useEffect, useState } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 
+interface SubscriptionKey {
+    id: number;
+    label: string;
+    username: string;
+    subscription_url: string;
+    happ_link: string;
+    expire_at: string | null;
+    days_remaining: number;
+    status: string;
+}
+
 interface UserData {
     user: {
         id: number;
         telegram_id: number;
-        username: string;
     };
-    subscription_url: string | null;
+    keys: SubscriptionKey[];
     is_active: boolean;
     expire_at: string | null;
     days_remaining: number;
-    happ_link: string | null;
 }
 
 export function Home() {
@@ -20,160 +29,156 @@ export function Home() {
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [copied, setCopied] = useState(false);
+    const [copiedId, setCopiedId] = useState<number | null>(null);
 
     useEffect(() => {
-        if (tg) {
-            tg.BackButton.hide();
-        }
+        if (tg) tg.BackButton.hide();
     }, [tg]);
 
     useEffect(() => {
-        if (!initData) {
-            setLoading(false);
-            return;
-        }
-
-        fetch('/api/me', {
-            headers: { 'Authorization': `twa ${initData}` }
-        })
-            .then(res => {
-                if (!res.ok) throw new Error(`API Error: ${res.status}`);
-                return res.json();
-            })
+        if (!initData) { setLoading(false); return; }
+        fetch('/api/me', { headers: { 'Authorization': `twa ${initData}` } })
+            .then(res => { if (!res.ok) throw new Error(`${res.status}`); return res.json(); })
             .then(setData)
             .catch(err => setError(err.message))
             .finally(() => setLoading(false));
     }, [initData]);
 
-    const handleCopyLink = () => {
-        if (data?.subscription_url) {
-            navigator.clipboard.writeText(data.subscription_url).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-            });
-        }
+    const handleCopy = (url: string, id: number) => {
+        navigator.clipboard.writeText(url).then(() => {
+            setCopiedId(id);
+            setTimeout(() => setCopiedId(null), 2000);
+        });
     };
 
-    if (loading) {
-        return (
-            <div className="flex flex-col items-center justify-center h-screen gap-3">
-                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-gray-400 text-sm">Loading...</span>
-            </div>
-        );
-    }
+    if (loading) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
+            <div className="spinner" />
+            <span className="text-hint" style={{ fontSize: 13 }}>Loading...</span>
+        </div>
+    );
 
-    if (!initData) {
-        return (
-            <div className="flex flex-col items-center justify-center h-screen gap-4 p-6 text-center">
-                <div className="text-5xl">📱</div>
-                <h1 className="text-xl font-bold">Remnawave Shop</h1>
-                <p className="text-gray-500">Please open this app inside Telegram.</p>
-            </div>
-        );
-    }
+    if (!initData) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24, textAlign: 'center' }}>
+            <div style={{ fontSize: 48 }}>📱</div>
+            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Remnawave Shop</h1>
+            <p className="text-hint" style={{ margin: 0 }}>Open this app inside Telegram</p>
+        </div>
+    );
 
-    if (error) {
-        return (
-            <div className="p-4 text-center text-red-500">
-                <p>Error: {error}</p>
-                <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-gray-200 dark:bg-gray-700 rounded">Retry</button>
-            </div>
-        );
-    }
+    if (error) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
+            <div style={{ fontSize: 48 }}>⚠️</div>
+            <p style={{ color: '#ff3b30' }}>Error: {error}</p>
+            <button className="btn-secondary" onClick={() => window.location.reload()}>Retry</button>
+        </div>
+    );
 
-    const daysText = data?.days_remaining === 1 ? '1 day' : `${data?.days_remaining} days`;
+    const keys = data?.keys || [];
+    const activeKeys = keys.filter(k => k.status === 'active');
 
     return (
-        <div className="min-h-screen p-4 flex flex-col gap-4">
+        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
             {/* Header */}
-            <header className="flex items-center gap-3 px-1">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-lg font-bold shadow-lg">
-                    {data?.user?.username?.[0]?.toUpperCase() || 'U'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
+                <div style={{
+                    width: 44, height: 44,
+                    background: 'linear-gradient(135deg, #5ebbff, #007AFF)',
+                    borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontWeight: 700, fontSize: 18,
+                    boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)'
+                }}>
+                    🛡️
                 </div>
                 <div>
-                    <h1 className="text-lg font-bold">{data?.user?.username || 'User'}</h1>
-                    <p className="text-xs text-gray-400">VPN Subscription</p>
+                    <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Remnawave VPN</h1>
+                    <p className="text-hint" style={{ fontSize: 12, margin: 0 }}>
+                        {activeKeys.length > 0 ? `${activeKeys.length} active key${activeKeys.length > 1 ? 's' : ''}` : 'No active keys'}
+                    </p>
                 </div>
-            </header>
-
-            {/* Status Card */}
-            <div className={`p-4 rounded-2xl border shadow-sm ${data?.is_active
-                    ? 'bg-gradient-to-br from-green-900/30 to-green-800/10 border-green-700/40'
-                    : 'bg-gradient-to-br from-gray-800/50 to-gray-700/20 border-gray-600/40'
-                }`}>
-                <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs uppercase tracking-wider text-gray-400">Status</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${data?.is_active
-                            ? 'bg-green-500/20 text-green-400'
-                            : 'bg-gray-500/20 text-gray-400'
-                        }`}>
-                        {data?.is_active ? '● Active' : '○ Inactive'}
-                    </span>
-                </div>
-
-                {data?.is_active ? (
-                    <div className="space-y-2">
-                        <div className="flex items-baseline gap-2">
-                            <span className="text-3xl font-bold text-white">{daysText}</span>
-                            <span className="text-sm text-gray-400">remaining</span>
-                        </div>
-                        {data?.expire_at && (
-                            <div className="text-xs text-gray-500">
-                                Expires: {new Date(data.expire_at).toLocaleDateString('en-US', {
-                                    year: 'numeric', month: 'short', day: 'numeric'
-                                })}
-                            </div>
-                        )}
-                        {/* Progress bar */}
-                        {data.days_remaining > 0 && (
-                            <div className="w-full bg-gray-700/50 rounded-full h-1.5 mt-2">
-                                <div
-                                    className="bg-green-500 h-1.5 rounded-full transition-all"
-                                    style={{ width: `${Math.min(100, (data.days_remaining / 30) * 100)}%` }}
-                                ></div>
-                            </div>
-                        )}
-                    </div>
-                ) : (
-                    <div className="text-gray-400 text-sm">
-                        No active subscription. Buy a plan to get started!
-                    </div>
-                )}
             </div>
 
-            {/* Action Buttons */}
-            {data?.is_active && data?.happ_link && (
-                <a
-                    href={data.happ_link}
-                    className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold text-base shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2 text-center no-underline"
-                >
-                    🚀 Add to Happ Proxy
-                </a>
+            {/* Key Cards */}
+            {keys.length > 0 ? (
+                <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {keys.map(key => (
+                        <div key={key.id} className={`glass-card ${key.status === 'active' ? 'glass-card-success' : ''}`} style={{ padding: 16 }}>
+                            {/* Key header */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <div>
+                                    <div style={{ fontWeight: 600, fontSize: 15 }}>{key.label || key.username}</div>
+                                    {key.username && key.label && (
+                                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{key.username}</div>
+                                    )}
+                                </div>
+                                <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`}>
+                                    {key.status === 'active' ? '● Active' : '○ Expired'}
+                                </span>
+                            </div>
+
+                            {/* Days remaining */}
+                            {key.status === 'active' && (
+                                <div style={{ marginBottom: 12 }}>
+                                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                        <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1 }}>{key.days_remaining}</span>
+                                        <span className="text-hint" style={{ fontSize: 13 }}>days left</span>
+                                    </div>
+                                    {key.expire_at && (
+                                        <div className="text-hint" style={{ fontSize: 11, marginTop: 4 }}>
+                                            Expires {new Date(key.expire_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                        </div>
+                                    )}
+                                    {/* Progress bar */}
+                                    <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 8 }}>
+                                        <div style={{
+                                            height: '100%', borderRadius: 2,
+                                            background: key.days_remaining > 7 ? '#34c759' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
+                                            width: `${Math.min(100, (key.days_remaining / 30) * 100)}%`,
+                                            transition: 'width 0.5s ease'
+                                        }} />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Action buttons */}
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                {key.status === 'active' && key.happ_link && (
+                                    <a href={key.happ_link} className="btn-primary" style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}>
+                                        🚀 Add to Happ
+                                    </a>
+                                )}
+                                <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, fontSize: 13, padding: '10px 12px', textDecoration: 'none' }}>
+                                    ⏳ Extend
+                                </Link>
+                                <button
+                                    className="btn-secondary"
+                                    onClick={() => handleCopy(key.subscription_url, key.id)}
+                                    style={{ flex: 0, minWidth: 44, padding: '10px 12px', fontSize: 13 }}
+                                >
+                                    {copiedId === key.id ? '✅' : '📋'}
+                                </button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="glass-card" style={{ padding: 32, textAlign: 'center' }}>
+                    <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+                    <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 4px' }}>No Subscription Keys</h2>
+                    <p className="text-hint" style={{ fontSize: 13, margin: 0 }}>Buy a plan to get your first VPN key</p>
+                </div>
             )}
 
-            {data?.is_active && data?.subscription_url && (
-                <button
-                    onClick={handleCopyLink}
-                    className={`w-full py-3 rounded-xl font-medium text-sm border transition-all flex items-center justify-center gap-2 ${copied
-                            ? 'bg-green-500/10 border-green-500/30 text-green-400'
-                            : 'bg-gray-800/50 border-gray-600/30 text-gray-300 active:scale-[0.98]'
-                        }`}
-                >
-                    {copied ? '✅ Copied!' : '📋 Copy Subscription Link'}
-                </button>
-            )}
+            {/* Spacer */}
+            <div style={{ flex: 1 }} />
 
-            <Link
-                to="/plans"
-                className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-green-500 text-white rounded-xl font-bold text-base shadow-lg active:scale-[0.98] transition-transform flex items-center justify-center gap-2 text-center no-underline"
-            >
-                💎 {data?.is_active ? 'Extend Subscription' : 'Buy Subscription'}
+            {/* Buy new key button */}
+            <Link to="/plans" className="btn-primary animate-slide-up" style={{ textDecoration: 'none' }}>
+                ➕ Buy New Key
             </Link>
 
-            {/* Footer hint */}
-            <p className="text-center text-gray-500 text-xs mt-auto pb-2">
+            <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: '0 0 8px' }}>
                 Powered by Remnawave
             </p>
         </div>

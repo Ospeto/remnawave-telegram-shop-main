@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -15,6 +15,9 @@ export function Checkout() {
     const { planIndex } = useParams();
     const { tg, initData } = useTelegram();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+
+    const extendKeyId = searchParams.get('extend');
 
     const [purchase, setPurchase] = useState<PurchaseResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -29,7 +32,6 @@ export function Checkout() {
             tg.BackButton.show();
             tg.BackButton.onClick(() => navigate('/plans'));
         }
-        return () => { };
     }, [tg, navigate]);
 
     const purchaseCreated = useRef(false);
@@ -38,13 +40,16 @@ export function Checkout() {
         if (!planIndex || !initData || purchaseCreated.current) return;
         purchaseCreated.current = true;
 
+        const body: any = { plan_index: parseInt(planIndex) };
+        if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
+
         fetch('/api/purchase', {
             method: 'POST',
             headers: {
                 'Authorization': `twa ${initData}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ plan_index: parseInt(planIndex) })
+            body: JSON.stringify(body)
         })
             .then(res => {
                 if (!res.ok) return res.text().then(t => { throw new Error(t) });
@@ -53,7 +58,7 @@ export function Checkout() {
             .then(setPurchase)
             .catch(err => setError(err.message))
             .finally(() => setLoading(false));
-    }, [planIndex, initData]);
+    }, [planIndex, initData, extendKeyId]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -67,119 +72,143 @@ export function Checkout() {
         try {
             const res = await fetch(`/api/upload_screenshot?id=${purchase.purchase_id}`, {
                 method: 'POST',
-                headers: {
-                    'Authorization': `twa ${initData}`
-                },
+                headers: { 'Authorization': `twa ${initData}` },
                 body: formData
             });
             if (!res.ok) {
                 const errText = await res.text();
-                console.error('[Checkout] Upload error response:', res.status, errText);
                 throw new Error(errText || `Upload failed (${res.status})`);
             }
             const data = await res.json();
             setVerificationResult(data);
         } catch (err: any) {
-            console.error('[Checkout] Upload exception:', err);
             setVerificationResult({ status: 'failed', message: err?.message || 'Upload failed. Please try again.' });
         } finally {
             setUploading(false);
-            // Reset file input so same file can be re-selected
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
     };
 
-    if (loading) return <div className="text-center p-8 animate-pulse">Initializing purchase...</div>;
+    if (loading) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
+            <div className="spinner" />
+            <span className="text-hint" style={{ fontSize: 13 }}>Creating purchase...</span>
+        </div>
+    );
+
     if (error) return (
-        <div className="min-h-screen p-4 flex flex-col items-center justify-center gap-4">
-            <div className="text-5xl">❌</div>
-            <p className="text-red-500 text-center">{error}</p>
-            <button onClick={() => navigate('/plans')} className="px-6 py-3 bg-gray-200 dark:bg-gray-700 rounded-xl font-medium">Back to Plans</button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
+            <div style={{ fontSize: 48 }}>❌</div>
+            <p style={{ color: '#ff3b30', textAlign: 'center', fontSize: 14 }}>{error}</p>
+            <button className="btn-secondary" onClick={() => navigate('/plans')}>Back to Plans</button>
         </div>
     );
 
     if (verificationResult?.status === 'success') {
         return (
-            <div className="min-h-screen p-8 flex flex-col items-center justify-center text-center gap-4">
-                <div className="text-6xl">✅</div>
-                <h1 className="text-2xl font-bold">Payment Verified!</h1>
-                <p className="text-gray-500">Your subscription is being activated.</p>
-                <button
-                    onClick={() => navigate('/')}
-                    className="w-full py-3 bg-[#007AFF] text-white rounded-xl font-bold mt-8"
-                >
-                    Go to Home
+            <div className="animate-slide-up" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24, textAlign: 'center' }}>
+                <div style={{ fontSize: 64, marginBottom: 8 }}>✅</div>
+                <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payment Verified!</h1>
+                <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
+                    {extendKeyId ? 'Your key has been extended.' : 'Your new key is being activated.'}
+                </p>
+                <button className="btn-primary" onClick={() => navigate('/')} style={{ marginTop: 24 }}>
+                    Go to My Keys
                 </button>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen p-4 flex flex-col gap-4">
+        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
             {/* Step indicator */}
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
-                <span className="text-green-500">✓ Plan</span>
-                <span>→</span>
-                <span className="text-[#007AFF] font-bold">Payment</span>
-                <span>→</span>
-                <span>Verify</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>
+                <span style={{ color: '#34c759' }}>✓ Plan</span>
+                <span className="text-hint">→</span>
+                <span className="text-link" style={{ fontWeight: 700 }}>Payment</span>
+                <span className="text-hint">→</span>
+                <span className="text-hint">Verify</span>
             </div>
 
             {/* Payment card */}
-            <div className="bg-white dark:bg-gray-800 p-5 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
-                <h2 className="text-xl font-bold mb-4">💳 Payment Details</h2>
+            <div className="glass-card" style={{ padding: 20 }}>
+                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 16px' }}>💳 Payment Details</h2>
 
-                <div className="space-y-3">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                     {/* Amount */}
-                    <div className="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg text-center">
-                        <div className="text-xs uppercase text-gray-500 mb-1">Amount to Send</div>
-                        <div className="text-3xl font-bold text-[#007AFF]">
+                    <div className="glass-card-active" style={{
+                        padding: 16, textAlign: 'center', borderRadius: 12,
+                        background: 'rgba(94, 187, 255, 0.06)', border: '1px solid rgba(94, 187, 255, 0.15)'
+                    }}>
+                        <div className="text-hint" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
+                            Amount to Send
+                        </div>
+                        <div className="text-link" style={{ fontSize: 28, fontWeight: 700 }}>
                             {purchase?.amount?.toLocaleString()} {purchase?.currency}
                         </div>
                     </div>
 
                     {/* Phone */}
-                    <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
-                        <div className="text-xs uppercase text-gray-500 mb-1">Send to Phone Number</div>
-                        <div className="text-lg font-mono font-bold">{purchase?.payment_phone}</div>
+                    <div style={{
+                        padding: 16, borderRadius: 12,
+                        background: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid rgba(255, 255, 255, 0.06)'
+                    }}>
+                        <div className="text-hint" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
+                            Send to Phone Number
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace' }}>
+                            {purchase?.payment_phone}
+                        </div>
                     </div>
 
                     {/* Accepted methods */}
-                    <div className="flex gap-2 justify-center">
-                        <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm">KPay</span>
-                        <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm">Wave</span>
-                        <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 rounded-full text-sm">AYA Pay</span>
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                        {['KPay', 'Wave', 'AYA Pay'].map(m => (
+                            <span key={m} style={{
+                                padding: '4px 12px', borderRadius: 20, fontSize: 12,
+                                background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.08)'
+                            }}>{m}</span>
+                        ))}
                     </div>
 
                     {/* Warning */}
-                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-3 rounded-lg text-sm text-center">
+                    <div style={{
+                        padding: 12, borderRadius: 10, textAlign: 'center', fontSize: 13,
+                        background: 'rgba(255, 159, 10, 0.08)', border: '1px solid rgba(255, 159, 10, 0.15)',
+                        color: '#ff9f0a'
+                    }}>
                         ⚠️ <strong>Do NOT</strong> add any note or remark
                     </div>
                 </div>
             </div>
 
-            <div className="flex-1"></div>
+            <div style={{ flex: 1 }} />
 
-            {/* Error message */}
+            {/* Error */}
             {verificationResult?.status === 'failed' && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 rounded-lg text-sm text-center">
+                <div style={{
+                    padding: 12, borderRadius: 10, textAlign: 'center', fontSize: 13,
+                    background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
+                    color: '#ff3b30'
+                }}>
                     {verificationResult.message}
                 </div>
             )}
 
             {/* Upload */}
-            <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                className="hidden"
-                accept="image/*"
-            />
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*" />
 
             <button
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full py-4 bg-[#007AFF] disabled:bg-gray-400 text-white rounded-xl font-bold text-lg shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
+                className="btn-primary"
+                style={{
+                    fontSize: 17,
+                    padding: '16px 24px',
+                    opacity: uploading ? 0.6 : 1,
+                    cursor: uploading ? 'not-allowed' : 'pointer'
+                }}
             >
                 {uploading ? '🔍 Verifying...' : '📸 Upload Payment Screenshot'}
             </button>

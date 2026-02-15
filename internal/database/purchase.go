@@ -45,6 +45,7 @@ type Purchase struct {
 	YookasaID         *uuid.UUID     `db:"yookasa_id"`
 	TrafficLimitGB    int            `db:"traffic_limit_gb"`
 	Days              int            `db:"days"`
+	ExtendKeyID       *int64         `db:"extend_key_id"`
 }
 
 type PurchaseRepository struct {
@@ -59,8 +60,8 @@ func NewPurchaseRepository(pool *pgxpool.Pool) *PurchaseRepository {
 
 func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (int64, error) {
 	buildInsert := sq.Insert("purchase").
-		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days").
-		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days).
+		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id").
+		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -159,6 +160,7 @@ func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase
 		&purchase.YookasaID,
 		&purchase.TrafficLimitGB,
 		&purchase.Days,
+		&purchase.ExtendKeyID,
 	)
 
 	if err != nil {

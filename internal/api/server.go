@@ -28,8 +28,8 @@ const (
 	usernameKey   contextKey = "username"
 )
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {

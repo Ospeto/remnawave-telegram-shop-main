@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTelegram } from '../lib/twa';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 interface Plan {
     label: string;
@@ -14,14 +14,23 @@ interface UserData {
     is_active: boolean;
     expire_at: string | null;
     days_remaining: number;
+    keys: { id: number; label: string; expire_at: string | null; status: string }[];
 }
 
 export function Plans() {
     const { tg, initData } = useTelegram();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const [plans, setPlans] = useState<Plan[]>([]);
     const [userData, setUserData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
+
+    const extendKeyId = searchParams.get('extend');
+    const isExtend = !!extendKeyId;
+
+    // Find the key being extended
+    const extendingKey = userData?.keys?.find(k => k.id === Number(extendKeyId));
+    const currentExpiry = extendingKey?.expire_at ? new Date(extendingKey.expire_at) : null;
 
     useEffect(() => {
         if (tg) {
@@ -32,109 +41,104 @@ export function Plans() {
 
     useEffect(() => {
         if (!initData) return;
-
         const headers = { 'Authorization': `twa ${initData}` };
-
         Promise.all([
             fetch('/api/plans', { headers }).then(r => r.json()),
             fetch('/api/me', { headers }).then(r => r.json()),
         ])
-            .then(([plansData, meData]) => {
-                setPlans(plansData || []);
-                setUserData(meData);
-            })
+            .then(([p, m]) => { setPlans(p || []); setUserData(m); })
             .catch(console.error)
             .finally(() => setLoading(false));
     }, [initData]);
 
-    if (loading) {
-        return (
-            <div className="flex flex-col items-center justify-center h-screen gap-3">
-                <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-gray-400 text-sm">Loading plans...</span>
-            </div>
-        );
-    }
-
-    const isExtend = userData?.is_active ?? false;
-    const currentExpiry = userData?.expire_at ? new Date(userData.expire_at) : null;
+    if (loading) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
+            <div className="spinner" />
+            <span className="text-hint" style={{ fontSize: 13 }}>Loading plans...</span>
+        </div>
+    );
 
     const calcNewExpiry = (days: number) => {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
-        const newDate = new Date(base);
-        newDate.setDate(newDate.getDate() + days);
-        return newDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        const d = new Date(base);
+        d.setDate(d.getDate() + days);
+        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // Find best value (lowest price per day)
-    const bestValueIdx = plans.length > 0
-        ? plans.reduce((best, plan, idx) =>
-            (plan.price / plan.days) < (plans[best].price / plans[best].days) ? idx : best, 0)
+    // Best value = lowest price per day
+    const bestIdx = plans.length > 0
+        ? plans.reduce((b, p, i) => (p.price / p.days) < (plans[b].price / plans[b].days) ? i : b, 0)
         : -1;
 
     return (
-        <div className="min-h-screen p-4 flex flex-col gap-4">
-            <header className="text-center">
-                <h1 className="text-xl font-bold">
-                    {isExtend ? '⏳ Extend Subscription' : '💎 Choose a Plan'}
+        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
+            {/* Header */}
+            <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
+                    {isExtend ? '⏳ Extend Key' : '💎 Choose a Plan'}
                 </h1>
-                {isExtend && currentExpiry && (
-                    <p className="text-xs text-gray-400 mt-1">
-                        Current expiry: {currentExpiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                {isExtend && extendingKey && (
+                    <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
+                        Extending: <strong style={{ color: 'var(--tg-text)' }}>{extendingKey.label}</strong>
+                        {currentExpiry && <> · Expires {currentExpiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</>}
                     </p>
                 )}
-            </header>
+                {!isExtend && (
+                    <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
+                        A new subscription key will be created
+                    </p>
+                )}
+            </div>
 
-            <div className="flex flex-col gap-3">
+            {/* Plan cards */}
+            <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {plans.map((plan, idx) => (
                     <Link
                         key={idx}
-                        to={`/checkout/${idx}`}
-                        className="block no-underline"
+                        to={`/checkout/${idx}${isExtend ? `?extend=${extendKeyId}` : ''}`}
+                        style={{ textDecoration: 'none', color: 'inherit' }}
                     >
-                        <div className={`relative p-4 rounded-xl border transition-all active:scale-[0.98] ${idx === bestValueIdx
-                            ? 'bg-gradient-to-r from-blue-900/40 to-blue-800/20 border-blue-500/50 shadow-lg shadow-blue-500/10'
-                            : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'
-                            }`}>
-                            {idx === bestValueIdx && (
-                                <span className="absolute -top-2 right-3 px-2 py-0.5 bg-blue-500 text-white text-[10px] font-bold rounded-full uppercase tracking-wide">
+                        <div
+                            className={`glass-card ${idx === bestIdx ? 'glass-card-active' : ''}`}
+                            style={{
+                                padding: 16,
+                                position: 'relative',
+                                transition: 'transform 0.15s ease',
+                            }}
+                        >
+                            {idx === bestIdx && (
+                                <div style={{
+                                    position: 'absolute', top: -8, right: 12,
+                                    background: 'linear-gradient(135deg, #5ebbff, #007AFF)',
+                                    color: '#fff', fontSize: 10, fontWeight: 700,
+                                    padding: '3px 10px', borderRadius: 20,
+                                    textTransform: 'uppercase', letterSpacing: 0.5,
+                                }}>
                                     Best Value
-                                </span>
+                                </div>
                             )}
 
-                            <div className="flex items-center justify-between">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
-                                    <h3 className="font-bold text-base text-white">{plan.label}</h3>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-xs text-gray-400">
-                                            {plan.days} days
+                                    <div style={{ fontWeight: 600, fontSize: 15 }}>{plan.label}</div>
+                                    <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        <span>{plan.days} days</span>
+                                        <span style={{ opacity: 0.3 }}>·</span>
+                                        <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
+                                            {plan.traffic_limit_gb > 0 ? `${plan.traffic_limit_gb} GB` : 'Unlimited'}
                                         </span>
-                                        {plan.traffic_limit_gb > 0 && (
-                                            <>
-                                                <span className="text-gray-600">•</span>
-                                                <span className="text-xs text-gray-400">
-                                                    {plan.traffic_limit_gb} GB
-                                                </span>
-                                            </>
-                                        )}
-                                        {plan.traffic_limit_gb === 0 && (
-                                            <>
-                                                <span className="text-gray-600">•</span>
-                                                <span className="text-xs text-green-400">Unlimited</span>
-                                            </>
-                                        )}
                                     </div>
                                     {isExtend && (
-                                        <div className="text-[10px] text-gray-500 mt-1">
+                                        <div className="text-hint" style={{ fontSize: 10, marginTop: 4 }}>
                                             New expiry: {calcNewExpiry(plan.days)}
                                         </div>
                                     )}
                                 </div>
-                                <div className="text-right">
-                                    <div className="text-lg font-bold text-[#007AFF]">
+                                <div style={{ textAlign: 'right' }}>
+                                    <div className="text-link" style={{ fontSize: 18, fontWeight: 700 }}>
                                         {plan.price.toLocaleString()}
                                     </div>
-                                    <div className="text-xs text-gray-500">{plan.currency}</div>
+                                    <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
                                 </div>
                             </div>
                         </div>
@@ -142,8 +146,8 @@ export function Plans() {
                 ))}
             </div>
 
-            <p className="text-center text-gray-500 text-xs mt-2">
-                Payment via KPay, Wave, AYA Pay
+            <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: '4px 0 0' }}>
+                KPay · Wave · AYA Pay
             </p>
         </div>
     );
