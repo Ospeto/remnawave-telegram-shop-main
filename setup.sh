@@ -331,7 +331,6 @@ show_menu() {
     echo -e "    ${GREEN}6${NC})  📋  View Logs"
     echo -e "    ${GREEN}7${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
     echo -e "    ${GREEN}8${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
-    echo -e "    ${GREEN}9${NC})  📱  Setup Mini App ${DIM}(build + configure)${NC}"
     echo ""
     echo -e "    ${RED}0${NC})  🚪  Exit"
     echo ""
@@ -621,8 +620,6 @@ ENVEOF
 
     if [[ "$setup_miniapp" == "y" || "$setup_miniapp" == "Y" ]]; then
         do_setup_miniapp
-    else
-        print_info "You can set up the Mini App later from the main menu (option 9)."
     fi
 }
 
@@ -956,8 +953,8 @@ do_setup_miniapp() {
         return 1
     fi
 
-    print_arrow "Installing packages..."
-    (cd "${SCRIPT_DIR}/web-app" && npm install --silent) || {
+    print_arrow "Clean install of packages..."
+    (cd "${SCRIPT_DIR}/web-app" && rm -rf node_modules package-lock.json && npm cache clean --force && npm install --silent) || {
         print_error "npm install failed. Check errors above."
         return 1
     }
@@ -1095,7 +1092,6 @@ main() {
             6) do_logs ;;
             7) do_update ;;
             8) do_uninstall ;;
-            9) do_setup_miniapp ;;
             0)
                 echo ""
                 print_success "Goodbye! 👋"
