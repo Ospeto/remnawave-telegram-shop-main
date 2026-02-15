@@ -1,17 +1,17 @@
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
 import { Checkout } from './pages/Checkout';
 
 function App() {
     return (
-        <HashRouter>
+        <MemoryRouter>
             <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/plans" element={<Plans />} />
                 <Route path="/checkout/:planIndex" element={<Checkout />} />
             </Routes>
-        </HashRouter>
+        </MemoryRouter>
     );
 }
 
