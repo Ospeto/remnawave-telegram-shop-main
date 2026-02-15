@@ -342,4 +342,4 @@ fabric.properties
 # Compiled binaries
 /app
 /bin/
-web-app/node_modules/
+web-app/dist/
