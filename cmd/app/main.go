@@ -152,7 +152,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
-	api.RegisterHandlers(mux, customerRepository)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.GetHealthCheckPort()),

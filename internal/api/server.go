@@ -11,13 +11,17 @@ import (
 	"net/url"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/translation"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/go-telegram/bot"
 )
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository) {
-	handler := NewAPIHandler(customerRepo)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -29,6 +33,9 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 
 	mux.HandleFunc("/api/me", withAuth(handler.GetMe))
 	mux.HandleFunc("/api/plans", public(handler.GetPlans))
+	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
+	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
+	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 
 	// Serve React Frontend (SPA support)
 	fs := http.FileServer(http.Dir("./web-app/dist"))

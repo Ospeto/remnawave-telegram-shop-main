@@ -58,6 +58,11 @@ func NewPaymentService(
 	}
 }
 
+// GetPurchaseRepository exposes the purchase repository for external use (e.g. API handlers).
+func (s PaymentService) GetPurchaseRepository() *database.PurchaseRepository {
+	return s.purchaseRepository
+}
+
 func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
 	purchase, err := s.purchaseRepository.FindById(ctx, purchaseId)
 	if err != nil {
