@@ -67,16 +67,6 @@ func (s PaymentService) GetPurchaseRepository() *database.PurchaseRepository {
 	return s.purchaseRepository
 }
 
-func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
-	purchase, err := s.purchaseRepository.FindById(ctx, purchaseId)
-	if err != nil {
-		return err
-	}
-// ... (rest of ProcessPurchaseById)
-// But wait, the instruction says "Add SyncKeys method". I should insert it BEFORE ProcessPurchaseById or AFTER. Let's insert it AFTER ProcessPurchaseById to avoid messing up the large function above.
-// Actually, let's put it at the END of the file or after `GetPurchaseRepository`.
-// Let's insert after `GetPurchaseRepository` (line 68).
-
 func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
 	if s.subKeyRepo == nil {
 		return nil, nil
