@@ -1,0 +1,1 @@
+-- Placeholder to fix migration panic after rollback

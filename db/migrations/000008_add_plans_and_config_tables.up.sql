@@ -1,0 +1,3 @@
+-- Placeholder to fix migration panic after rollback
+-- The database is already at version 8, but the code was rolled back.
+-- These files are restored to satisfy the migration checker.
