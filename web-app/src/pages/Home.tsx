@@ -20,33 +20,45 @@ export function Home() {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
+        console.log('[Home] useEffect fired, initData:', initData ? 'present (' + initData.length + ' chars)' : 'EMPTY');
         if (!initData) {
+            console.log('[Home] No initData, setting loading=false');
             setLoading(false);
             return;
         }
 
+        console.log('[Home] Fetching /api/me...');
         fetch('/api/me', {
             headers: {
                 'Authorization': `twa ${initData}`
             }
         })
             .then(res => {
-                if (!res.ok) throw new Error('Unauthorized or API Error');
+                console.log('[Home] /api/me response:', res.status, res.statusText);
+                if (!res.ok) throw new Error(`API Error: ${res.status} ${res.statusText}`);
                 return res.json();
             })
-            .then(setData)
+            .then(d => {
+                console.log('[Home] /api/me data:', JSON.stringify(d));
+                setData(d);
+            })
             .catch(err => {
-                console.error(err);
+                console.error('[Home] /api/me error:', err);
                 setError(err.message);
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                console.log('[Home] Fetch complete, setting loading=false');
+                setLoading(false);
+            });
     }, [initData]);
 
     if (loading) {
+        console.log('[Home] Rendering: LOADING state');
         return <div className="flex items-center justify-center h-screen animate-pulse">Loading...</div>;
     }
 
     if (!initData) {
+        console.log('[Home] Rendering: NO INIT DATA state');
         return (
             <div className="flex flex-col items-center justify-center h-screen gap-4 p-6 text-center">
                 <div className="text-5xl">📱</div>
@@ -57,6 +69,7 @@ export function Home() {
     }
 
     if (error) {
+        console.log('[Home] Rendering: ERROR state -', error);
         return (
             <div className="p-4 text-center text-red-500">
                 <p>Error: {error}</p>
@@ -64,6 +77,8 @@ export function Home() {
             </div>
         );
     }
+
+    console.log('[Home] Rendering: MAIN UI, data:', data ? 'present' : 'null', 'isActive:', data?.is_active);
 
     return (
         <div className="min-h-screen p-4 flex flex-col gap-6">
