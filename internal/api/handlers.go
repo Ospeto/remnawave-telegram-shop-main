@@ -88,7 +88,6 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	username, _ := r.Context().Value(usernameKey).(string)
 
-
 	var req CreatePurchaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -375,10 +374,6 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find plan label
-	// We only store plan days/traffic in purchase, not label directly?
-	// Actually we just return status. The frontend knows the plan details from previous step.
-	// But let's try to infer label or just skip it.
 	
 	resp := PurchaseStatusResponse{
 		ID:     purchase.ID,
