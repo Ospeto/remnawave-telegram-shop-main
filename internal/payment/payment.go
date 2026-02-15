@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 )
 
 type PaymentService struct {
@@ -86,14 +87,10 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 		return nil, err
 	}
 
-	statsMap := make(map[int64]KeyStats)
-	remoteUUIDs := make(map[string]bool)
-
 	// Create a map of remote users for easy lookup
 	remoteMap := make(map[string]remapi.User)
 	for _, u := range users {
 		remoteMap[u.UUID.String()] = u
-		remoteUUIDs[u.UUID.String()] = true
 	}
 
 	var result []KeyStats
