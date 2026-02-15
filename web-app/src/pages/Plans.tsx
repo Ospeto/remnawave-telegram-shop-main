@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 
@@ -15,18 +15,20 @@ export function Plans() {
     const [plans, setPlans] = useState<Plan[]>([]);
     const [loading, setLoading] = useState(true);
 
+    const goBack = useCallback(() => window.history.back(), []);
+
     useEffect(() => {
         if (tg) {
             tg.BackButton.show();
-            tg.BackButton.onClick(() => window.history.back());
+            tg.BackButton.onClick(goBack);
         }
         return () => {
             if (tg) {
                 tg.BackButton.hide();
-                tg.BackButton.offClick(() => window.history.back());
+                tg.BackButton.offClick(goBack);
             }
         };
-    }, [tg]);
+    }, [tg, goBack]);
 
     useEffect(() => {
         fetch('/api/plans')

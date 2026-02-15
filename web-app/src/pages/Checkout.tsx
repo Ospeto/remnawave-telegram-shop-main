@@ -6,6 +6,7 @@ interface PurchaseResponse {
     purchase_id: number;
     payment_phone: string;
     amount: number;
+    currency: string;
     instructions: string;
     invoice_type: string;
 }
@@ -33,8 +34,11 @@ export function Checkout() {
         };
     }, [tg, navigate]);
 
+    const purchaseCreated = useRef(false);
+
     useEffect(() => {
-        if (!planIndex || !initData) return;
+        if (!planIndex || !initData || purchaseCreated.current) return;
+        purchaseCreated.current = true;
 
         // Create purchase immediately
         fetch('/api/purchase', {
@@ -110,7 +114,7 @@ export function Checkout() {
 
                     <div className="bg-gray-50 dark:bg-gray-900 p-4 rounded-lg text-center">
                         <div className="text-xs text-uppercase text-gray-500">Amount to Send</div>
-                        <div className="text-2xl font-bold text-[#007AFF]">{purchase?.amount.toLocaleString()} MMK</div>
+                        <div className="text-2xl font-bold text-[#007AFF]">{purchase?.amount.toLocaleString()} {purchase?.currency}</div>
                     </div>
 
                     <div className="text-xs text-gray-400 text-center">
@@ -140,7 +144,7 @@ export function Checkout() {
                 onClick={() => fileInputRef.current?.click()}
                 className="w-full py-4 bg-[#007AFF] disabled:bg-gray-400 text-white rounded-xl font-bold text-lg shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
             >
-                {uploading ? 'Verifying...' : '📸 Upload Config screenshot'}
+                {uploading ? 'Verifying...' : '📸 Upload Payment Screenshot'}
             </button>
         </div>
     );

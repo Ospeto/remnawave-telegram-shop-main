@@ -21,6 +21,13 @@ import (
 	"github.com/go-telegram/bot"
 )
 
+type contextKey string
+
+const (
+	telegramIDKey contextKey = "telegram_id"
+	usernameKey   contextKey = "username"
+)
+
 func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager) {
 	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm)
 
@@ -78,28 +85,31 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// But usually we just send the initData string. Let's assume the raw initData string is passed.
 		initData := strings.TrimPrefix(authHeader, "tma ")
 
-		telegramID, err := validateInitData(initData, config.TelegramToken())
+		telegramID, username, err := validateInitData(initData, config.TelegramToken())
 		if err != nil {
 			http.Error(w, "Invalid initData: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "telegram_id", telegramID)
+		ctx := context.WithValue(r.Context(), telegramIDKey, telegramID)
+		if username != "" {
+			ctx = context.WithValue(ctx, usernameKey, username)
+		}
 		next(w, r.WithContext(ctx))
 	}
 }
 
-// validateInitData validates the Telegram Web App initData and returns the user ID
-func validateInitData(initData string, botToken string) (int64, error) {
+// validateInitData validates the Telegram Web App initData and returns the user ID and Username
+func validateInitData(initData string, botToken string) (int64, string, error) {
 	// Parse query string
 	values, err := url.ParseQuery(initData)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	hash := values.Get("hash")
 	if hash == "" {
-		return 0, fmt.Errorf("hash missing")
+		return 0, "", fmt.Errorf("hash missing")
 	}
 
 	// Remove hash from values to compute data-check-string
@@ -129,36 +139,37 @@ func validateInitData(initData string, botToken string) (int64, error) {
 	computedHash := hex.EncodeToString(h.Sum(nil))
 
 	if computedHash != hash {
-		return 0, fmt.Errorf("hash mismatch")
+		return 0, "", fmt.Errorf("hash mismatch")
 	}
 
 	// Check auth_date to prevent replay attacks
 	authDateStr := values.Get("auth_date")
 	if authDateStr == "" {
-		return 0, fmt.Errorf("auth_date missing")
+		return 0, "", fmt.Errorf("auth_date missing")
 	}
 	authDate, err := strconv.ParseInt(authDateStr, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid auth_date")
+		return 0, "", fmt.Errorf("invalid auth_date")
 	}
 	if time.Now().Unix()-authDate > 86400 {
-		return 0, fmt.Errorf("initData expired")
+		return 0, "", fmt.Errorf("initData expired")
 	}
 
 	// Extract user ID
 	userStr := values.Get("user")
 	if userStr == "" {
-		return 0, fmt.Errorf("user data missing")
+		return 0, "", fmt.Errorf("user data missing")
 	}
 
 	// Simple JSON parsing to get ID
 	// Telegram sends: {"id":123,"first_name":"...","last_name":"...","username":"...","language_code":"..."}
 	var user struct {
-		ID int64 `json:"id"`
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
 	}
 	if err := json.Unmarshal([]byte(userStr), &user); err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
-	return user.ID, nil
+	return user.ID, user.Username, nil
 }

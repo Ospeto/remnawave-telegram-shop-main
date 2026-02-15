@@ -55,6 +55,7 @@ type CreatePurchaseResponse struct {
 	PurchaseID    int64  `json:"purchase_id"`
 	PaymentPhone  string `json:"payment_phone"`
 	Amount        int    `json:"amount"`
+	Currency      string `json:"currency"`
 	Instructions  string `json:"instructions"`
 	InvoiceType   string `json:"invoice_type"`
 }
@@ -65,11 +66,13 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	telegramID, ok := r.Context().Value("telegram_id").(int64)
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	username, _ := r.Context().Value(usernameKey).(string)
+
 
 	var req CreatePurchaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,7 +99,8 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	// Always use Mobile Banking for Mini Appshop for now (as per user request)
 	invoiceType := database.InvoiceTypeMobileBanking
 
-	ctxWithUsername := context.WithValue(r.Context(), "username", customer.TelegramID) // Username might not be available
+	// Pass username to payment service (it might use it for crypto payloads)
+	ctxWithUsername := context.WithValue(r.Context(), "username", username)
 	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType)
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
@@ -113,6 +117,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		PurchaseID:   purchaseID,
 		PaymentPhone: config.MobileBankingPhone(),
 		Amount:       plan.Price,
+		Currency:     config.Currency(),
 		Instructions: instructions,
 		InvoiceType:  string(invoiceType),
 	}
@@ -128,7 +133,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// and extracts the user ID. We'll simulate that for now or implement it fully.
 	
 	// Assuming middleware sets "telegram_id" in context
-	telegramID, ok := r.Context().Value("telegram_id").(int64)
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -191,7 +196,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	telegramID, ok := r.Context().Value("telegram_id").(int64)
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -279,7 +284,7 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	telegramID, ok := r.Context().Value("telegram_id").(int64)
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
