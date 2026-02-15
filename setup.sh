@@ -337,6 +337,37 @@ show_menu() {
     echo -ne "  ${ARROW}  Your choice: "
 }
 
+# ──── Ensure Caddy/SSL is configured in .env ────────────────
+ensure_caddy_configured() {
+    local cur_domain cur_email
+    cur_domain=$({ grep -E '^DOMAIN_NAME=' "$ENV_FILE" || true; } | cut -d= -f2-)
+    cur_email=$({ grep -E '^ACME_EMAIL=' "$ENV_FILE" || true; } | cut -d= -f2-)
+
+    if [[ -z "$cur_domain" || -z "$cur_email" ]]; then
+        echo ""
+        print_info "⚡ SSL is not configured yet."
+        print_info "Caddy needs your domain and email to get free HTTPS certificates."
+        echo ""
+
+        declare -A CFG
+        ask_required "Your domain name (e.g., shop.example.com)" "" "DOMAIN_NAME"
+        ask_required "Your email (for Let's Encrypt notifications)" "" "ACME_EMAIL"
+
+        # Update or append each var in .env
+        for key in DOMAIN_NAME ACME_EMAIL; do
+            local val="${CFG[$key]}"
+            if grep -qE "^${key}=" "$ENV_FILE"; then
+                awk -v k="$key" -v v="$val" 'BEGIN{FS=OFS="="} $1==k{$0=k"="v}1' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+            else
+                echo "${key}=${val}" >> "$ENV_FILE"
+            fi
+        done
+
+        print_success "SSL configured: ${CFG[DOMAIN_NAME]}"
+        echo ""
+    fi
+}
+
 # ──── Fresh Install Wizard ──────────────────────────────────
 wizard() {
     # If .env already exists, ask whether to skip
@@ -355,6 +386,7 @@ wizard() {
         case "$env_choice" in
             1)
                 print_success "Keeping existing .env."
+                ensure_caddy_configured
                 do_start
                 return
                 ;;
@@ -367,6 +399,7 @@ wizard() {
                 ;;
             *)
                 print_success "Keeping existing .env."
+                ensure_caddy_configured
                 do_start
                 return
                 ;;
