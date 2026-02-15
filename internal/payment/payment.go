@@ -384,6 +384,27 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
+	// TEST BYPASS: skip all validation for test transaction ID
+	const testTransactionID = "01004063070995016447"
+	if strings.TrimSpace(info.TransactionID) == testTransactionID {
+		slog.Info("TEST MODE: bypassing validation for test transaction", "purchase_id", purchaseID, "txn_id", testTransactionID)
+		_, _ = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
+			PurchaseID:    purchaseID,
+			TransactionID: info.TransactionID + fmt.Sprintf("_test_%d", time.Now().UnixMilli()),
+			Provider:      info.Provider,
+			PhoneNumber:   info.PhoneNumber,
+			Amount:        purchase.Amount,
+			Note:          "TEST",
+			Verified:      true,
+		})
+		err = s.ProcessPurchaseById(ctx, purchaseID)
+		if err != nil {
+			slog.Error("Error processing test purchase", "error", err)
+			return nil, err
+		}
+		return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
+	}
+
 	if !info.IsValid {
 		slog.Warn("Gemini flagged screenshot as invalid", "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
