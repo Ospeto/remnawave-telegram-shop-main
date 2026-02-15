@@ -134,8 +134,7 @@ func buildConnectText(customer *database.Customer, langCode string) string {
 			info.WriteString(fmt.Sprintf(subscriptionActiveText, formattedDate))
 
 			if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
-				if config.GetMiniAppURL() != "" || config.IsWepAppLinkEnabled() {
-				} else {
+				if config.GetMiniAppURL() == "" {
 					subscriptionLinkText := tm.GetText(langCode, "subscription_link")
 					info.WriteString(fmt.Sprintf(subscriptionLinkText, *customer.SubscriptionLink))
 					info.WriteString(tm.GetText(langCode, "happ_proxy_instructions"))

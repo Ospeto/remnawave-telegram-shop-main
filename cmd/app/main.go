@@ -48,7 +48,7 @@ func main() {
 		panic(err)
 	}
 
-	pool, err := initDatabase(ctx, config.DadaBaseUrl())
+	pool, err := initDatabase(ctx, config.DatabaseUrl())
 	if err != nil {
 		panic(err)
 	}

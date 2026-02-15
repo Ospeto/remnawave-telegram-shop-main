@@ -85,7 +85,8 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		}
 	}
 
-	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*1073741824, purchase.Days, false)
+	const bytesInGB = 1073741824
+	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
 	if err != nil {
 		return err
 	}
@@ -105,6 +106,13 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		return err
 	}
 
+	// Refresh customer so subscription_link is up-to-date for the keyboard
+	customer, err = s.customerRepository.FindById(ctx, customer.ID)
+	if err != nil {
+		slog.Error("Error refreshing customer after purchase", "error", err)
+		// Non-fatal: proceed with potentially stale customer
+	}
+
 	_, err = s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: customer.TelegramID,
 		Text:   s.translation.GetText(customer.Language, "subscription_activated"),
@@ -118,14 +126,11 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 
 	ctxReferee := context.Background()
 	referee, err := s.referralRepository.FindByReferee(ctxReferee, customer.TelegramID)
-	if referee == nil {
-		return nil
-	}
-	if referee.BonusGranted {
-		return nil
-	}
 	if err != nil {
 		return err
+	}
+	if referee == nil || referee.BonusGranted {
+		return nil
 	}
 	refereeCustomer, err := s.customerRepository.FindByTelegramId(ctxReferee, referee.ReferrerID)
 	if err != nil {
