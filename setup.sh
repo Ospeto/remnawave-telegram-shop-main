@@ -486,6 +486,19 @@ ENVEOF
     else
         print_info "You can start services later from the main menu (option 3)."
     fi
+
+    # Offer Mini App setup
+    echo ""
+    echo -ne "  ${ARROW}  Do you want to set up the Mini App (shop inside Telegram)? ${DIM}(y/n)${NC} [y]: "
+    local setup_miniapp
+    read -r setup_miniapp
+    setup_miniapp="${setup_miniapp:-y}"
+
+    if [[ "$setup_miniapp" == "y" || "$setup_miniapp" == "Y" ]]; then
+        do_setup_miniapp
+    else
+        print_info "You can set up the Mini App later from the main menu (option 9)."
+    fi
 }
 
 # ──── Edit Config ───────────────────────────────────────────
@@ -744,65 +757,148 @@ do_edit_pricing() {
 # ──── Setup Mini App ────────────────────────────────────────
 do_setup_miniapp() {
     print_header "📱 Mini App Setup"
+    echo ""
+    print_info  "This will set up the Mini App inside Telegram."
+    print_info  "Everything will be done automatically for you."
+    echo ""
 
-    # 1. Check for Node.js
-    if ! command -v node &>/dev/null; then
-        print_error "Node.js is not installed."
-        print_info  "Install Node.js 18+ from https://nodejs.org"
-        print_info  "On Ubuntu/Debian:  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs"
-        print_info  "On macOS:          brew install node"
-        return 1
+    # ── Step 1: Ensure Node.js is installed ─────────────────
+    print_section "Step 1/4 — Checking Node.js"
+
+    if command -v node &>/dev/null; then
+        local node_ver
+        node_ver=$(node -v)
+        print_success "Node.js is already installed: $node_ver"
+    else
+        print_info "Node.js is not installed. Installing automatically..."
+        echo ""
+
+        if [[ "$(uname)" == "Darwin" ]]; then
+            if command -v brew &>/dev/null; then
+                print_arrow "Installing via Homebrew..."
+                brew install node || {
+                    print_error "Failed to install Node.js via Homebrew."
+                    print_info  "Please install manually: https://nodejs.org"
+                    return 1
+                }
+            else
+                print_error "Homebrew not found. Please install Node.js manually:"
+                print_info  "Visit https://nodejs.org and download the installer."
+                return 1
+            fi
+        elif [[ -f /etc/debian_version ]]; then
+            print_arrow "Installing Node.js 20.x via NodeSource..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && \
+            sudo apt-get install -y nodejs || {
+                print_error "Failed to install Node.js."
+                print_info  "Please install manually: https://nodejs.org"
+                return 1
+            }
+        elif [[ -f /etc/redhat-release ]]; then
+            print_arrow "Installing Node.js 20.x via NodeSource..."
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - && \
+            sudo yum install -y nodejs || {
+                print_error "Failed to install Node.js."
+                print_info  "Please install manually: https://nodejs.org"
+                return 1
+            }
+        else
+            print_error "Could not detect your OS. Please install Node.js manually:"
+            print_info  "Visit https://nodejs.org"
+            return 1
+        fi
+
+        if command -v node &>/dev/null; then
+            print_success "Node.js installed successfully: $(node -v)"
+        else
+            print_error "Node.js installation failed. Please install manually."
+            return 1
+        fi
     fi
-    local node_ver
-    node_ver=$(node -v)
-    print_success "Node.js found: $node_ver"
 
     if ! command -v npm &>/dev/null; then
-        print_error "npm is not installed (should come with Node.js)."
+        print_error "npm not found (should come with Node.js). Please reinstall Node.js."
         return 1
     fi
     print_success "npm found: $(npm -v)"
 
-    # 2. Install dependencies
-    print_section "Installing Dependencies"
+    # ── Step 2: Install dependencies & build ────────────────
+    print_section "Step 2/4 — Building Mini App"
+
     if [[ ! -d "${SCRIPT_DIR}/web-app" ]]; then
-        print_error "web-app/ directory not found. Make sure you have the latest code."
+        print_error "web-app/ directory not found!"
+        print_info  "Make sure you downloaded the complete project."
         return 1
     fi
 
-    (cd "${SCRIPT_DIR}/web-app" && npm install) || {
-        print_error "npm install failed."
+    print_arrow "Installing packages..."
+    (cd "${SCRIPT_DIR}/web-app" && npm install --silent) || {
+        print_error "npm install failed. Check errors above."
         return 1
     }
-    print_success "Dependencies installed."
+    print_success "Packages installed."
 
-    # 3. Build
-    print_section "Building Mini App"
+    print_arrow "Building frontend..."
     (cd "${SCRIPT_DIR}/web-app" && npm run build) || {
         print_error "Build failed. Check errors above."
         return 1
     }
-    print_success "Mini App built → web-app/dist/"
+    print_success "Mini App built successfully → web-app/dist/"
 
-    # 4. Configure MINI_APP_URL
-    print_section "Configuration"
-    print_info  "The Mini App needs a public HTTPS URL to work inside Telegram."
-    print_info  "If you don't have a domain yet, you can use:"
-    print_info  "  • Cloudflare Tunnel (Free, recommended)"
-    print_info  "  • Ngrok (Temporary testing)"
-    print_info  "  • Your VPS IP (requires valid SSL, hard to get)"
-    print_info  "Example: https://shop.example.com"
-    echo ""
+    # ── Step 3: Configure MINI_APP_URL ──────────────────────
+    print_section "Step 3/4 — Setting Mini App URL"
+
+    local public_ip=""
+    public_ip=$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null || \
+                curl -s --connect-timeout 5 https://ifconfig.me 2>/dev/null || \
+                echo "")
 
     local current_url=""
     if [[ -f "$ENV_FILE" ]]; then
         current_url=$(grep -E '^MINI_APP_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     fi
 
+    echo ""
+    print_info  "The Mini App needs a public HTTPS URL to work inside Telegram."
+    echo ""
+    echo -e "  ${CYAN}${BOLD}How to get a URL (pick one):${NC}"
+    echo ""
+    echo -e "    ${GREEN}Option A${NC} — You already have a domain with SSL"
+    echo -e "             ${DIM}Example: https://shop.yourdomain.com${NC}"
+    echo ""
+    echo -e "    ${GREEN}Option B${NC} — Use Cloudflare Tunnel ${DIM}(free, no domain needed)${NC}"
+    echo -e "             ${DIM}Run:  cloudflared tunnel --url http://localhost:8080${NC}"
+    echo -e "             ${DIM}Copy the https://xxx.trycloudflare.com URL${NC}"
+    echo ""
+    echo -e "    ${GREEN}Option C${NC} — Use ngrok ${DIM}(free, temporary)${NC}"
+    echo -e "             ${DIM}Run:  ngrok http 8080${NC}"
+    echo -e "             ${DIM}Copy the https://xxx.ngrok-free.app URL${NC}"
+    echo ""
+    if [[ -n "$public_ip" ]]; then
+        print_info  "Your server's public IP: ${public_ip}"
+    fi
+    echo ""
+
+    local suggested="${current_url}"
+    if [[ -z "$suggested" && -n "$public_ip" ]]; then
+        suggested="https://${public_ip}"
+    fi
+
     declare -A CFG
-    ask "Mini App URL (public HTTPS)" "${current_url}" "miniapp_url"
+    ask "Enter your Mini App URL" "${suggested}" "miniapp_url"
 
     if [[ -n "${CFG[miniapp_url]}" ]]; then
+        if [[ "${CFG[miniapp_url]}" != https://* ]]; then
+            print_error "URL must start with https:// (Telegram requires HTTPS)."
+            echo -ne "  ${ARROW}  Continue anyway? ${DIM}(y/n)${NC} [n]: "
+            local force
+            read -r force
+            if [[ "$force" != "y" && "$force" != "Y" ]]; then
+                print_info "Skipped. Set MINI_APP_URL in .env when you have an HTTPS URL."
+                return 0
+            fi
+        fi
+
         if [[ -f "$ENV_FILE" ]]; then
             if grep -q '^MINI_APP_URL=' "$ENV_FILE" 2>/dev/null; then
                 awk -v key="MINI_APP_URL" -v val="${CFG[miniapp_url]}" \
@@ -812,21 +908,39 @@ do_setup_miniapp() {
             fi
             print_success "MINI_APP_URL set to: ${CFG[miniapp_url]}"
         else
-            print_error ".env file not found. Please run Fresh Install first."
+            print_error ".env file not found. Run Fresh Install first (option 1)."
+            print_info  "Your URL: ${CFG[miniapp_url]} — save it for later!"
             return 1
         fi
     else
-        print_info "Skipped — you can set MINI_APP_URL later in .env"
+        print_info "Skipped. You can set MINI_APP_URL in .env later."
     fi
 
-    # 5. Reminder
+    # ── Step 4: Auto-restart services ───────────────────────
+    print_section "Step 4/4 — Restarting Services"
     echo ""
-    print_success "Mini App setup complete!"
+    echo -ne "  ${ARROW}  Restart services now to apply changes? ${DIM}(y/n)${NC} [y]: "
+    local restart
+    read -r restart
+    restart="${restart:-y}"
+    if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+        do_start
+    else
+        print_info "Remember to restart services (option 4) for changes to take effect."
+    fi
+
+    # ── Done ────────────────────────────────────────────────
     echo ""
-    print_info  "Next steps:"
-    print_arrow "1.  Restart bot:  Choose option 4 (Start / Restart Services)"
-    print_arrow "2.  BotFather:    /mybots → Bot Settings → Menu Button → your URL"
-    print_arrow "3.  Test:         Open the Menu Button in your bot on mobile"
+    echo -e "  ${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${GREEN}${BOLD}  ✅ Mini App Setup Complete!${NC}"
+    echo -e "  ${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    print_info  "Final steps:"
+    print_arrow "1.  Open @BotFather on Telegram"
+    print_arrow "2.  Go to /mybots → Select your bot"
+    print_arrow "3.  Bot Settings → Menu Button"
+    print_arrow "4.  Paste your URL: ${CFG[miniapp_url]:-<set later>}"
+    print_arrow "5.  Open the Menu Button on mobile to test!"
     echo ""
 }
 
