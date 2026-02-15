@@ -206,6 +206,7 @@ show_menu() {
     echo -e "    ${GREEN}6${NC})  📋  View Logs"
     echo -e "    ${GREEN}7${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
     echo -e "    ${GREEN}8${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
+    echo -e "    ${GREEN}9${NC})  📱  Setup Mini App ${DIM}(build + configure)${NC}"
     echo ""
     echo -e "    ${RED}0${NC})  🚪  Exit"
     echo ""
@@ -740,6 +741,95 @@ do_edit_pricing() {
     fi
 }
 
+# ──── Setup Mini App ────────────────────────────────────────
+do_setup_miniapp() {
+    print_header "📱 Mini App Setup"
+
+    # 1. Check for Node.js
+    if ! command -v node &>/dev/null; then
+        print_error "Node.js is not installed."
+        print_info  "Install Node.js 18+ from https://nodejs.org"
+        print_info  "On Ubuntu/Debian:  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs"
+        print_info  "On macOS:          brew install node"
+        return 1
+    fi
+    local node_ver
+    node_ver=$(node -v)
+    print_success "Node.js found: $node_ver"
+
+    if ! command -v npm &>/dev/null; then
+        print_error "npm is not installed (should come with Node.js)."
+        return 1
+    fi
+    print_success "npm found: $(npm -v)"
+
+    # 2. Install dependencies
+    print_section "Installing Dependencies"
+    if [[ ! -d "${SCRIPT_DIR}/web-app" ]]; then
+        print_error "web-app/ directory not found. Make sure you have the latest code."
+        return 1
+    fi
+
+    (cd "${SCRIPT_DIR}/web-app" && npm install) || {
+        print_error "npm install failed."
+        return 1
+    }
+    print_success "Dependencies installed."
+
+    # 3. Build
+    print_section "Building Mini App"
+    (cd "${SCRIPT_DIR}/web-app" && npm run build) || {
+        print_error "Build failed. Check errors above."
+        return 1
+    }
+    print_success "Mini App built → web-app/dist/"
+
+    # 4. Configure MINI_APP_URL
+    print_section "Configuration"
+    print_info  "The Mini App needs a public HTTPS URL to work inside Telegram."
+    print_info  "If you don't have a domain yet, you can use:"
+    print_info  "  • Cloudflare Tunnel (Free, recommended)"
+    print_info  "  • Ngrok (Temporary testing)"
+    print_info  "  • Your VPS IP (requires valid SSL, hard to get)"
+    print_info  "Example: https://shop.example.com"
+    echo ""
+
+    local current_url=""
+    if [[ -f "$ENV_FILE" ]]; then
+        current_url=$(grep -E '^MINI_APP_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
+    fi
+
+    declare -A CFG
+    ask "Mini App URL (public HTTPS)" "${current_url}" "miniapp_url"
+
+    if [[ -n "${CFG[miniapp_url]}" ]]; then
+        if [[ -f "$ENV_FILE" ]]; then
+            if grep -q '^MINI_APP_URL=' "$ENV_FILE" 2>/dev/null; then
+                awk -v key="MINI_APP_URL" -v val="${CFG[miniapp_url]}" \
+                    'BEGIN{FS=OFS="="} $1==key{$2=val}{print}' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+            else
+                echo "MINI_APP_URL=${CFG[miniapp_url]}" >> "$ENV_FILE"
+            fi
+            print_success "MINI_APP_URL set to: ${CFG[miniapp_url]}"
+        else
+            print_error ".env file not found. Please run Fresh Install first."
+            return 1
+        fi
+    else
+        print_info "Skipped — you can set MINI_APP_URL later in .env"
+    fi
+
+    # 5. Reminder
+    echo ""
+    print_success "Mini App setup complete!"
+    echo ""
+    print_info  "Next steps:"
+    print_arrow "1.  Restart bot:  Choose option 4 (Start / Restart Services)"
+    print_arrow "2.  BotFather:    /mybots → Bot Settings → Menu Button → your URL"
+    print_arrow "3.  Test:         Open the Menu Button in your bot on mobile"
+    echo ""
+}
+
 # ──── Main Loop ─────────────────────────────────────────────
 main() {
     show_banner
@@ -765,6 +855,7 @@ main() {
             6) do_logs ;;
             7) do_update ;;
             8) do_uninstall ;;
+            9) do_setup_miniapp ;;
             0)
                 echo ""
                 print_success "Goodbye! 👋"
