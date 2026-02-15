@@ -153,12 +153,20 @@ echo ""
 
 if [[ -d "$INSTALL_DIR" ]]; then
     print_info "Project directory already exists at ${INSTALL_DIR}"
+
+    # Backup .env if exists
+    if [[ -f "$INSTALL_DIR/.env" ]]; then
+         print_info "Found existing .env configuration."
+         cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.pre-update"
+         print_success "Backed up .env to .env.pre-update"
+    fi
+
     echo -ne "  ${ARROW}  Update to latest version? ${DIM}(y/n)${NC} [y]: "
     read -r update_choice
     update_choice="${update_choice:-y}"
     if [[ "$update_choice" == "y" || "$update_choice" == "Y" ]]; then
-        (cd "$INSTALL_DIR" && git pull --ff-only) || {
-            print_error "git pull failed. You may need to resolve conflicts manually."
+        (cd "$INSTALL_DIR" && git fetch && git reset --hard origin/main) || {
+            print_error "git update failed."
         }
         print_success "Updated to latest version"
     fi
