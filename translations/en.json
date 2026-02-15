@@ -41,5 +41,7 @@
   "mobile_pay_failed_note": "❌ Payment note contains a forbidden keyword (vpn/outline). Please pay without such notes.",
   "mobile_pay_failed_amount": "❌ Payment amount doesn't match. Expected %d MMK.",
   "mobile_pay_failed_generic": "❌ Could not verify this screenshot. Please try again or contact support.",
-  "mobile_pay_no_pending": "No pending mobile banking payment found. Please start a purchase first."
+  "mobile_pay_no_pending": "No pending mobile banking payment found. Please start a purchase first.",
+  "happ_proxy_instructions": "\n\n<b>How to use with Happ Proxy:</b>\n1. Copy the subscription link below.\n2. Open <b>Happ Proxy</b> app.\n3. The app should automatically detect the link. If not, look for 'Import from Clipboard'.\n4. Connect and enjoy!",
+  "happ_proxy_button": "Import to Happ Proxy"
 }

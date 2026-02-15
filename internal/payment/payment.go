@@ -172,9 +172,20 @@ func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]m
 			}},
 		})
 	} else {
-		inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-			{Text: s.translation.GetText(customer.Language, "connect_button"), CallbackData: "connect"},
-		})
+		if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+			inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
+				{Text: s.translation.GetText(customer.Language, "connect_button"), WebApp: &models.WebAppInfo{
+					URL: *customer.SubscriptionLink,
+				}},
+			})
+			inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
+				{Text: s.translation.GetText(customer.Language, "happ_proxy_button"), URL: *customer.SubscriptionLink},
+			})
+		} else {
+			inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
+				{Text: s.translation.GetText(customer.Language, "connect_button"), CallbackData: "connect"},
+			})
+		}
 	}
 
 	inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{

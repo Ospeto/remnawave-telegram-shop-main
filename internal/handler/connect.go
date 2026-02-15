@@ -41,6 +41,9 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 				WebApp: &models.WebAppInfo{
 					URL: *customer.SubscriptionLink,
 				}}})
+			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
+				URL: *customer.SubscriptionLink,
+			}})
 		}
 	}
 	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
@@ -90,6 +93,9 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 				WebApp: &models.WebAppInfo{
 					URL: *customer.SubscriptionLink,
 				}}})
+			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
+				URL: *customer.SubscriptionLink,
+			}})
 		}
 	}
 	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
@@ -132,6 +138,7 @@ func buildConnectText(customer *database.Customer, langCode string) string {
 				} else {
 					subscriptionLinkText := tm.GetText(langCode, "subscription_link")
 					info.WriteString(fmt.Sprintf(subscriptionLinkText, *customer.SubscriptionLink))
+					info.WriteString(tm.GetText(langCode, "happ_proxy_instructions"))
 				}
 			}
 		} else {
