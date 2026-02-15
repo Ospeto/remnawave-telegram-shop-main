@@ -1,0 +1,7 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$DOMAIN_NAME} {
+    reverse_proxy bot:8080
+}

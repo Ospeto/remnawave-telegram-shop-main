@@ -12,13 +12,19 @@ services:
     volumes:
       - ./translations:/translations
 
-  nginx:
-    image: nginx:alpine
+  caddy:
+    image: caddy:2-alpine
     restart: unless-stopped
     ports:
-      - '0.0.0.0:80:80'
+      - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN_NAME=${DOMAIN_NAME}
+      - ACME_EMAIL=${ACME_EMAIL}
     depends_on:
       - bot
 
@@ -49,3 +55,5 @@ volumes:
     driver: local
     external: false
     name: remnawave-telegram-shop-db-data
+  caddy_data:
+  caddy_config:

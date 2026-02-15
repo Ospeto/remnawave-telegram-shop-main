@@ -496,12 +496,17 @@ wizard() {
     ask "Terms of Service URL" "" "TOS_URL"
 
     # ── 10. Blocked / Whitelisted IDs ───────────────────────
-    print_section "10/11  Access Control"
+    print_section "10/12  Access Control"
     ask "Blocked Telegram IDs (comma-separated)" "" "BLOCKED_TELEGRAM_IDS"
     ask "Whitelisted Telegram IDs (comma-separated)" "" "WHITELISTED_TELEGRAM_IDS"
 
-    # ── 11. Database & Advanced ─────────────────────────────
-    print_section "11/11  Database & Advanced"
+    # ── 11. Caddy / SSL ─────────────────────────────────────
+    print_section "11/12  Domain & SSL (Caddy)"
+    ask_required "Domain Name (e.g., shop.example.com)" "" "DOMAIN_NAME"
+    ask_required "SSL Email (for Let's Encrypt)" "" "ACME_EMAIL"
+
+    # ── 12. Database & Advanced ─────────────────────────────
+    print_section "12/12  Database & Advanced"
     ask "PostgreSQL User" "postgres" "POSTGRES_USER"
     ask "PostgreSQL Password" "postgres" "POSTGRES_PASSWORD"
     ask "PostgreSQL Database" "postgres" "POSTGRES_DB"
@@ -584,6 +589,10 @@ TOS_URL=${CFG[TOS_URL]}
 BLOCKED_TELEGRAM_IDS=${CFG[BLOCKED_TELEGRAM_IDS]}
 WHITELISTED_TELEGRAM_IDS=${CFG[WHITELISTED_TELEGRAM_IDS]}
 
+# ── Caddy / SSL ──────────────────────────────────────────────
+DOMAIN_NAME=${CFG[DOMAIN_NAME]}
+ACME_EMAIL=${CFG[ACME_EMAIL]}
+
 # ── Database ─────────────────────────────────────────────────
 DATABASE_URL=${CFG[DATABASE_URL]}
 POSTGRES_USER=${CFG[POSTGRES_USER]}
@@ -598,6 +607,11 @@ ENVEOF
 
     print_success ".env file created successfully!"
     echo ""
+
+    if [[ -f "nginx.conf" ]]; then
+        mv nginx.conf nginx.conf.bak
+        print_info "Backed up existing nginx.conf to nginx.conf.bak (using Caddy now)"
+    fi
 
     # Offer to start services right away
     echo -ne "  ${ARROW}  Start services now? ${DIM}(y/n)${NC} [y]: "

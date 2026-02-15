@@ -42,7 +42,9 @@ export function Home() {
         fetch('/api/me', { headers: { 'Authorization': `twa ${initData}` } })
             .then(res => { if (!res.ok) throw new Error(`${res.status}`); return res.json(); })
             .then(setData)
-            .catch(err => setError(err.message))
+            .catch(err => {
+                setError(`${err.name}: ${err.message}`);
+            })
             .finally(() => setLoading(false));
     }, [initData]);
 
