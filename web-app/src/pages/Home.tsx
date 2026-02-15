@@ -14,15 +14,12 @@ interface UserData {
 }
 
 export function Home() {
-    const { ready, initData, openLink } = useTelegram();
+    const { initData, openLink } = useTelegram();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // Wait for the hook to finish checking the SDK
-        if (!ready) return;
-
         if (!initData) {
             setLoading(false);
             return;
@@ -43,7 +40,7 @@ export function Home() {
                 setError(err.message);
             })
             .finally(() => setLoading(false));
-    }, [ready, initData]);
+    }, [initData]);
 
     if (loading) {
         return <div className="flex items-center justify-center h-screen animate-pulse">Loading...</div>;
