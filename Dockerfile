@@ -3,6 +3,15 @@ WORKDIR /modules
 COPY go.mod go.sum ./
 RUN go mod download
 
+# ── Build frontend ──────────────────────────────────────────
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+WORKDIR /frontend
+COPY web-app/package.json web-app/package-lock.json ./
+RUN npm ci --silent
+COPY web-app/ ./
+RUN npm run build
+
+# ── Build Go binary ─────────────────────────────────────────
 FROM --platform=$BUILDPLATFORM golang:1.25.3-alpine AS builder
 WORKDIR /app
 
@@ -22,6 +31,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-w -s -X main.Version=${VERSION:-dev} -X main.Commit=${COMMIT:-none} -X main.BuildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     -o /bin/app ./cmd/app
 
+# ── Final image ─────────────────────────────────────────────
 FROM scratch
 
 ARG VERSION
@@ -40,6 +50,9 @@ COPY --from=builder /bin/app /app/app
 
 COPY --from=builder /app/db /db
 COPY --from=builder /app/translations /translations
+
+# Include the built frontend
+COPY --from=frontend /frontend/dist /web-app/dist
 
 USER 1000
 
