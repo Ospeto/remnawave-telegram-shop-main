@@ -168,9 +168,19 @@ export function Home() {
                             {/* Action buttons */}
                             <div style={{ display: 'flex', gap: 8 }}>
                                 {key.status === 'active' && key.happ_link && (
-                                    <a href={key.happ_link} className="btn-primary" style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}>
+                                    <button
+                                        className="btn-primary"
+                                        style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}
+                                        onClick={() => {
+                                            if (tg) {
+                                                tg.openLink(key.happ_link);
+                                            } else {
+                                                window.open(key.happ_link, '_blank');
+                                            }
+                                        }}
+                                    >
                                         🚀 Add to Happ
-                                    </a>
+                                    </button>
                                 )}
                                 <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, fontSize: 13, padding: '10px 12px', textDecoration: 'none' }}>
                                     ⏳ Extend
