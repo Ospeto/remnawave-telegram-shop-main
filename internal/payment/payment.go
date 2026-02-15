@@ -345,6 +345,12 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
+	// Check for image tampering (Photoshop, AI generation, etc.)
+	if info.TamperingDetected {
+		slog.Warn("Gemini detected image tampering", "purchase_id", purchaseID, "provider", info.Provider)
+		return &VerificationResult{Success: false, Reason: "Screenshot appears to be altered or manipulated. Please upload an original, unedited screenshot.", ReasonKey: "mobile_pay_failed_generic"}, nil
+	}
+
 	// 1. Check transaction ID not empty
 	if strings.TrimSpace(info.TransactionID) == "" {
 		return &VerificationResult{Success: false, Reason: "No transaction ID found", ReasonKey: "mobile_pay_failed_generic"}, nil
@@ -360,10 +366,11 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 		return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: "mobile_pay_failed_duplicate"}, nil
 	}
 
-	// 3. Check phone number matches configured receiving phone
+	// 3. Check phone number matches configured receiving phone.
+	// Some banking apps mask part of the number, so we compare last 4 digits.
 	expectedPhone := normalizePhone(config.MobileBankingPhone())
 	actualPhone := normalizePhone(info.PhoneNumber)
-	if actualPhone != expectedPhone {
+	if !phoneMatchesSuffix(expectedPhone, actualPhone, 4) {
 		slog.Warn("Phone mismatch", "expected", expectedPhone, "got", actualPhone, "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Wrong recipient phone number", ReasonKey: "mobile_pay_failed_phone"}, nil
 	}
@@ -417,6 +424,7 @@ func normalizePhone(phone string) string {
 	phone = strings.ReplaceAll(phone, "-", "")
 	phone = strings.ReplaceAll(phone, "(", "")
 	phone = strings.ReplaceAll(phone, ")", "")
+	phone = strings.ReplaceAll(phone, "*", "") // masked digits
 	phone = strings.TrimPrefix(phone, "+")
 	// Myanmar country code is 95. E.g. +959xxxxxxxx → 959xxxxxxxx.
 	// Local format is 09xxxxxxxx.
@@ -426,4 +434,26 @@ func normalizePhone(phone string) string {
 	}
 	phone = strings.TrimPrefix(phone, "0") // 09xxx → 9xxx
 	return phone
+}
+
+// phoneMatchesSuffix checks if two phone numbers share the same last N digits.
+// This handles cases where banking apps mask/truncate the phone number.
+func phoneMatchesSuffix(expected, actual string, n int) bool {
+	if actual == "" {
+		return false
+	}
+	// If we have the full number, try exact match first
+	if actual == expected {
+		return true
+	}
+	// Fall back to last N digits comparison
+	expSuffix := expected
+	if len(expected) > n {
+		expSuffix = expected[len(expected)-n:]
+	}
+	actSuffix := actual
+	if len(actual) > n {
+		actSuffix = actual[len(actual)-n:]
+	}
+	return expSuffix == actSuffix
 }
