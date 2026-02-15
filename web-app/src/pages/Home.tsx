@@ -172,11 +172,7 @@ export function Home() {
                                         className="btn-primary"
                                         style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}
                                         onClick={() => {
-                                            if (tg) {
-                                                tg.openLink(key.happ_link);
-                                            } else {
-                                                window.open(key.happ_link, '_blank');
-                                            }
+                                            window.location.href = key.happ_link;
                                         }}
                                     >
                                         🚀 Add to Happ
