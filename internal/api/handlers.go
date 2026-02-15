@@ -16,6 +16,8 @@ import (
 	"github.com/go-telegram/bot"
 )
 
+// --- Response types ---
+
 type KeyResponse struct {
 	ID              int64      `json:"id"`
 	Label           string     `json:"label"`
@@ -30,22 +32,143 @@ type KeyResponse struct {
 }
 
 type ValidationResponse struct {
-	User            *database.Customer `json:"user"`
-	Keys            []KeyResponse      `json:"keys"`
-	IsActive        bool               `json:"is_active"`
-	ExpireAt        *time.Time         `json:"expire_at"`
-	DaysRemaining   int                `json:"days_remaining"`
+	User          *database.Customer `json:"user"`
+	Keys          []KeyResponse      `json:"keys"`
+	IsActive      bool               `json:"is_active"`
+	ExpireAt      *time.Time         `json:"expire_at"`
+	DaysRemaining int                `json:"days_remaining"`
 }
 
-// ... PlanResponse struct ...
+type PlanResponse struct {
+	Label          string `json:"label"`
+	Days           int    `json:"days"`
+	Price          int    `json:"price"`
+	TrafficLimitGB int    `json:"traffic_limit_gb"`
+	Currency       string `json:"currency"`
+}
 
-// ... APIHandler struct ...
+type CreatePurchaseRequest struct {
+	PlanIndex   int    `json:"plan_index"`
+	ExtendKeyID *int64 `json:"extend_key_id,omitempty"`
+}
 
-// ... NewAPIHandler func ...
+type CreatePurchaseResponse struct {
+	PurchaseID   int64  `json:"purchase_id"`
+	PaymentPhone string `json:"payment_phone"`
+	Amount       int    `json:"amount"`
+	Currency     string `json:"currency"`
+	Instructions string `json:"instructions"`
+	InvoiceType  string `json:"invoice_type"`
+}
 
-// ... CreatePurchaseRequest/Response ...
+type UploadScreenshotResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+	Reason  string `json:"reason,omitempty"`
+}
 
-// ... CreatePurchase func ...
+type PurchaseStatusResponse struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+// --- Handler ---
+
+type APIHandler struct {
+	customerRepo   *database.CustomerRepository
+	paymentService *payment.PaymentService
+	telegramBot    *bot.Bot
+	translation    *translation.Manager
+	subKeyRepo     *database.SubscriptionKeyRepository
+}
+
+func NewAPIHandler(
+	customerRepo *database.CustomerRepository,
+	paymentService *payment.PaymentService,
+	telegramBot *bot.Bot,
+	tm *translation.Manager,
+	subKeyRepo *database.SubscriptionKeyRepository,
+) *APIHandler {
+	return &APIHandler{
+		customerRepo:   customerRepo,
+		paymentService: paymentService,
+		telegramBot:    telegramBot,
+		translation:    tm,
+		subKeyRepo:     subKeyRepo,
+	}
+}
+
+// --- Handlers ---
+
+func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	username, _ := r.Context().Value(usernameKey).(string)
+
+	var req CreatePurchaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	plan := config.PlanByIndex(req.PlanIndex)
+	if plan == nil {
+		http.Error(w, "Invalid plan index", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	invoiceType := database.InvoiceTypeMobileBanking
+	ctxWithUsername := context.WithValue(r.Context(), "username", username)
+
+	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType)
+	if err != nil {
+		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if req.ExtendKeyID != nil {
+		purchaseRepo := h.paymentService.GetPurchaseRepository()
+		_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, map[string]interface{}{
+			"extend_key_id": *req.ExtendKeyID,
+		})
+	}
+
+	instructions := fmt.Sprintf(
+		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
+		plan.Price,
+		config.MobileBankingPhone(),
+	)
+
+	resp := CreatePurchaseResponse{
+		PurchaseID:   purchaseID,
+		PaymentPhone: config.MobileBankingPhone(),
+		Amount:       plan.Price,
+		Currency:     config.Currency(),
+		Instructions: instructions,
+		InvoiceType:  string(invoiceType),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
 
 func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
@@ -71,113 +194,81 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		daysRemaining = int(time.Until(*customer.ExpireAt).Hours() / 24)
 	}
 
-	// Sync keys with Remnawave to get fresh stats and status
-	syncedKeys, err := h.paymentService.SyncKeys(r.Context(), customer.ID, customer.TelegramID)
-	// If sync fails, fall back to local DB? Alternatively just log error and return empty or old?
-	// For "real-time" requirement, we want the synced data. If API down, use local DB as backup.
 	var keys []KeyResponse
-
 	const bytesInGB = 1073741824.0
 
-	// Use synced keys if available
-	if err == nil && syncedKeys != nil {
-		if h.subKeyRepo != nil {
-			// Reload local keys to get correct static fields (Label, URL), but use stats from sync
-			localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-			
-			// Map for quick lookup
-			statsMap := make(map[int64]payment.KeyStats)
-			for _, sk := range syncedKeys {
-				statsMap[sk.ID] = sk
-			}
+	// Sync keys with Remnawave to get fresh stats and filter deleted keys.
+	// SyncKeys updates the local DB (marks deleted, updates expiry/status).
+	syncedKeys, syncErr := h.paymentService.SyncKeys(r.Context(), customer.ID, customer.TelegramID)
 
-			for _, k := range localKeys {
-				stat, exists := statsMap[k.ID]
-				// If not in sync map, it might be deleted or sync failed just for this one.
-				// Based on SyncKeys logic, if it's not returned it's effectively gone or sync logic handled it.
-				// But SyncKeys returns the list of ACTIVE/EXPIRED keys only (deleted ones are skipped in loop possibly? No, SyncKeys returns result struct).
-				// We should iterate over result from SyncKeys primarily OR filter localKeys by status != deleted.
-				
-				// Better approach: Iterate localKeys. If status is deleted, skip.
-				// If status is active/expired, match with stats.
-				
-				// Re-fetch to be safe after sync updates
-				if k.Status == "deleted" { 
-					continue 
-				}
-				
-				// If we have fresh stats, use them
-				validStat := stat
-				if !exists {
-					// Should ideally check DB status again if SyncKeys updated it to deleted
-					// But for now let's skip if no stats found (implies deleted externally)
-					// Actually SyncKeys updates DB. So if we re-fetch `localKeys` AFTER `SyncKeys`, we are good.
-					// Let's rely on the returned `syncedKeys` which contains the ID.
-					// We need to merge Synced Data (Stats) + DB Data (Label/URL).
-				}
-			}
-			
-			// Re-query DB to get the latest status updates applied by SyncKeys
-			freshLocalKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-			for _, k := range freshLocalKeys {
-				if k.Status == "deleted" {
-					continue
-				}
-				
-				kDays := 0
-				if k.ExpireAt != nil && k.ExpireAt.After(time.Now()) {
-					kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
-				}
-
-				// Find traffic stats
-				usedGB := 0.0
-				limitGB := 0.0
-				if stat, ok := statsMap[k.ID]; ok {
-					usedGB = float64(stat.TrafficUsedBytes) / bytesInGB
-					limitGB = float64(stat.TrafficLimitBytes) / bytesInGB
-				}
-
-				keys = append(keys, KeyResponse{
-					ID:              k.ID,
-					Label:           k.Label,
-					Username:        k.Username,
-					SubscriptionURL: k.SubscriptionURL,
-					HappLink:        "happ://add/" + k.SubscriptionURL,
-					ExpireAt:        k.ExpireAt,
-					DaysRemaining:   kDays,
-					Status:          k.Status,
-					TrafficUsedGB:   usedGB,
-					TrafficLimitGB:  limitGB,
-				})
-			}
+	if syncErr == nil && syncedKeys != nil && h.subKeyRepo != nil {
+		// Build stats lookup from synced data
+		statsMap := make(map[int64]payment.KeyStats, len(syncedKeys))
+		for _, sk := range syncedKeys {
+			statsMap[sk.ID] = sk
 		}
-	} else {
-		// Fallback to local DB if sync failed
-		if h.subKeyRepo != nil {
-			subKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-			for _, k := range subKeys {
-				if k.Status == "deleted" { continue }
-				kDays := 0
-				if k.ExpireAt != nil && k.ExpireAt.After(time.Now()) {
-					kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
-				}
-				keys = append(keys, KeyResponse{
-					ID:              k.ID,
-					Label:           k.Label,
-					Username:        k.Username,
-					SubscriptionURL: k.SubscriptionURL,
-					HappLink:        "happ://add/" + k.SubscriptionURL,
-					ExpireAt:        k.ExpireAt,
-					DaysRemaining:   kDays,
-					Status:          k.Status,
-					// No traffic stats in fallback
-				})
+
+		// Single DB query after sync to get labels/URLs with updated statuses
+		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		for _, k := range localKeys {
+			if k.Status == "deleted" {
+				continue
 			}
+
+			kDays := 0
+			if k.ExpireAt != nil && k.ExpireAt.After(time.Now()) {
+				kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
+			}
+
+			usedGB, limitGB := 0.0, 0.0
+			if stat, ok := statsMap[k.ID]; ok {
+				usedGB = float64(stat.TrafficUsedBytes) / bytesInGB
+				limitGB = float64(stat.TrafficLimitBytes) / bytesInGB
+			}
+
+			keys = append(keys, KeyResponse{
+				ID:              k.ID,
+				Label:           k.Label,
+				Username:        k.Username,
+				SubscriptionURL: k.SubscriptionURL,
+				HappLink:        "happ://add/" + k.SubscriptionURL,
+				ExpireAt:        k.ExpireAt,
+				DaysRemaining:   kDays,
+				Status:          k.Status,
+				TrafficUsedGB:   usedGB,
+				TrafficLimitGB:  limitGB,
+			})
+		}
+	} else if h.subKeyRepo != nil {
+		// Fallback: sync unavailable, use local DB only
+		subKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		for _, k := range subKeys {
+			if k.Status == "deleted" {
+				continue
+			}
+			kDays := 0
+			if k.ExpireAt != nil && k.ExpireAt.After(time.Now()) {
+				kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
+			}
+			keys = append(keys, KeyResponse{
+				ID:              k.ID,
+				Label:           k.Label,
+				Username:        k.Username,
+				SubscriptionURL: k.SubscriptionURL,
+				HappLink:        "happ://add/" + k.SubscriptionURL,
+				ExpireAt:        k.ExpireAt,
+				DaysRemaining:   kDays,
+				Status:          k.Status,
+			})
 		}
 	}
 
-	// Fallback: if no keys in table but customer has a subscription link, show it (Legacy)
+	// Legacy fallback: customer has subscription_link but no subscription_key rows
 	if len(keys) == 0 && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+		status := "expired"
+		if isActive {
+			status = "active"
+		}
 		keys = append(keys, KeyResponse{
 			ID:              0,
 			Label:           "Key 1",
@@ -185,7 +276,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 			HappLink:        "happ://add/" + *customer.SubscriptionLink,
 			ExpireAt:        customer.ExpireAt,
 			DaysRemaining:   daysRemaining,
-			Status:          func() string { if isActive { return "active" }; return "expired" }(),
+			Status:          status,
 		})
 	}
 
@@ -220,12 +311,6 @@ func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-type UploadScreenshotResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-	Reason  string `json:"reason,omitempty"`
-}
-
 func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -238,7 +323,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// limit to 10MB
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
@@ -291,27 +375,17 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := UploadScreenshotResponse{
-		Status: "failed",
-	}
-
+	resp := UploadScreenshotResponse{Status: "failed"}
 	if result.Success {
 		resp.Status = "success"
 		resp.Message = "Payment verified successfully!"
 	} else {
-		resp.Status = "failed"
 		resp.Message = result.Reason
 		resp.Reason = result.ReasonKey
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-}
-
-type PurchaseStatusResponse struct {
-	ID        int64  `json:"id"`
-	Status    string `json:"status"`
-	PlanLabel string `json:"plan_label"`
 }
 
 func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +422,6 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	
 	resp := PurchaseStatusResponse{
 		ID:     purchase.ID,
 		Status: string(purchase.Status),
