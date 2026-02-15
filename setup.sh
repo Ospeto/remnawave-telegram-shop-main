@@ -148,27 +148,152 @@ cleanup() {
 }
 trap cleanup INT
 
-# ──── Docker detection ──────────────────────────────────────
-detect_docker() {
-    if ! command -v docker &>/dev/null; then
-        print_error "Docker is not installed!"
-        echo ""
-        print_info "Install Docker: https://docs.docker.com/get-docker/"
-        exit 1
+# ──── Auto-install helpers ──────────────────────────────────
+install_docker_linux() {
+    print_info "Installing Docker via official convenience script..."
+    echo ""
+    curl -fsSL https://get.docker.com | sh || {
+        print_error "Docker installation failed."
+        print_info  "Try manually: https://docs.docker.com/engine/install/"
+        return 1
+    }
+
+    # Start Docker service
+    if command -v systemctl &>/dev/null; then
+        sudo systemctl start docker 2>/dev/null || true
+        sudo systemctl enable docker 2>/dev/null || true
     fi
 
-    if docker compose version &>/dev/null; then
+    # Add current user to docker group so sudo isn't needed
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        sudo usermod -aG docker "$SUDO_USER" 2>/dev/null || true
+        print_info "Added $SUDO_USER to docker group. You may need to log out & back in."
+    elif [[ "$(id -u)" -ne 0 ]]; then
+        sudo usermod -aG docker "$(whoami)" 2>/dev/null || true
+        print_info "Added $(whoami) to docker group. You may need to log out & back in."
+    fi
+}
+
+install_package() {
+    # Install a system package by name, auto-detecting the package manager
+    local pkg="$1"
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y -qq "$pkg"
+    elif command -v yum &>/dev/null; then
+        sudo yum install -y "$pkg"
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y "$pkg"
+    elif command -v brew &>/dev/null; then
+        brew install "$pkg"
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -Sy --noconfirm "$pkg"
+    else
+        print_error "Cannot auto-install '$pkg': no supported package manager found."
+        print_info  "Please install '$pkg' manually and re-run this script."
+        return 1
+    fi
+}
+
+# ──── Prerequisites check ───────────────────────────────────
+check_prerequisites() {
+    print_section "Checking Prerequisites"
+
+    # 1. curl (needed for downloads)
+    if ! command -v curl &>/dev/null; then
+        print_info "curl not found. Installing..."
+        install_package curl || {
+            print_error "Could not install curl. Please install it manually."
+            exit 1
+        }
+    fi
+    print_success "curl available"
+
+    # 2. git (needed for updates)
+    if ! command -v git &>/dev/null; then
+        print_info "git not found. Installing..."
+        install_package git || {
+            print_error "Could not install git. Please install it manually."
+            exit 1
+        }
+    fi
+    print_success "git available"
+}
+
+# ──── Docker detection & auto-install ───────────────────────
+detect_docker() {
+    # Check if Docker is installed
+    if ! command -v docker &>/dev/null; then
+        echo ""
+        print_info "Docker is not installed."
+        echo ""
+        echo -ne "  ${ARROW}  Install Docker automatically? ${DIM}(y/n)${NC} [y]: "
+        local install_docker
+        read -r install_docker
+        install_docker="${install_docker:-y}"
+
+        if [[ "$install_docker" != "y" && "$install_docker" != "Y" ]]; then
+            print_error "Docker is required. Install it from https://docs.docker.com/get-docker/"
+            exit 1
+        fi
+
+        if [[ "$(uname)" == "Darwin" ]]; then
+            # macOS — Docker Desktop is the standard way
+            print_error "On macOS, please install Docker Desktop manually:"
+            print_info  "Download from: https://www.docker.com/products/docker-desktop/"
+            print_info  "After installing, launch Docker Desktop and re-run this script."
+            exit 1
+        else
+            # Linux — use official script
+            install_docker_linux || exit 1
+        fi
+
+        # Verify
+        if ! command -v docker &>/dev/null; then
+            print_error "Docker installation did not complete successfully."
+            print_info  "Please install manually: https://docs.docker.com/get-docker/"
+            exit 1
+        fi
+        print_success "Docker installed successfully!"
+    else
+        print_success "Docker detected"
+    fi
+
+    # Check Docker Compose
+    if docker compose version &>/dev/null 2>&1; then
         COMPOSE_CMD="docker compose"
     elif command -v docker-compose &>/dev/null; then
         COMPOSE_CMD="docker-compose"
     else
-        print_error "Docker Compose is not installed!"
         echo ""
-        print_info "Install Docker Compose: https://docs.docker.com/compose/install/"
-        exit 1
+        print_info "Docker Compose not found. Installing..."
+
+        if [[ "$(uname)" == "Linux" ]]; then
+            # Install Docker Compose plugin
+            sudo mkdir -p /usr/local/lib/docker/cli-plugins
+            local compose_url="https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)"
+            sudo curl -fsSL "$compose_url" -o /usr/local/lib/docker/cli-plugins/docker-compose || {
+                print_error "Failed to download Docker Compose."
+                print_info  "Install manually: https://docs.docker.com/compose/install/"
+                exit 1
+            }
+            sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+            if docker compose version &>/dev/null 2>&1; then
+                COMPOSE_CMD="docker compose"
+                print_success "Docker Compose plugin installed!"
+            else
+                print_error "Docker Compose installation failed."
+                print_info  "Install manually: https://docs.docker.com/compose/install/"
+                exit 1
+            fi
+        else
+            print_error "Docker Compose is not installed."
+            print_info  "It should come with Docker Desktop on macOS."
+            print_info  "Make sure Docker Desktop is running and try again."
+            exit 1
+        fi
     fi
 
-    print_success "Docker detected"
     print_success "Docker Compose detected  ${DIM}(${COMPOSE_CMD})${NC}"
 }
 
@@ -947,6 +1072,7 @@ do_setup_miniapp() {
 # ──── Main Loop ─────────────────────────────────────────────
 main() {
     show_banner
+    check_prerequisites
     detect_docker
     echo ""
 
