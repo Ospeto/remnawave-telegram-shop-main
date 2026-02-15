@@ -230,7 +230,13 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 
 func (r *Client) createUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool) (*remapi.User, error) {
 	expireAt := time.Now().UTC().AddDate(0, 0, days)
-	username := generateUsername(customerId, telegramId)
+
+	// Build systematic username: {tg_username}_{last4_customerId}_{telegramId}
+	var tgUsername string
+	if ctx.Value("username") != nil {
+		tgUsername = ctx.Value("username").(string)
+	}
+	username := generateUsername(tgUsername, customerId, telegramId)
 
 	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
 	if err != nil {
@@ -287,24 +293,44 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 		createUserRequestDto.Tag = remapi.NewOptNilString(tag)
 	}
 
-	var tgUsername string
-	if ctx.Value("username") != nil {
-		tgUsername = ctx.Value("username").(string)
-		createUserRequestDto.Description = remapi.NewOptString(ctx.Value("username").(string))
-	} else {
-		tgUsername = ""
+	if tgUsername != "" {
+		createUserRequestDto.Description = remapi.NewOptString(tgUsername)
 	}
 
 	userCreate, err := r.client.Users().CreateUser(ctx, &createUserRequestDto)
 	if err != nil {
 		return nil, err
 	}
-	slog.Info("created user", "telegramId", utils.MaskHalf(strconv.FormatInt(telegramId, 10)), "username", utils.MaskHalf(tgUsername), "days", days)
+	slog.Info("created user", "telegramId", utils.MaskHalf(strconv.FormatInt(telegramId, 10)), "username", utils.MaskHalf(tgUsername), "key", username, "days", days)
 	return &userCreate.(*remapi.UserResponse).Response, nil
 }
 
-func generateUsername(customerId int64, telegramId int64) string {
-	return fmt.Sprintf("%d_%d", customerId, telegramId)
+// generateUsername creates a systematic subscription key name.
+// Format: {tg_username}_{last4_customerId}_{telegramId}
+// Examples: john_0042_987654321, user_0001_123456789
+func generateUsername(tgUsername string, customerId int64, telegramId int64) string {
+	name := sanitizeUsername(tgUsername)
+	if name == "" {
+		name = "user"
+	}
+	suffix := fmt.Sprintf("%04d", customerId%10000)
+	return fmt.Sprintf("%s_%s_%d", name, suffix, telegramId)
+}
+
+// sanitizeUsername makes a Telegram username safe for use as a subscription key part.
+func sanitizeUsername(username string) string {
+	username = strings.ToLower(strings.TrimSpace(username))
+	var b strings.Builder
+	for _, r := range username {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	result := b.String()
+	if len(result) > 20 {
+		result = result[:20]
+	}
+	return result
 }
 
 func getNewExpire(daysToAdd int, currentExpire time.Time) time.Time {

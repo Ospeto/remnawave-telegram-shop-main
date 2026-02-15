@@ -21,6 +21,8 @@ type ValidationResponse struct {
 	SubscriptionUrl *string            `json:"subscription_url"`
 	IsActive        bool               `json:"is_active"`
 	ExpireAt        *time.Time         `json:"expire_at"`
+	DaysRemaining   int                `json:"days_remaining"`
+	HappLink        string             `json:"happ_link,omitempty"`
 }
 
 type PlanResponse struct {
@@ -96,10 +98,9 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Always use Mobile Banking for Mini Appshop for now (as per user request)
+	// Always use Mobile Banking for Mini App shop
 	invoiceType := database.InvoiceTypeMobileBanking
 
-	// Pass username to payment service (it might use it for crypto payloads)
 	ctxWithUsername := context.WithValue(r.Context(), "username", username)
 	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType)
 	if err != nil {
@@ -127,12 +128,6 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
-	// User is already validated by middleware and stored in context?
-	// For simplicity, we'll parse it again or expect middleware to set it.
-	// Actually, let's keep it simple: Middleware validates initData, verifies hash,
-	// and extracts the user ID. We'll simulate that for now or implement it fully.
-	
-	// Assuming middleware sets "telegram_id" in context
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -150,8 +145,15 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isActive := false
+	daysRemaining := 0
 	if customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
 		isActive = true
+		daysRemaining = int(time.Until(*customer.ExpireAt).Hours() / 24)
+	}
+
+	happLink := ""
+	if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+		happLink = "happ://add/" + *customer.SubscriptionLink
 	}
 
 	resp := ValidationResponse{
@@ -159,6 +161,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		SubscriptionUrl: customer.SubscriptionLink,
 		IsActive:        isActive,
 		ExpireAt:        customer.ExpireAt,
+		DaysRemaining:   daysRemaining,
+		HappLink:        happLink,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
