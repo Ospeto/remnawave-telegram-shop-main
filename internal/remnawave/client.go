@@ -96,12 +96,12 @@ func (r *Client) GetUsersByTelegramId(ctx context.Context, telegramId int64) ([]
 		return nil, err
 	}
 
-	usersResp, ok := resp.(*remapi.UsersResponse)
+	usersResp, ok := resp.(*remapi.UserResponse)
 	if !ok {
 		return nil, errors.New("unknown response type from Remnawave API")
 	}
 
-	return usersResp.GetResponse(), nil
+	return []remapi.User{usersResp.GetResponse()}, nil
 }
 
 func (r *Client) DecreaseSubscription(ctx context.Context, telegramId int64, trafficLimit int, days int) (*time.Time, error) {
