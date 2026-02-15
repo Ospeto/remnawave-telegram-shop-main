@@ -222,7 +222,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 			usedGB, limitGB := 0.0, 0.0
 			if stat, ok := statsMap[k.ID]; ok {
-				usedGB = float64(stat.TrafficUsedBytes) / bytesInGB
+				usedGB = stat.TrafficUsedBytes / bytesInGB
 				limitGB = float64(stat.TrafficLimitBytes) / bytesInGB
 			}
 

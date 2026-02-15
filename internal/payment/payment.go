@@ -130,7 +130,7 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 		
 		stats := KeyStats{
 			ID:                localKey.ID,
-			TrafficUsedBytes:  remoteUser.TrafficUsedBytes,
+			TrafficUsedBytes:  remoteUser.UserTraffic.UsedTrafficBytes,
 			TrafficLimitBytes: limit,
 			ExpireAt:          remoteUser.ExpireAt,
 			Status:            newStatus,
@@ -143,7 +143,7 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 
 type KeyStats struct {
 	ID                int64
-	TrafficUsedBytes  int
+	TrafficUsedBytes  float64
 	TrafficLimitBytes int
 	ExpireAt          time.Time
 	Status            string
