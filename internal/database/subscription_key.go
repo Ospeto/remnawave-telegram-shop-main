@@ -146,6 +146,20 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 	return err
 }
 
+func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, status string) error {
+	query := sq.Update("subscription_key").
+		Set("status", status).
+		Where(sq.Eq{"id": id}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, sql, args...)
+	return err
+}
+
 func (r *SubscriptionKeyRepository) UpdateSubscriptionURL(ctx context.Context, id int64, url string) error {
 	query := sq.Update("subscription_key").
 		Set("subscription_url", url).

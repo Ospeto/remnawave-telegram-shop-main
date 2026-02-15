@@ -72,6 +72,101 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 	if err != nil {
 		return err
 	}
+// ... (rest of ProcessPurchaseById)
+// But wait, the instruction says "Add SyncKeys method". I should insert it BEFORE ProcessPurchaseById or AFTER. Let's insert it AFTER ProcessPurchaseById to avoid messing up the large function above.
+// Actually, let's put it at the END of the file or after `GetPurchaseRepository`.
+// Let's insert after `GetPurchaseRepository` (line 68).
+
+func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
+	if s.subKeyRepo == nil {
+		return nil, nil
+	}
+
+	// 1. Fetch fresh keys from Remnawave
+	users, err := s.remnawaveClient.GetUsersByTelegramId(ctx, telegramID)
+	if err != nil {
+		slog.Error("Failed to fetch users from Remnawave", "error", err)
+		// Fallback: return nothing or let handler use local DB
+		return nil, err
+	}
+
+	// 2. Fetch local keys
+	localKeys, err := s.subKeyRepo.FindByCustomerID(ctx, customerID)
+	if err != nil {
+		return nil, err
+	}
+
+	statsMap := make(map[int64]KeyStats)
+	remoteUUIDs := make(map[string]bool)
+
+	// Create a map of remote users for easy lookup
+	remoteMap := make(map[string]remapi.User)
+	for _, u := range users {
+		remoteMap[u.UUID.String()] = u
+		remoteUUIDs[u.UUID.String()] = true
+	}
+
+	var result []KeyStats
+
+	for _, localKey := range localKeys {
+		remoteUser, exists := remoteMap[localKey.RemnawaveUUID.String()]
+		
+		// If key exists locally but not remotely -> DELETED
+		if !exists {
+			if localKey.Status != "deleted" {
+				_ = s.subKeyRepo.UpdateStatus(ctx, localKey.ID, "deleted")
+			}
+			continue
+		}
+
+		// Key matches. Update local fields if changed.
+		isExpired := remoteUser.ExpireAt.Before(time.Now())
+		newStatus := "active"
+		if isExpired {
+			newStatus = "expired"
+		}
+
+		// Sync Expiry
+		if localKey.ExpireAt == nil || !localKey.ExpireAt.Equal(remoteUser.ExpireAt) || localKey.Status != newStatus {
+			_ = s.subKeyRepo.UpdateExpiry(ctx, localKey.ID, remoteUser.ExpireAt)
+			// UpdateExpiry sets status to 'active', so we need to set it correctly if expired
+			if newStatus != "active" {
+				_ = s.subKeyRepo.UpdateStatus(ctx, localKey.ID, newStatus)
+			}
+		}
+
+		// Build stats object
+		limit := 0
+		if remoteUser.TrafficLimitBytes.IsSet() {
+			limit = remoteUser.TrafficLimitBytes.Value
+		}
+		
+		stats := KeyStats{
+			ID:                localKey.ID,
+			TrafficUsedBytes:  remoteUser.TrafficUsedBytes,
+			TrafficLimitBytes: limit,
+			ExpireAt:          remoteUser.ExpireAt,
+			Status:            newStatus,
+		}
+		result = append(result, stats)
+	}
+
+	return result, nil
+}
+
+type KeyStats struct {
+	ID                int64
+	TrafficUsedBytes  int
+	TrafficLimitBytes int
+	ExpireAt          time.Time
+	Status            string
+}
+
+func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
+	purchase, err := s.purchaseRepository.FindById(ctx, purchaseId)
+	if err != nil {
+		return err
+	}
 	if purchase == nil {
 		return fmt.Errorf("purchase with crypto invoice id %s not found", utils.MaskHalfInt64(purchaseId))
 	}

@@ -11,6 +11,8 @@ interface SubscriptionKey {
     expire_at: string | null;
     days_remaining: number;
     status: string;
+    traffic_used_gb: number;
+    traffic_limit_gb: number;
 }
 
 interface UserData {
@@ -119,7 +121,7 @@ export function Home() {
 
                             {/* Days remaining */}
                             {key.status === 'active' && (
-                                <div style={{ marginBottom: 12 }}>
+                                <div style={{ marginBottom: 16 }}>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                                         <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1 }}>{key.days_remaining}</span>
                                         <span className="text-hint" style={{ fontSize: 13 }}>days left</span>
@@ -129,7 +131,7 @@ export function Home() {
                                             Expires {new Date(key.expire_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                                         </div>
                                     )}
-                                    {/* Progress bar */}
+                                    {/* Days Progress bar */}
                                     <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 8 }}>
                                         <div style={{
                                             height: '100%', borderRadius: 2,
@@ -138,6 +140,26 @@ export function Home() {
                                             transition: 'width 0.5s ease'
                                         }} />
                                     </div>
+
+                                    {/* Traffic Usage (if limit exists) */}
+                                    {key.traffic_limit_gb > 0 && (
+                                        <div style={{ marginTop: 12 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                                                <span className="text-hint">Data Usage</span>
+                                                <span style={{ fontWeight: 600 }}>
+                                                    {key.traffic_used_gb.toFixed(1)} / {key.traffic_limit_gb.toFixed(0)} GB
+                                                </span>
+                                            </div>
+                                            <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
+                                                <div style={{
+                                                    height: '100%', borderRadius: 2,
+                                                    background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#007AFF', // Blue progress for data
+                                                    width: `${Math.min(100, (key.traffic_used_gb / key.traffic_limit_gb) * 100)}%`,
+                                                    transition: 'width 0.5s ease'
+                                                }} />
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
