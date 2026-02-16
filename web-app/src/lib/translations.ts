@@ -147,11 +147,11 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_btn_extend': 'Extend — ရက်နှင့် Data ပမာဏ ထပ်ပေါင်းထည့်မည်',
         'help_btn_copy': 'VPN app တခုခုတွင်သုံးရန် link ကူးယူမည်',
         'tip_multi_key': 'device အမျိုးမျိုးအတွက် Key အများကြီး ဝယ်ထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း Extend လုပ်နိုင်ပါသည်။',
-        'info_device_limit': 'Key တစ်ခုနှင့် Device',
-        'info_device_count': '၃ ခု',
-        'info_servers': 'Server တည်နေရာများ',
+        'info_device_limit': 'Devices per Key',
+        'info_device_count': '3',
+        'info_servers': 'Server Locations',
         'info_server_list': 'Thailand · Germany · US · Singapore · Japan',
-        'contact_support': 'အကူအညီရယူရန်',
+        'contact_support': 'Contact Support',
 
         // Welcome
         'welcome_title': 'မင်္ဂလာပါ!',

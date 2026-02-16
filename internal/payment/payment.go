@@ -217,7 +217,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
 		keyIndex := int(keyCount) + 1
 
-		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex)
+		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex, purchase.TransactionID)
 		if err != nil {
 			return err
 		}
