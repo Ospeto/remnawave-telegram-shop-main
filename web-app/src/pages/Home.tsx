@@ -209,11 +209,11 @@ export function Home() {
                             )}
 
                             {/* Action buttons */}
-                            <div style={{ display: 'flex', gap: 10 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                 {key.status === 'active' && key.happ_link && (
                                     <button
                                         className="btn-primary"
-                                        style={{ flex: 2, padding: '12px', fontSize: 14, fontWeight: 600, boxShadow: '0 4px 12px rgba(0,122,255,0.2)' }}
+                                        style={{ padding: '13px', fontSize: 14, fontWeight: 600 }}
                                         onClick={() => {
                                             const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(key.happ_link)}`;
                                             if (tg?.openLink) {
@@ -226,23 +226,19 @@ export function Home() {
                                         {t('btn_add_happ')}
                                     </button>
                                 )}
-                                <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, textDecoration: 'none', justifyContent: 'center' }}>
-                                    {t('btn_extend')}
-                                </Link>
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
+                                        {t('btn_extend')}
+                                    </Link>
+                                    <button
+                                        className="btn-secondary"
+                                        onClick={() => handleCopy(key.subscription_url, key.id)}
+                                        style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 500 }}
+                                    >
+                                        {copiedId === key.id ? t('copied') : t('btn_copy_key')}
+                                    </button>
+                                </div>
                             </div>
-
-                            {/* Copy Key button */}
-                            <button
-                                className="btn-secondary"
-                                onClick={() => handleCopy(key.subscription_url, key.id)}
-                                style={{
-                                    width: '100%', marginTop: 8, padding: '10px',
-                                    fontSize: 13, fontWeight: 500, opacity: 0.8,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
-                                }}
-                            >
-                                {copiedId === key.id ? t('copied') : t('btn_copy_key')}
-                            </button>
                         </div>
                     ))}
                 </div>
