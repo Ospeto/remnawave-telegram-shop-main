@@ -20,6 +20,7 @@ export function Checkout() {
     const [searchParams] = useSearchParams();
 
     const extendKeyId = searchParams.get('extend');
+    const promoCode = searchParams.get('promo');
 
     const [purchase, setPurchase] = useState<PurchaseResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -34,6 +35,7 @@ export function Checkout() {
     useEffect(() => {
         if (tg) {
             tg.BackButton.show();
+            // Preserve flow: if from plans, go back to plans.
             tg.BackButton.onClick(() => navigate('/plans'));
         }
     }, [tg, navigate]);
@@ -46,6 +48,7 @@ export function Checkout() {
 
         const body: any = { plan_index: parseInt(planIndex) };
         if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
+        if (promoCode) body.promo_code = promoCode;
 
         fetch('/api/purchase', {
             method: 'POST',

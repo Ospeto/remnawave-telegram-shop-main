@@ -62,6 +62,7 @@ func main() {
 	customerRepository := database.NewCustomerRepository(pool)
 	purchaseRepository := database.NewPurchaseRepository(pool)
 	referralRepository := database.NewReferralRepository(pool)
+	promoCodeRepository := database.NewPromoCodeRepository(pool)
 	subKeyRepo := database.NewSubscriptionKeyRepository(pool)
 
 	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
@@ -81,7 +82,7 @@ func main() {
 		panic(err)
 	}
 
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepository)
 
 	cronScheduler := setupInvoiceChecker(purchaseRepository, cryptoPayClient, paymentService)
 	if cronScheduler != nil {
@@ -98,7 +99,7 @@ func main() {
 	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
 
 	mobilePayCache := cache.NewCache(1 * time.Hour)
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, referralRepository, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, referralRepository, promoCodeRepository, messageCache, mobilePayCache)
 
 	me, err := b.GetMe(ctx)
 	if err != nil {
@@ -133,6 +134,7 @@ func main() {
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, h.StartCommandHandler, h.SuspiciousUserFilterMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/connect", bot.MatchTypeExact, h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/addpromo", bot.MatchTypePrefix, h.AddPromoCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackReferral, bot.MatchTypeExact, h.ReferralCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
@@ -153,7 +155,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.GetHealthCheckPort()),

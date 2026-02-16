@@ -28,8 +28,8 @@ const (
 	usernameKey   contextKey = "username"
 )
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -45,6 +45,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAuth(handler.GetRevenueSummary))
+	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {

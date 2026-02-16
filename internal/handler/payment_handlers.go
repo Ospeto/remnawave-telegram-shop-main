@@ -144,7 +144,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 	if invoiceType == database.InvoiceTypeMobileBanking {
 		// Mobile banking: create purchase, show instructions, wait for screenshot
-		_, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking)
+		_, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
 		if err != nil {
 			slog.Error("Error creating mobile banking purchase", "error", err)
 			return
@@ -179,7 +179,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	}
 
 	// CryptoPay flow
-	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto)
+	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto, "")
 	if err != nil {
 		slog.Error("Error creating payment", "error", err)
 		return

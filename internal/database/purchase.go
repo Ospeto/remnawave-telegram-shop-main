@@ -51,6 +51,7 @@ type Purchase struct {
 	PaymentPhone      string         `db:"payment_phone"`
 	VerifiedAt        *time.Time     `db:"verified_at"`
 	TransactionID     string         `db:"transaction_id"`
+	PromoCodeID       *int64         `db:"promo_code_id"`
 }
 
 type PurchaseRepository struct {
@@ -65,8 +66,8 @@ func NewPurchaseRepository(pool *pgxpool.Pool) *PurchaseRepository {
 
 func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (int64, error) {
 	buildInsert := sq.Insert("purchase").
-		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id").
-		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID).
+		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id", "promo_code_id").
+		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID, purchase.PromoCodeID).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -129,6 +130,7 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 			&purchase.PaymentPhone,
 			&purchase.VerifiedAt,
 			&purchase.TransactionID,
+			&purchase.PromoCodeID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase: %w", err)
@@ -178,6 +180,7 @@ func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase
 		&purchase.PaymentPhone,
 		&purchase.VerifiedAt,
 		&purchase.TransactionID,
+		&purchase.PromoCodeID,
 	)
 
 	if err != nil {
@@ -232,9 +235,6 @@ func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) 
 	return pr.UpdateFields(ctx, purchaseID, updates)
 }
 
-
-
-
 func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
 	query := sq.Select("*").
 		From("purchase").
@@ -258,7 +258,7 @@ func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
-		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

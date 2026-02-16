@@ -50,6 +50,7 @@ type PlanResponse struct {
 type CreatePurchaseRequest struct {
 	PlanIndex   int    `json:"plan_index"`
 	ExtendKeyID *int64 `json:"extend_key_id,omitempty"`
+	PromoCode   string `json:"promo_code,omitempty"`
 }
 
 type CreatePurchaseResponse struct {
@@ -76,11 +77,12 @@ type PurchaseStatusResponse struct {
 // --- Handler ---
 
 type APIHandler struct {
-	customerRepo   *database.CustomerRepository
-	paymentService *payment.PaymentService
-	telegramBot    *bot.Bot
-	translation    *translation.Manager
-	subKeyRepo     *database.SubscriptionKeyRepository
+	customerRepo        *database.CustomerRepository
+	paymentService      *payment.PaymentService
+	telegramBot         *bot.Bot
+	translation         *translation.Manager
+	subKeyRepo          *database.SubscriptionKeyRepository
+	promoCodeRepository *database.PromoCodeRepository
 }
 
 func NewAPIHandler(
@@ -89,17 +91,57 @@ func NewAPIHandler(
 	telegramBot *bot.Bot,
 	tm *translation.Manager,
 	subKeyRepo *database.SubscriptionKeyRepository,
+	promoCodeRepository *database.PromoCodeRepository,
 ) *APIHandler {
 	return &APIHandler{
-		customerRepo:   customerRepo,
-		paymentService: paymentService,
-		telegramBot:    telegramBot,
-		translation:    tm,
-		subKeyRepo:     subKeyRepo,
+		customerRepo:        customerRepo,
+		paymentService:      paymentService,
+		telegramBot:         telegramBot,
+		translation:         tm,
+		subKeyRepo:          subKeyRepo,
+		promoCodeRepository: promoCodeRepository,
 	}
 }
 
 // --- Handlers ---
+
+func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "Missing code", http.StatusBadRequest)
+		return
+	}
+
+	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
+	if err != nil {
+		http.Error(w, "Invalid code", http.StatusNotFound)
+		return
+	}
+
+	if promo.UsedCount >= promo.MaxUses {
+		http.Error(w, "Code usage limit reached", http.StatusForbidden)
+		return
+	}
+
+	if time.Now().After(promo.ValidUntil) {
+		http.Error(w, "Code expired", http.StatusForbidden)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"valid":            true,
+		"code":             promo.Code,
+		"discount_percent": promo.DiscountPercent,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
 
 func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -139,10 +181,18 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	invoiceType := database.InvoiceTypeMobileBanking
 	ctxWithUsername := context.WithValue(r.Context(), "username", username)
 
-	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType)
+	// Delegate to PaymentService with Promo Code
+	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType, req.PromoCode)
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Fetch the actual purchase to get the final amount (which might be discounted)
+	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), purchaseID)
+	finalAmount := int(plan.Price)
+	if err == nil && purchase != nil {
+		finalAmount = int(purchase.Amount)
 	}
 
 	// Store plan label and payment phone for revenue tracking
@@ -158,14 +208,14 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	instructions := fmt.Sprintf(
 		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
-		plan.Price,
+		finalAmount,
 		config.MobileBankingPhone(),
 	)
 
 	resp := CreatePurchaseResponse{
 		PurchaseID:   purchaseID,
 		PaymentPhone: config.MobileBankingPhone(),
-		Amount:       plan.Price,
+		Amount:       finalAmount,
 		Currency:     config.Currency(),
 		Instructions: instructions,
 		InvoiceType:  string(invoiceType),

@@ -26,6 +26,10 @@ export function Plans() {
     const [plans, setPlans] = useState<Plan[]>([]);
     const [userData, setUserData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
+    const [promoCode, setPromoCode] = useState('');
+    const [promoStatus, setPromoStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
+    const [discountPercent, setDiscountPercent] = useState<number>(0);
+    const [appliedPromoCode, setAppliedPromoCode] = useState('');
 
     const extendKeyId = searchParams.get('extend');
     const isExtend = !!extendKeyId;
@@ -53,6 +57,37 @@ export function Plans() {
             .finally(() => setLoading(false));
     }, [initData]);
 
+    const handleApplyPromo = () => {
+        if (!promoCode.trim()) return;
+        setPromoStatus('validating');
+        fetch(`/api/promo/validate?code=${encodeURIComponent(promoCode)}`, {
+            headers: { 'Authorization': `twa ${initData}` }
+        })
+            .then(async res => {
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.valid) {
+                        setPromoStatus('valid');
+                        setDiscountPercent(data.discount_percent);
+                        setAppliedPromoCode(data.code);
+                    } else {
+                        setPromoStatus('invalid');
+                        setDiscountPercent(0);
+                        setAppliedPromoCode('');
+                    }
+                } else {
+                    setPromoStatus('invalid');
+                    setDiscountPercent(0);
+                    setAppliedPromoCode('');
+                }
+            })
+            .catch(() => {
+                setPromoStatus('invalid');
+                setDiscountPercent(0);
+                setAppliedPromoCode('');
+            });
+    };
+
     if (loading) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
             <div className="spinner" />
@@ -77,9 +112,21 @@ export function Plans() {
         )
         : plans;
 
+    // Apply discount if valid promo
+    const displayPlans = filteredPlans.map(p => {
+        if (discountPercent > 0) {
+            return { ...p, discountedPrice: Math.round(p.price * (1 - discountPercent / 100)) };
+        }
+        return p;
+    });
+
     // Best value = lowest price per day (within filtered set)
-    const bestIdx = filteredPlans.length > 0
-        ? filteredPlans.reduce((b, p, i) => (p.price / p.days) < (filteredPlans[b].price / filteredPlans[b].days) ? i : b, 0)
+    const bestIdx = displayPlans.length > 0
+        ? displayPlans.reduce((b, p, i) => {
+            const priceP = (p as any).discountedPrice || p.price;
+            const priceB = (displayPlans[b] as any).discountedPrice || displayPlans[b].price;
+            return (priceP / p.days) < (priceB / displayPlans[b].days) ? i : b;
+        }, 0)
         : -1;
 
     return (
@@ -106,6 +153,51 @@ export function Plans() {
                     </div>
                 )}
             </div>
+
+            {/* Promo Code Input */}
+            <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                    type="text"
+                    value={promoCode}
+                    onChange={(e) => {
+                        setPromoCode(e.target.value);
+                        if (promoStatus !== 'idle') setPromoStatus('idle');
+                    }}
+                    placeholder="Promo Code"
+                    style={{
+                        flex: 1,
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 8,
+                        padding: '10px 12px',
+                        color: 'white',
+                        fontSize: 14,
+                        outline: 'none'
+                    }}
+                />
+                <button
+                    onClick={handleApplyPromo}
+                    disabled={promoStatus === 'validating' || !promoCode.trim()}
+                    className="btn-secondary"
+                    style={{
+                        padding: '10px 16px',
+                        fontSize: 13,
+                        opacity: !promoCode.trim() ? 0.5 : 1
+                    }}
+                >
+                    {promoStatus === 'validating' ? '...' : 'Apply'}
+                </button>
+            </div>
+            {promoStatus === 'valid' && (
+                <div style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    ✅ Code applied! {discountPercent}% off
+                </div>
+            )}
+            {promoStatus === 'invalid' && (
+                <div style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    ❌ Invalid or expired code
+                </div>
+            )}
 
             {/* Extend explanation */}
             {isExtend && (
@@ -136,12 +228,19 @@ export function Plans() {
 
             {/* Plan cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {filteredPlans.map((plan, idx) => {
-                    const originalIdx = plans.indexOf(plan);
+                {displayPlans.map((plan, idx) => {
+                    const originalIdx = plans.findIndex(p => p.label === plan.label && p.days === plan.days); // Robust find
+                    const price = (plan as any).discountedPrice || plan.price;
+                    const hasDiscount = (plan as any).discountedPrice && (plan as any).discountedPrice < plan.price;
+
+                    let checkoutUrl = `/checkout/${originalIdx}?`;
+                    if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
+                    if (appliedPromoCode) checkoutUrl += `promo=${encodeURIComponent(appliedPromoCode)}`;
+
                     return (
                         <Link
-                            key={originalIdx}
-                            to={`/checkout/${originalIdx}${isExtend ? `?extend=${extendKeyId}` : ''}`}
+                            key={idx}
+                            to={checkoutUrl}
                             style={{ textDecoration: 'none', color: 'inherit' }}
                         >
                             <div
@@ -181,12 +280,17 @@ export function Plans() {
                                         )}
                                     </div>
                                     <div style={{ textAlign: 'right' }}>
-                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700 }}>
-                                            {plan.price.toLocaleString()}
+                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700, color: hasDiscount ? '#34c759' : undefined }}>
+                                            {price.toLocaleString()}
                                         </div>
+                                        {hasDiscount && (
+                                            <div style={{ fontSize: 13, textDecoration: 'line-through', opacity: 0.5 }}>
+                                                {plan.price.toLocaleString()}
+                                            </div>
+                                        )}
                                         <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
                                         <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                            {Math.round(plan.price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
+                                            {Math.round(price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
                                         </div>
                                     </div>
                                 </div>

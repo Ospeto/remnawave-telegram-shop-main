@@ -63,7 +63,7 @@ Extract the following fields and respond ONLY with valid JSON (no markdown, no c
 Important:
 - For transaction_id, look for labels like "Transaction ID", "Reference No", "Ref No", etc.
 - For phone_number, look for the RECIPIENT/RECEIVER phone number. If partially masked (e.g. 09***2220), extract what is visible including asterisks.
-- For amount, extract only the numeric value
+- For amount, extract only the numeric value of the FINAL PAID AMOUNT or TRANSFER AMOUNT. Ignore original price if discounted.
 - For is_valid, set to false if: the image is not a payment screenshot, appears to be a screenshot of another screenshot, is heavily blurred, or shows no payment information
 - For tampering_detected, carefully check for: inconsistent fonts or text sizes, pixel-level editing artifacts, unnatural sharp edges around text or numbers, areas with different compression levels, mismatched drop shadows, any signs of cut-paste or cloning, AI-generated content indicators
 - Return ONLY the JSON object, nothing else`

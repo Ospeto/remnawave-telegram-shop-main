@@ -16,23 +16,24 @@ import (
 	"strings"
 	"time"
 
+	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 )
 
 type PaymentService struct {
-	purchaseRepository     *database.PurchaseRepository
-	remnawaveClient        *remnawave.Client
-	customerRepository     *database.CustomerRepository
-	telegramBot            *bot.Bot
-	translation            *translation.Manager
-	cryptoPayClient        *cryptopay.Client
-	referralRepository     *database.ReferralRepository
-	cache                  *cache.Cache
-	geminiClient           *gemini.Client
-	mobilePaymentRepo      *database.MobilePaymentRepository
-	subKeyRepo             *database.SubscriptionKeyRepository
+	purchaseRepository  *database.PurchaseRepository
+	remnawaveClient     *remnawave.Client
+	customerRepository  *database.CustomerRepository
+	telegramBot         *bot.Bot
+	translation         *translation.Manager
+	cryptoPayClient     *cryptopay.Client
+	referralRepository  *database.ReferralRepository
+	cache               *cache.Cache
+	geminiClient        *gemini.Client
+	mobilePaymentRepo   *database.MobilePaymentRepository
+	subKeyRepo          *database.SubscriptionKeyRepository
+	promoCodeRepository *database.PromoCodeRepository
 }
 
 func NewPaymentService(
@@ -47,19 +48,21 @@ func NewPaymentService(
 	geminiClient *gemini.Client,
 	mobilePaymentRepo *database.MobilePaymentRepository,
 	subKeyRepo *database.SubscriptionKeyRepository,
+	promoCodeRepository *database.PromoCodeRepository,
 ) *PaymentService {
 	return &PaymentService{
-		purchaseRepository:     purchaseRepository,
-		remnawaveClient:        remnawaveClient,
-		customerRepository:     customerRepository,
-		telegramBot:            telegramBot,
-		translation:            translation,
-		cryptoPayClient:        cryptoPayClient,
-		referralRepository:     referralRepository,
-		cache:                  cache,
-		geminiClient:           geminiClient,
-		mobilePaymentRepo:      mobilePaymentRepo,
-		subKeyRepo:             subKeyRepo,
+		purchaseRepository:  purchaseRepository,
+		remnawaveClient:     remnawaveClient,
+		customerRepository:  customerRepository,
+		telegramBot:         telegramBot,
+		translation:         translation,
+		cryptoPayClient:     cryptoPayClient,
+		referralRepository:  referralRepository,
+		cache:               cache,
+		geminiClient:        geminiClient,
+		mobilePaymentRepo:   mobilePaymentRepo,
+		subKeyRepo:          subKeyRepo,
+		promoCodeRepository: promoCodeRepository,
 	}
 }
 
@@ -97,7 +100,7 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 
 	for _, localKey := range localKeys {
 		remoteUser, exists := remoteMap[localKey.RemnawaveUUID.String()]
-		
+
 		// If key exists locally but not remotely -> DELETED
 		if !exists {
 			if localKey.Status != "deleted" {
@@ -127,7 +130,7 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 		if remoteUser.TrafficLimitBytes.IsSet() {
 			limit = remoteUser.TrafficLimitBytes.Value
 		}
-		
+
 		stats := KeyStats{
 			ID:                localKey.ID,
 			TrafficUsedBytes:  remoteUser.UserTraffic.UsedTrafficBytes,
@@ -367,18 +370,36 @@ func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]m
 	return inlineCustomerKeyboard
 }
 
-func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType) (url string, purchaseId int64, err error) {
+func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string) (url string, purchaseId int64, err error) {
+	var promoID *int64
+	if promoCode != "" && s.promoCodeRepository != nil {
+		promo, err := s.promoCodeRepository.FindByCode(ctx, promoCode)
+		if err == nil && promo != nil {
+			// Validate basics (expiry, limit)
+			// Note: We don't strictly lock/increment here to avoid contention on creation.
+			// Ideally we would reserves a slot. For now, check conditions.
+			if time.Now().Before(promo.ValidUntil) && promo.UsedCount < promo.MaxUses {
+				discount := float64(promo.DiscountPercent) / 100.0
+				amount = amount * (1 - discount)
+				// Round to integer if using integer currency logic, or let float handle it.
+				// Since amount is float64 but often treated as int in invoices, round it properly.
+				amount = math.Round(amount)
+				promoID = &promo.ID
+			}
+		}
+	}
+
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
-		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer)
+		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID)
 	case database.InvoiceTypeMobileBanking:
-		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer)
+		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
 }
 
-func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer) (url string, purchaseId int64, err error) {
+func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeCrypto,
 		Status:         database.PurchaseStatusNew,
@@ -388,6 +409,7 @@ func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64,
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
 	})
 	if err != nil {
 		slog.Error("Error creating purchase", "error", err)
@@ -456,7 +478,7 @@ func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (st
 
 }
 
-func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer) (url string, purchaseId int64, err error) {
+func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeMobileBanking,
 		Status:         database.PurchaseStatusPending,
@@ -466,6 +488,7 @@ func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount 
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
 	})
 	if err != nil {
 		slog.Error("Error creating mobile banking purchase", "error", err)
@@ -479,8 +502,8 @@ func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount 
 
 // VerificationResult holds the outcome of a mobile payment screenshot check.
 type VerificationResult struct {
-	Success  bool
-	Reason   string
+	Success   bool
+	Reason    string
 	ReasonKey string // translation key
 }
 
