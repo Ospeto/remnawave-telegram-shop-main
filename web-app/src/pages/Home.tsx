@@ -129,10 +129,10 @@ export function Home() {
                     {t('download_text')}
                 </p>
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <a href="https://play.google.com/store/apps/details?id=com.happ.vpn" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                    <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         🤖 Android
                     </a>
-                    <a href="https://apps.apple.com/app/id6466666666" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                    <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         🍎 iOS
                     </a>
                 </div>
