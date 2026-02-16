@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLanguage } from '../lib/LanguageContext';
 
 interface Plan {
     label: string;
@@ -19,6 +20,7 @@ interface UserData {
 
 export function Plans() {
     const { tg, initData } = useTelegram();
+    const { t, language } = useLanguage();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const [plans, setPlans] = useState<Plan[]>([]);
@@ -54,7 +56,7 @@ export function Plans() {
     if (loading) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
             <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>Loading plans...</span>
+            <span className="text-hint" style={{ fontSize: 13 }}>{t('loading_plans')}</span>
         </div>
     );
 
@@ -62,7 +64,7 @@ export function Plans() {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
         const d = new Date(base);
         d.setDate(d.getDate() + days);
-        return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+        return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
     // Filter plans by extending key's type: unlimited keys → unlimited plans, limited → limited
@@ -85,18 +87,23 @@ export function Plans() {
             {/* Header */}
             <div style={{ textAlign: 'center', padding: '8px 0' }}>
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
-                    {isExtend ? '⏳ Extend Key' : '💎 Choose a Plan'}
+                    {isExtend ? t('title_extend') : t('title_choose_plan')}
                 </h1>
                 {isExtend && extendingKey && (
                     <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                        Extending: <strong style={{ color: 'var(--tg-text)' }}>{extendingKey.label}</strong>
-                        {currentExpiry && <> · Expires {currentExpiry.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</>}
+                        {t('subtitle_extending', { label: extendingKey.label })}
+                        {currentExpiry && <> · {t('expires_on', { date: currentExpiry.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric' }) })}</>}
                     </p>
                 )}
                 {!isExtend && (
                     <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                        Pick a plan that fits your needs — tap to continue
+                        {t('subtitle_new_key')}
                     </p>
+                )}
+                {!isExtend && (
+                    <div className="text-hint" style={{ fontSize: 11, marginTop: 4, opacity: 0.7 }}>
+                        {t('subtitle_new_key_hint')}
+                    </div>
                 )}
             </div>
 
@@ -104,9 +111,7 @@ export function Plans() {
             {isExtend && (
                 <div className="tip-box tip-box-info">
                     <span className="tip-icon">ℹ️</span>
-                    <span>
-                        <strong>Extending</strong> adds more days and data to your existing key. Your current remaining days and data are kept — nothing is lost!
-                    </span>
+                    <span>{t('help_extend_info')}</span>
                 </div>
             )}
 
@@ -114,9 +119,7 @@ export function Plans() {
             {!isExtend && (
                 <div className="tip-box tip-box-info">
                     <span className="tip-icon">ℹ️</span>
-                    <span>
-                        Each plan gives you a new VPN key with a set number of days and data. <strong>Unlimited</strong> plans have no data cap. <strong>Limited</strong> plans are cheaper but have a monthly data limit.
-                    </span>
+                    <span>{t('help_new_key_info')}</span>
                 </div>
             )}
 
@@ -124,7 +127,10 @@ export function Plans() {
             {isExtend && filteredPlans.length < plans.length && (
                 <div className="tip-box tip-box-warning" style={{ fontSize: 11 }}>
                     <span className="tip-icon">⚠️</span>
-                    <span>Only {extendingTrafficLimit === 0 ? 'unlimited' : 'limited'} plans are shown because your key is {extendingTrafficLimit === 0 ? 'an unlimited' : 'a limited'} plan.</span>
+                    <span>{t('help_filtered_plans', {
+                        type: extendingTrafficLimit === 0 ? 'unlimited' : 'limited',
+                        type_desc: extendingTrafficLimit === 0 ? 'an unlimited' : 'a limited'
+                    })}</span>
                 </div>
             )}
 
@@ -154,7 +160,7 @@ export function Plans() {
                                         padding: '3px 10px', borderRadius: 20,
                                         textTransform: 'uppercase', letterSpacing: 0.5,
                                     }}>
-                                        Best Value
+                                        {t('best_value')}
                                     </div>
                                 )}
 
@@ -162,15 +168,15 @@ export function Plans() {
                                     <div>
                                         <div style={{ fontWeight: 600, fontSize: 15 }}>{plan.label}</div>
                                         <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <span>📅 {plan.days} days</span>
+                                            <span>📅 {plan.days} {t('days_left').replace(' left', '')}</span>
                                             <span style={{ opacity: 0.3 }}>·</span>
                                             <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
-                                                {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : '♾️ Unlimited'}
+                                                {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : t('unlimited')}
                                             </span>
                                         </div>
                                         {isExtend && (
                                             <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
-                                                ✓ New expiry: {calcNewExpiry(plan.days)}
+                                                {t('new_expiry', { date: calcNewExpiry(plan.days) })}
                                             </div>
                                         )}
                                     </div>
@@ -180,7 +186,7 @@ export function Plans() {
                                         </div>
                                         <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
                                         <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                            {Math.round(plan.price / plan.days)}/{plan.currency.toLowerCase()}/day
+                                            {Math.round(plan.price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
                                         </div>
                                     </div>
                                 </div>
@@ -192,9 +198,7 @@ export function Plans() {
 
             <div className="tip-box tip-box-success">
                 <span className="tip-icon">✅</span>
-                <span>
-                    <strong>Accepted payments:</strong> KPay · Wave · AYA Pay. After selecting a plan, you'll send money and upload a screenshot for instant verification.
-                </span>
+                <span>{t('help_payments')}</span>
             </div>
         </div>
     );

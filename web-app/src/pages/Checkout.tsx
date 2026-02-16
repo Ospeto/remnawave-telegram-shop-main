@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLanguage } from '../lib/LanguageContext';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -14,6 +15,7 @@ interface PurchaseResponse {
 export function Checkout() {
     const { planIndex } = useParams();
     const { tg, initData } = useTelegram();
+    const { t } = useLanguage();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
 
@@ -106,7 +108,7 @@ export function Checkout() {
     if (loading) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
             <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>Creating purchase...</span>
+            <span className="text-hint" style={{ fontSize: 13 }}>{t('creating_purchase')}</span>
         </div>
     );
 
@@ -114,7 +116,7 @@ export function Checkout() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
             <div style={{ fontSize: 48 }}>❌</div>
             <p style={{ color: '#ff3b30', textAlign: 'center', fontSize: 14 }}>{error}</p>
-            <button className="btn-secondary" onClick={() => navigate('/plans')}>Back to Plans</button>
+            <button className="btn-secondary" onClick={() => navigate('/plans')}>{t('back_to_plans')}</button>
         </div>
     );
 
@@ -122,23 +124,20 @@ export function Checkout() {
         return (
             <div className="animate-slide-up" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24, textAlign: 'center' }}>
                 <div style={{ fontSize: 64, marginBottom: 8 }}>✅</div>
-                <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Payment Verified!</h1>
+                <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{t('success_title')}</h1>
                 <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
-                    {extendKeyId ? 'Your key has been extended successfully! Extra days and data have been added.' : 'Your new VPN key has been created and is ready to use.'}
+                    {extendKeyId ? t('success_extend') : t('success_new')}
                 </p>
 
                 <div className="tip-box tip-box-success" style={{ marginTop: 8 }}>
                     <span className="tip-icon">💡</span>
                     <span>
-                        {extendKeyId
-                            ? 'Go back to see your updated key with the new expiry date.'
-                            : 'Go back to your keys and tap "Add to Happ" to start using your VPN, or copy the link for any VPN app.'
-                        }
+                        {extendKeyId ? t('success_tip_extend') : t('success_tip_new')}
                     </span>
                 </div>
 
                 <button className="btn-primary" onClick={() => navigate('/')} style={{ marginTop: 16 }}>
-                    Go to My Keys
+                    {t('go_home')}
                 </button>
             </div>
         );
@@ -148,23 +147,23 @@ export function Checkout() {
         <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
             {/* Step indicator */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>
-                <span style={{ color: '#34c759' }}>✓ Plan</span>
+                <span style={{ color: '#34c759' }}>✓ {t('nav_plan')}</span>
                 <span className="text-hint">→</span>
-                <span className="text-link" style={{ fontWeight: 700 }}>Payment</span>
+                <span className="text-link" style={{ fontWeight: 700 }}>{t('nav_payment')}</span>
                 <span className="text-hint">→</span>
-                <span className="text-hint">Verify</span>
+                <span className="text-hint">{t('nav_verify')}</span>
             </div>
 
             {/* How to pay — step by step */}
             <div className="glass-card" style={{ padding: 20 }}>
-                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 12px' }}>📝 Follow these steps</h2>
+                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 12px' }}>{t('guide_title')}</h2>
 
                 {/* Step 1 — Open banking app */}
                 <div className="step-row">
                     <span className="step-number">1</span>
                     <div className="step-text">
-                        <strong>Open your banking app</strong>
-                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>KPay, Wave, or AYA Pay</div>
+                        <strong>{t('guide_step_1')}</strong>
+                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
                     </div>
                 </div>
 
@@ -172,7 +171,7 @@ export function Checkout() {
                 <div className="step-row">
                     <span className="step-number">2</span>
                     <div className="step-text" style={{ flex: 1 }}>
-                        <strong>Send this exact amount</strong>
+                        <strong>{t('guide_step_2')}</strong>
                         <div
                             onClick={() => copyToClipboard(String(purchase?.amount || ''), 'amount')}
                             style={{
@@ -188,7 +187,7 @@ export function Checkout() {
                                 </div>
                             </div>
                             <span style={{ fontSize: 12, color: amountCopied ? '#34c759' : 'var(--tg-hint)' }}>
-                                {amountCopied ? '✅ Copied' : '📋 Tap to copy'}
+                                {amountCopied ? t('copied') : t('tap_to_copy')}
                             </span>
                         </div>
                     </div>
@@ -198,7 +197,7 @@ export function Checkout() {
                 <div className="step-row">
                     <span className="step-number">3</span>
                     <div className="step-text" style={{ flex: 1 }}>
-                        <strong>To this phone number</strong>
+                        <strong>{t('guide_step_3')}</strong>
                         <div
                             onClick={() => copyToClipboard(purchase?.payment_phone || '', 'phone')}
                             style={{
@@ -212,7 +211,7 @@ export function Checkout() {
                                 {purchase?.payment_phone}
                             </div>
                             <span style={{ fontSize: 12, color: phoneCopied ? '#34c759' : 'var(--tg-hint)' }}>
-                                {phoneCopied ? '✅ Copied' : '📋 Tap to copy'}
+                                {phoneCopied ? t('copied') : t('tap_to_copy')}
                             </span>
                         </div>
                     </div>
@@ -222,8 +221,8 @@ export function Checkout() {
                 <div className="step-row">
                     <span className="step-number">4</span>
                     <div className="step-text">
-                        <strong>Leave the note/remark empty</strong>
-                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>Do NOT write anything like "VPN" or "subscription"</div>
+                        <strong>{t('guide_step_4')}</strong>
+                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
                     </div>
                 </div>
 
@@ -241,9 +240,7 @@ export function Checkout() {
             {/* Important warnings */}
             <div className="tip-box tip-box-warning">
                 <span className="tip-icon">⚠️</span>
-                <span>
-                    <strong>Important:</strong> Send the <strong>exact amount</strong> shown above. Different amounts will fail verification. Do not add any notes or remarks.
-                </span>
+                <span>{t('important_warning')}</span>
             </div>
 
             <div style={{ flex: 1 }} />
@@ -260,7 +257,7 @@ export function Checkout() {
                     </div>
                     <div className="tip-box tip-box-info" style={{ fontSize: 11 }}>
                         <span className="tip-icon">💡</span>
-                        <span>Double-check that the amount and phone number match exactly. Make sure the screenshot clearly shows the transaction details.</span>
+                        <span>{t('verify_error_tip')}</span>
                     </div>
                 </div>
             )}
@@ -280,10 +277,10 @@ export function Checkout() {
                         cursor: uploading ? 'not-allowed' : 'pointer'
                     }}
                 >
-                    {uploading ? '🔍 Verifying your payment...' : '📸 Upload Payment Screenshot'}
+                    {uploading ? t('uploading_btn') : t('upload_btn')}
                 </button>
                 <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: 0 }}>
-                    After you've sent the money, take a screenshot of the confirmation and upload it here. We'll verify it automatically in seconds.
+                    {t('upload_hint')}
                 </p>
             </div>
         </div>

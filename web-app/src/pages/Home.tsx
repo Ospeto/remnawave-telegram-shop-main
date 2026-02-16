@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
+import { useLanguage } from '../lib/LanguageContext';
 
 interface SubscriptionKey {
     id: number;
@@ -28,6 +29,7 @@ interface UserData {
 
 export function Home() {
     const { initData, tg } = useTelegram();
+    const { t, language, setLanguage } = useLanguage();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -55,10 +57,14 @@ export function Home() {
         });
     };
 
+    const toggleLanguage = () => {
+        setLanguage(language === 'en' ? 'my' : 'en');
+    };
+
     if (loading) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
             <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>Loading...</span>
+            <span className="text-hint" style={{ fontSize: 13 }}>{t('loading')}</span>
         </div>
     );
 
@@ -66,15 +72,15 @@ export function Home() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24, textAlign: 'center' }}>
             <div style={{ fontSize: 48 }}>📱</div>
             <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Remnawave Shop</h1>
-            <p className="text-hint" style={{ margin: 0 }}>Open this app inside Telegram</p>
+            <p className="text-hint" style={{ margin: 0 }}>{t('open_in_tg')}</p>
         </div>
     );
 
     if (error) return (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
             <div style={{ fontSize: 48 }}>⚠️</div>
-            <p style={{ color: '#ff3b30' }}>Error: {error}</p>
-            <button className="btn-secondary" onClick={() => window.location.reload()}>Retry</button>
+            <p style={{ color: '#ff3b30' }}>{t('error_prefix')} {error}</p>
+            <button className="btn-secondary" onClick={() => window.location.reload()}>{t('retry')}</button>
         </div>
     );
 
@@ -91,16 +97,27 @@ export function Home() {
                     borderRadius: '50%',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     color: '#fff', fontWeight: 700, fontSize: 18,
-                    boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)'
+                    boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)',
+                    flexShrink: 0
                 }}>
                     🛡️
                 </div>
-                <div>
-                    <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Remnawave VPN</h1>
+                <div style={{ flex: 1 }}>
+                    <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{t('home_title')}</h1>
                     <p className="text-hint" style={{ fontSize: 12, margin: 0 }}>
-                        {activeKeys.length > 0 ? `${activeKeys.length} active key${activeKeys.length > 1 ? 's' : ''}` : 'No active keys'}
+                        {activeKeys.length > 0
+                            ? (activeKeys.length === 1 ? t('active_key_count', { count: 1 }) : t('active_key_count_plural', { count: activeKeys.length }))
+                            : t('no_active_keys')}
                     </p>
                 </div>
+                {/* Language Switcher */}
+                <button
+                    onClick={toggleLanguage}
+                    className="btn-secondary"
+                    style={{ width: 'auto', padding: '8px 12px', fontSize: 14, borderRadius: 20 }}
+                >
+                    {language === 'en' ? '🇺🇸 EN' : '🇲🇲 MY'}
+                </button>
             </div>
 
             {/* Key Cards */}
@@ -117,7 +134,7 @@ export function Home() {
                                     )}
                                 </div>
                                 <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`}>
-                                    {key.status === 'active' ? '● Active' : '○ Expired'}
+                                    {key.status === 'active' ? t('key_active') : t('key_expired')}
                                 </span>
                             </div>
 
@@ -126,11 +143,11 @@ export function Home() {
                                 <div style={{ marginBottom: 16 }}>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                                         <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1 }}>{key.days_remaining}</span>
-                                        <span className="text-hint" style={{ fontSize: 13 }}>days left</span>
+                                        <span className="text-hint" style={{ fontSize: 13 }}>{t('days_left')}</span>
                                     </div>
                                     {key.expire_at && (
                                         <div className="text-hint" style={{ fontSize: 11, marginTop: 4 }}>
-                                            Expires {new Date(key.expire_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                                            {t('expires_on', { date: new Date(key.expire_at).toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric', year: 'numeric' }) })}
                                         </div>
                                     )}
                                     {/* Days Progress bar */}
@@ -147,7 +164,7 @@ export function Home() {
                                     {key.traffic_limit_gb > 0 && (
                                         <div style={{ marginTop: 12 }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                                                <span className="text-hint">Data Usage</span>
+                                                <span className="text-hint">{t('data_usage')}</span>
                                                 <span style={{ fontWeight: 600 }}>
                                                     {key.traffic_used_gb.toFixed(1)} / {key.traffic_limit_gb.toFixed(0)} GB
                                                 </span>
@@ -169,7 +186,7 @@ export function Home() {
                             {key.status !== 'active' && (
                                 <div className="tip-box tip-box-warning" style={{ marginBottom: 12 }}>
                                     <span className="tip-icon">💡</span>
-                                    <span>This key has expired. Tap <strong>Extend</strong> below to add more days and keep using it.</span>
+                                    <span>{t('help_expired')}</span>
                                 </div>
                             )}
 
@@ -188,11 +205,11 @@ export function Home() {
                                             }
                                         }}
                                     >
-                                        🚀 Add to Happ
+                                        {t('btn_add_happ')}
                                     </button>
                                 )}
                                 <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, fontSize: 13, padding: '10px 12px', textDecoration: 'none' }}>
-                                    ⏳ Extend
+                                    {t('btn_extend')}
                                 </Link>
                                 <button
                                     className="btn-secondary"
@@ -206,9 +223,9 @@ export function Home() {
                             {/* Button explanations */}
                             <div className="text-hint" style={{ fontSize: 10, marginTop: 8, lineHeight: 1.6, padding: '0 2px' }}>
                                 {key.status === 'active' && key.happ_link && (
-                                    <><strong>Add to Happ</strong> — auto-imports this key into the Happ VPN app · </>
+                                    <>{t('help_btn_add')} · </>
                                 )}
-                                <strong>Extend</strong> — add more days & data to this key · <strong>📋</strong> — copy link to use in any VPN app
+                                {t('help_btn_extend')} · <strong>📋</strong> — {t('help_btn_copy')}
                             </div>
                         </div>
                     ))}
@@ -217,31 +234,31 @@ export function Home() {
                 /* Empty state — first-time user welcome */
                 <div className="glass-card" style={{ padding: 28, textAlign: 'center' }}>
                     <div style={{ fontSize: 48, marginBottom: 12 }}>👋</div>
-                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>Welcome!</h2>
+                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>{t('welcome_title')}</h2>
                     <p className="text-hint" style={{ fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
-                        You don't have any VPN keys yet. Buy a plan to get started — it only takes a minute!
+                        {t('welcome_text')}
                     </p>
 
                     <div className="tip-box tip-box-info" style={{ textAlign: 'left', marginBottom: 0 }}>
                         <span className="tip-icon">ℹ️</span>
                         <div>
-                            <strong style={{ color: 'var(--tg-text)', fontSize: 12 }}>How it works</strong>
+                            <strong style={{ color: 'var(--tg-text)', fontSize: 12 }}>{t('how_it_works')}</strong>
                             <div style={{ marginTop: 4 }}>
                                 <div className="step-row" style={{ padding: '4px 0' }}>
                                     <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>1</span>
-                                    <span className="step-text" style={{ fontSize: 11 }}>Choose a plan below</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>{t('step_1')}</span>
                                 </div>
                                 <div className="step-row" style={{ padding: '4px 0' }}>
                                     <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>2</span>
-                                    <span className="step-text" style={{ fontSize: 11 }}>Pay via mobile banking</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>{t('step_2')}</span>
                                 </div>
                                 <div className="step-row" style={{ padding: '4px 0' }}>
                                     <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>3</span>
-                                    <span className="step-text" style={{ fontSize: 11 }}>Upload a screenshot — we verify it instantly</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>{t('step_3')}</span>
                                 </div>
                                 <div className="step-row" style={{ padding: '4px 0' }}>
                                     <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>4</span>
-                                    <span className="step-text" style={{ fontSize: 11 }}>Your VPN key is ready to use!</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>{t('step_4')}</span>
                                 </div>
                             </div>
                         </div>
@@ -254,20 +271,18 @@ export function Home() {
 
             {/* Buy new key button */}
             <Link to="/plans" className="btn-primary animate-slide-up" style={{ textDecoration: 'none' }}>
-                {keys.length > 0 ? '➕ Buy New Key' : '🚀 Get Started — Buy a Plan'}
+                {keys.length > 0 ? t('btn_buy_new') : t('btn_get_started')}
             </Link>
 
             {keys.length > 0 && (
                 <div className="tip-box tip-box-info">
                     <span className="tip-icon">💡</span>
-                    <span>
-                        <strong>Tip:</strong> You can have multiple VPN keys for different devices, or extend an existing one to add more days.
-                    </span>
+                    <span>{t('tip_multi_key')}</span>
                 </div>
             )}
 
             <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: '0 0 8px' }}>
-                Powered by Remnawave
+                {t('powered_by')}
             </p>
         </div>
     );

@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { ErrorBoundary } from './ErrorBoundary'
 import App from './App.tsx'
+import { LanguageProvider } from './lib/LanguageContext'
 import './index.css'
 
 console.log('[MiniApp] Starting render...');
@@ -11,7 +12,9 @@ console.log('[MiniApp] initData:', window.Telegram?.WebApp?.initData ? 'present'
 ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
         <ErrorBoundary>
-            <App />
+            <LanguageProvider>
+                <App />
+            </LanguageProvider>
         </ErrorBoundary>
     </React.StrictMode>,
 )
