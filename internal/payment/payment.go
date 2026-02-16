@@ -184,8 +184,8 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		if err != nil || existingKey == nil {
 			return fmt.Errorf("subscription key %d not found", *purchase.ExtendKeyID)
 		}
-		// Use CreateOrUpdateUser which will find and extend the existing Remnawave user
-		remnawaveUser, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, false)
+		// Extend the specific Remnawave user by UUID (adds days and traffic)
+		remnawaveUser, err := s.remnawaveClient.ExtendUser(ctx, existingKey.RemnawaveUUID, purchase.TrafficLimitGB*bytesInGB, purchase.Days)
 		if err != nil {
 			return err
 		}

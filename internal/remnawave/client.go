@@ -182,6 +182,33 @@ func (r *Client) ForceCreateNewUser(ctx context.Context, customerId int64, teleg
 	return r.createUser(ctx, customerId, telegramId, trafficLimit, days, false, keyIndex)
 }
 
+// ExtendUser extends a specific Remnawave user by UUID.
+// Days are added to the current expiry (or from now if expired).
+// Traffic is accumulated (added to existing limit), not replaced.
+// If additionalTraffic is 0 (unlimited plan), traffic limit stays 0 (unlimited).
+func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalTraffic int, days int) (*remapi.User, error) {
+	// Fetch the specific user by UUID
+	resp, err := r.client.Users().GetUserByUuid(ctx, userUUID.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user %s: %w", userUUID, err)
+	}
+	userResp, ok := resp.(*remapi.UserResponse)
+	if !ok {
+		return nil, errors.New("unknown response type from GetUserByUuid")
+	}
+	existingUser := &userResp.Response
+
+	// Calculate new traffic limit: accumulate, don't replace
+	newTraffic := additionalTraffic
+	if additionalTraffic > 0 && existingUser.TrafficLimitBytes.IsSet() && existingUser.TrafficLimitBytes.Value > 0 {
+		// Both old and new are limited — add them
+		newTraffic = existingUser.TrafficLimitBytes.Value + additionalTraffic
+	}
+	// If either is 0 (unlimited), keep 0
+
+	return r.updateUser(ctx, existingUser, newTraffic, days)
+}
+
 func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, trafficLimit int, days int) (*remapi.User, error) {
 
 	newExpire := getNewExpire(days, existingUser.ExpireAt)
