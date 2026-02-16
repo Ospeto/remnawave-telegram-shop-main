@@ -397,8 +397,8 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		if h.subKeyRepo != nil {
 			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 			if kErr == nil && len(keys) > 0 {
-				// Return the most recently added key's happ link
-				latestKey := keys[len(keys)-1]
+				// Return the most recently added key's happ link (keys are sorted DESC by default)
+				latestKey := keys[0]
 				resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
 			}
 		}
