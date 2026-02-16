@@ -199,3 +199,72 @@ body {
 .text-link {
   color: var(--tg-link);
 }
+
+/* Helper/Info components */
+.tip-box {
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.tip-box-info {
+  background: rgba(94, 187, 255, 0.06);
+  border: 1px solid rgba(94, 187, 255, 0.12);
+  color: var(--tg-hint);
+}
+
+.tip-box-warning {
+  background: rgba(255, 159, 10, 0.06);
+  border: 1px solid rgba(255, 159, 10, 0.12);
+  color: #ff9f0a;
+}
+
+.tip-box-success {
+  background: rgba(52, 199, 89, 0.06);
+  border: 1px solid rgba(52, 199, 89, 0.12);
+  color: var(--tg-hint);
+}
+
+.tip-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.step-number {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.step-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.help-label {
+  font-size: 10px;
+  color: var(--tg-hint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}

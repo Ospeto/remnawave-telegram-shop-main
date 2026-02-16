@@ -155,13 +155,21 @@ export function Home() {
                                             <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
                                                 <div style={{
                                                     height: '100%', borderRadius: 2,
-                                                    background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#007AFF', // Blue progress for data
+                                                    background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#007AFF',
                                                     width: `${Math.min(100, (key.traffic_used_gb / key.traffic_limit_gb) * 100)}%`,
                                                     transition: 'width 0.5s ease'
                                                 }} />
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            )}
+
+                            {/* Expired key help */}
+                            {key.status !== 'active' && (
+                                <div className="tip-box tip-box-warning" style={{ marginBottom: 12 }}>
+                                    <span className="tip-icon">💡</span>
+                                    <span>This key has expired. Tap <strong>Extend</strong> below to add more days and keep using it.</span>
                                 </div>
                             )}
 
@@ -194,14 +202,50 @@ export function Home() {
                                     {copiedId === key.id ? '✅' : '📋'}
                                 </button>
                             </div>
+
+                            {/* Button explanations */}
+                            <div className="text-hint" style={{ fontSize: 10, marginTop: 8, lineHeight: 1.6, padding: '0 2px' }}>
+                                {key.status === 'active' && key.happ_link && (
+                                    <><strong>Add to Happ</strong> — auto-imports this key into the Happ VPN app · </>
+                                )}
+                                <strong>Extend</strong> — add more days & data to this key · <strong>📋</strong> — copy link to use in any VPN app
+                            </div>
                         </div>
                     ))}
                 </div>
             ) : (
-                <div className="glass-card" style={{ padding: 32, textAlign: 'center' }}>
-                    <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
-                    <h2 style={{ fontSize: 16, fontWeight: 600, margin: '0 0 4px' }}>No Subscription Keys</h2>
-                    <p className="text-hint" style={{ fontSize: 13, margin: 0 }}>Buy a plan to get your first VPN key</p>
+                /* Empty state — first-time user welcome */
+                <div className="glass-card" style={{ padding: 28, textAlign: 'center' }}>
+                    <div style={{ fontSize: 48, marginBottom: 12 }}>👋</div>
+                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>Welcome!</h2>
+                    <p className="text-hint" style={{ fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
+                        You don't have any VPN keys yet. Buy a plan to get started — it only takes a minute!
+                    </p>
+
+                    <div className="tip-box tip-box-info" style={{ textAlign: 'left', marginBottom: 0 }}>
+                        <span className="tip-icon">ℹ️</span>
+                        <div>
+                            <strong style={{ color: 'var(--tg-text)', fontSize: 12 }}>How it works</strong>
+                            <div style={{ marginTop: 4 }}>
+                                <div className="step-row" style={{ padding: '4px 0' }}>
+                                    <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>1</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>Choose a plan below</span>
+                                </div>
+                                <div className="step-row" style={{ padding: '4px 0' }}>
+                                    <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>2</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>Pay via mobile banking</span>
+                                </div>
+                                <div className="step-row" style={{ padding: '4px 0' }}>
+                                    <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>3</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>Upload a screenshot — we verify it instantly</span>
+                                </div>
+                                <div className="step-row" style={{ padding: '4px 0' }}>
+                                    <span className="step-number" style={{ width: 20, height: 20, fontSize: 10 }}>4</span>
+                                    <span className="step-text" style={{ fontSize: 11 }}>Your VPN key is ready to use!</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -210,8 +254,17 @@ export function Home() {
 
             {/* Buy new key button */}
             <Link to="/plans" className="btn-primary animate-slide-up" style={{ textDecoration: 'none' }}>
-                ➕ Buy New Key
+                {keys.length > 0 ? '➕ Buy New Key' : '🚀 Get Started — Buy a Plan'}
             </Link>
+
+            {keys.length > 0 && (
+                <div className="tip-box tip-box-info">
+                    <span className="tip-icon">💡</span>
+                    <span>
+                        <strong>Tip:</strong> You can have multiple VPN keys for different devices, or extend an existing one to add more days.
+                    </span>
+                </div>
+            )}
 
             <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: '0 0 8px' }}>
                 Powered by Remnawave

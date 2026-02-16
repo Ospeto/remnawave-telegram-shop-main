@@ -95,15 +95,38 @@ export function Plans() {
                 )}
                 {!isExtend && (
                     <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                        A new subscription key will be created
-                    </p>
-                )}
-                {isExtend && filteredPlans.length < plans.length && (
-                    <p className="text-hint" style={{ fontSize: 11, margin: '4px 0 0', opacity: 0.7 }}>
-                        Only {extendingTrafficLimit === 0 ? 'unlimited' : 'limited'} plans shown for this key type
+                        Pick a plan that fits your needs — tap to continue
                     </p>
                 )}
             </div>
+
+            {/* Extend explanation */}
+            {isExtend && (
+                <div className="tip-box tip-box-info">
+                    <span className="tip-icon">ℹ️</span>
+                    <span>
+                        <strong>Extending</strong> adds more days and data to your existing key. Your current remaining days and data are kept — nothing is lost!
+                    </span>
+                </div>
+            )}
+
+            {/* New key explanation */}
+            {!isExtend && (
+                <div className="tip-box tip-box-info">
+                    <span className="tip-icon">ℹ️</span>
+                    <span>
+                        Each plan gives you a new VPN key with a set number of days and data. <strong>Unlimited</strong> plans have no data cap. <strong>Limited</strong> plans are cheaper but have a monthly data limit.
+                    </span>
+                </div>
+            )}
+
+            {/* Filtered plans notice */}
+            {isExtend && filteredPlans.length < plans.length && (
+                <div className="tip-box tip-box-warning" style={{ fontSize: 11 }}>
+                    <span className="tip-icon">⚠️</span>
+                    <span>Only {extendingTrafficLimit === 0 ? 'unlimited' : 'limited'} plans are shown because your key is {extendingTrafficLimit === 0 ? 'an unlimited' : 'a limited'} plan.</span>
+                </div>
+            )}
 
             {/* Plan cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -139,15 +162,15 @@ export function Plans() {
                                     <div>
                                         <div style={{ fontWeight: 600, fontSize: 15 }}>{plan.label}</div>
                                         <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <span>{plan.days} days</span>
+                                            <span>📅 {plan.days} days</span>
                                             <span style={{ opacity: 0.3 }}>·</span>
                                             <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
-                                                {plan.traffic_limit_gb > 0 ? `${plan.traffic_limit_gb} GB` : 'Unlimited'}
+                                                {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : '♾️ Unlimited'}
                                             </span>
                                         </div>
                                         {isExtend && (
-                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4 }}>
-                                                New expiry: {calcNewExpiry(plan.days)}
+                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
+                                                ✓ New expiry: {calcNewExpiry(plan.days)}
                                             </div>
                                         )}
                                     </div>
@@ -156,6 +179,9 @@ export function Plans() {
                                             {plan.price.toLocaleString()}
                                         </div>
                                         <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
+                                        <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
+                                            {Math.round(plan.price / plan.days)}/{plan.currency.toLowerCase()}/day
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -164,9 +190,12 @@ export function Plans() {
                 })}
             </div>
 
-            <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: '4px 0 0' }}>
-                KPay · Wave · AYA Pay
-            </p>
+            <div className="tip-box tip-box-success">
+                <span className="tip-icon">✅</span>
+                <span>
+                    <strong>Accepted payments:</strong> KPay · Wave · AYA Pay. After selecting a plan, you'll send money and upload a screenshot for instant verification.
+                </span>
+            </div>
         </div>
     );
 }
