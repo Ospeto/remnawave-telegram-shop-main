@@ -98,7 +98,7 @@ export function Home() {
                         width: 44, height: 44,
                         borderRadius: '50%',
                         objectFit: 'cover',
-                        boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)',
+                        boxShadow: '0 4px 16px rgba(0, 210, 190, 0.25)',
                         flexShrink: 0
                     }}
                 />
@@ -121,7 +121,7 @@ export function Home() {
             </div>
 
             {/* Download App Prompt - Visible for all users */}
-            <div className="glass-card" style={{ background: 'rgba(0, 122, 255, 0.1)', border: '1px solid rgba(0, 122, 255, 0.2)', padding: 16, textAlign: 'left' }}>
+            <div className="glass-card" style={{ background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03))', border: '1px solid rgba(0, 210, 190, 0.15)', padding: 16, textAlign: 'left' }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {t('download_title')}
                 </h3>
@@ -172,7 +172,7 @@ export function Home() {
                                     <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 12 }}>
                                         <div style={{
                                             height: '100%', borderRadius: 2,
-                                            background: key.days_remaining > 7 ? '#34c759' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
+                                            background: key.days_remaining > 7 ? '#00d2be' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
                                             width: `${Math.min(100, (key.days_remaining / 30) * 100)}%`,
                                             transition: 'width 0.5s ease'
                                         }} />
@@ -190,7 +190,7 @@ export function Home() {
                                             <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
                                                 <div style={{
                                                     height: '100%', borderRadius: 2,
-                                                    background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#007AFF',
+                                                    background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#00b4dc',
                                                     width: `${Math.min(100, (key.traffic_used_gb / key.traffic_limit_gb) * 100)}%`,
                                                     transition: 'width 0.5s ease'
                                                 }} />

@@ -43,8 +43,8 @@ body {
 }
 
 .glass-card-success {
-  background: linear-gradient(135deg, rgba(52, 199, 89, 0.08), rgba(52, 199, 89, 0.02));
-  border-color: rgba(52, 199, 89, 0.2);
+  background: linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03));
+  border-color: rgba(0, 210, 190, 0.18);
 }
 
 /* Primary button */
@@ -64,13 +64,13 @@ body {
   gap: 8px;
   width: 100%;
   text-decoration: none;
-  box-shadow: 0 4px 14px rgba(0, 122, 255, 0.25), 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 14px rgba(0, 210, 190, 0.2), 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .btn-primary:active {
   transform: scale(0.97);
   opacity: 0.9;
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.15);
+  box-shadow: 0 2px 8px rgba(0, 210, 190, 0.12);
 }
 
 .btn-secondary {
@@ -111,8 +111,8 @@ body {
 }
 
 .badge-active {
-  background: rgba(52, 199, 89, 0.15);
-  color: #34c759;
+  background: rgba(0, 210, 190, 0.12);
+  color: #00d2be;
 }
 
 .badge-expired {
