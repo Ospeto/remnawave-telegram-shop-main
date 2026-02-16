@@ -91,17 +91,17 @@ export function Home() {
         <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
-                <div style={{
-                    width: 44, height: 44,
-                    background: 'linear-gradient(135deg, #5ebbff, #007AFF)',
-                    borderRadius: '50%',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#fff', fontWeight: 700, fontSize: 18,
-                    boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)',
-                    flexShrink: 0
-                }}>
-                    🛡️
-                </div>
+                <img
+                    src="/logo.jpg"
+                    alt="Wavy"
+                    style={{
+                        width: 44, height: 44,
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        boxShadow: '0 4px 16px rgba(94, 187, 255, 0.3)',
+                        flexShrink: 0
+                    }}
+                />
                 <div style={{ flex: 1 }}>
                     <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{t('home_title')}</h1>
                     <p className="text-hint" style={{ fontSize: 12, margin: 0 }}>
@@ -123,17 +123,17 @@ export function Home() {
             {/* Download App Prompt - Visible for all users */}
             <div className="glass-card" style={{ background: 'rgba(0, 122, 255, 0.1)', border: '1px solid rgba(0, 122, 255, 0.2)', padding: 16, textAlign: 'left' }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: 18 }}>📲</span> {t('download_title')}
+                    {t('download_title')}
                 </h3>
                 <p style={{ fontSize: 12, margin: '0 0 12px', opacity: 0.9 }}>
                     {t('download_text')}
                 </p>
                 <div style={{ display: 'flex', gap: 8 }}>
                     <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
-                        🤖 Android
+                        Android
                     </a>
                     <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
-                        🍎 iOS
+                        iOS
                     </a>
                 </div>
             </div>
@@ -144,27 +144,9 @@ export function Home() {
                     {keys.map(key => (
                         <div key={key.id} className={`glass-card ${key.status === 'active' ? 'glass-card-success' : ''}`} style={{ padding: 16 }}>
                             {/* Key header */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                                 <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
-                                        <button
-                                            onClick={(e) => {
-                                                e.preventDefault();
-                                                handleCopy(key.subscription_url, key.id);
-                                            }}
-                                            style={{
-                                                background: 'rgba(255,255,255,0.1)',
-                                                border: 'none', borderRadius: '50%',
-                                                width: 28, height: 28,
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                cursor: 'pointer', color: 'var(--tg-text)',
-                                                transition: 'all 0.2s ease'
-                                            }}
-                                        >
-                                            {copiedId === key.id ? '✅' : '📋'}
-                                        </button>
-                                    </div>
+                                    <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
                                     {key.username && key.label && (
                                         <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{key.username}</div>
                                     )}
@@ -248,6 +230,19 @@ export function Home() {
                                     {t('btn_extend')}
                                 </Link>
                             </div>
+
+                            {/* Copy Key button */}
+                            <button
+                                className="btn-secondary"
+                                onClick={() => handleCopy(key.subscription_url, key.id)}
+                                style={{
+                                    width: '100%', marginTop: 8, padding: '10px',
+                                    fontSize: 13, fontWeight: 500, opacity: 0.8,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+                                }}
+                            >
+                                {copiedId === key.id ? t('copied') : t('btn_copy_key')}
+                            </button>
                         </div>
                     ))}
                 </div>
