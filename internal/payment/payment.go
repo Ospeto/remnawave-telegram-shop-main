@@ -197,17 +197,20 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		}
 		// Update the subscription_key expiry
 		if s.subKeyRepo != nil {
-			_ = s.subKeyRepo.UpdateExpiry(ctx, existingKey.ID, remnawaveUser.ExpireAt)
-			_ = s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl)
+			if err := s.subKeyRepo.UpdateExpiry(ctx, existingKey.ID, remnawaveUser.ExpireAt); err != nil {
+				slog.Error("Failed to update key expiry (non-fatal)", "key_id", existingKey.ID, "error", err)
+			}
+			if err := s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl); err != nil {
+				slog.Error("Failed to update subscription URL (non-fatal)", "key_id", existingKey.ID, "error", err)
+			}
 		}
 		// Update customer expire_at to the latest
 		customerFilesToUpdate := map[string]interface{}{
 			"subscription_link": remnawaveUser.SubscriptionUrl,
 			"expire_at":         remnawaveUser.ExpireAt,
 		}
-		err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
-		if err != nil {
-			return err
+		if err := s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate); err != nil {
+			slog.Error("Failed to update customer fields after extend (non-fatal)", "error", err)
 		}
 	} else {
 		// CREATE new key — always creates a fresh Remnawave user
@@ -221,7 +224,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		// Insert into subscription_key table
 		if s.subKeyRepo != nil {
 			label := fmt.Sprintf("WV-%d-%d", purchase.ID, keyIndex)
-			_, _ = s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
+			_, err := s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
 				CustomerID:      customer.ID,
 				RemnawaveUUID:   remnawaveUser.UUID,
 				Username:        remnawaveUser.Username,
@@ -230,81 +233,106 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 				Status:          "active",
 				Label:           label,
 			})
+			if err != nil {
+				slog.Error("CRITICAL: Failed to save subscription key to DB. Key EXISTS on Remnawave but NOT in local DB.",
+					"purchase_id", purchaseId, "username", remnawaveUser.Username, "error", err)
+				// Continue — key exists remotely. SyncKeys will recover it later.
+			}
 		}
 		// Update customer
 		customerFilesToUpdate := map[string]interface{}{
 			"subscription_link": remnawaveUser.SubscriptionUrl,
 			"expire_at":         remnawaveUser.ExpireAt,
 		}
-		err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
-		if err != nil {
-			return err
+		if err := s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate); err != nil {
+			slog.Error("Failed to update customer fields after create (non-fatal)", "error", err)
 		}
 	}
 
+	// === MARK AS PAID FIRST ===
+	// This MUST happen before Telegram notification and referral processing.
+	// The key is already created/extended at this point. If anything below fails,
+	// the user still has their key and the purchase is correctly marked as paid.
 	err = s.purchaseRepository.MarkAsPaid(ctx, purchase.ID)
 	if err != nil {
+		slog.Error("CRITICAL: Failed to mark purchase as paid. Key was created but purchase status not updated.",
+			"purchase_id", purchaseId, "error", err)
 		return err
 	}
+
+	slog.Info("Purchase processed successfully", "purchase_id", utils.MaskHalfInt64(purchase.ID), "type", purchase.InvoiceType, "customer_id", utils.MaskHalfInt64(customer.ID))
+
+	// === BELOW THIS LINE: NON-FATAL OPERATIONS ===
+	// Telegram notification and referral bonus are best-effort.
+	// Failures here should NOT prevent the user from getting their key.
 
 	// Refresh customer
 	customer, err = s.customerRepository.FindById(ctx, customer.ID)
 	if err != nil {
-		slog.Error("Error refreshing customer after purchase", "error", err)
+		slog.Error("Error refreshing customer after purchase (non-fatal)", "error", err)
 	}
 
-	_, err = s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
+	if _, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: customer.TelegramID,
 		Text:   s.translation.GetText(customer.Language, "subscription_activated"),
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: s.createConnectKeyboard(customer),
 		},
-	})
-	if err != nil {
-		return err
+	}); err != nil {
+		slog.Error("Failed to send activation message (non-fatal)", "error", err, "purchase_id", purchaseId)
 	}
 
+	// Referral bonus — completely non-fatal
+	s.processReferralBonus(ctx, customer)
+
+	return nil
+}
+
+// processReferralBonus grants a referral bonus to the referrer if applicable.
+// This is intentionally non-fatal — errors are logged but never block the purchase flow.
+func (s PaymentService) processReferralBonus(ctx context.Context, customer *database.Customer) {
 	ctxReferee := context.Background()
 	referee, err := s.referralRepository.FindByReferee(ctxReferee, customer.TelegramID)
 	if err != nil {
-		return err
+		slog.Error("Referral lookup failed (non-fatal)", "error", err)
+		return
 	}
 	if referee == nil || referee.BonusGranted {
-		return nil
+		return
 	}
 	refereeCustomer, err := s.customerRepository.FindByTelegramId(ctxReferee, referee.ReferrerID)
 	if err != nil {
-		return err
+		slog.Error("Referral customer lookup failed (non-fatal)", "error", err)
+		return
 	}
 	refereeUser, err := s.remnawaveClient.CreateOrUpdateUser(ctxReferee, refereeCustomer.ID, refereeCustomer.TelegramID, 0, config.GetReferralDays(), false)
 	if err != nil {
-		return err
+		slog.Error("Referral bonus user creation failed (non-fatal)", "error", err)
+		return
 	}
 	refereeUserFilesToUpdate := map[string]interface{}{
 		"subscription_link": refereeUser.GetSubscriptionUrl(),
 		"expire_at":         refereeUser.GetExpireAt(),
 	}
-	err = s.customerRepository.UpdateFields(ctxReferee, refereeCustomer.ID, refereeUserFilesToUpdate)
-	if err != nil {
-		return err
+	if err := s.customerRepository.UpdateFields(ctxReferee, refereeCustomer.ID, refereeUserFilesToUpdate); err != nil {
+		slog.Error("Referral customer update failed (non-fatal)", "error", err)
+		return
 	}
-	err = s.referralRepository.MarkBonusGranted(ctxReferee, referee.ID)
-	if err != nil {
-		return err
+	if err := s.referralRepository.MarkBonusGranted(ctxReferee, referee.ID); err != nil {
+		slog.Error("Referral mark granted failed (non-fatal)", "error", err)
+		return
 	}
 	slog.Info("Granted referral bonus", "customer_id", utils.MaskHalfInt64(refereeCustomer.ID))
-	_, err = s.telegramBot.SendMessage(ctxReferee, &bot.SendMessageParams{
+	if _, err := s.telegramBot.SendMessage(ctxReferee, &bot.SendMessageParams{
 		ChatID:    refereeCustomer.TelegramID,
 		ParseMode: models.ParseModeHTML,
 		Text:      s.translation.GetText(refereeCustomer.Language, "referral_bonus_granted"),
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: s.createConnectKeyboard(refereeCustomer),
 		},
-	})
-
-	slog.Info("purchase processed", "purchase_id", utils.MaskHalfInt64(purchase.ID), "type", purchase.InvoiceType, "customer_id", utils.MaskHalfInt64(customer.ID))
-
-	return nil
+	}); err != nil {
+		slog.Error("Referral bonus notification failed (non-fatal)", "error", err)
+	}
 }
 
 func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {
