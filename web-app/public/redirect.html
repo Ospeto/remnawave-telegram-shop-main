@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Redirecting...</title>
+</head>
+
+<body>
+    <p>Redirecting...</p>
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        const url = params.get('url');
+        if (url) {
+            window.location.replace(url);
+        } else {
+            document.body.textContent = 'No URL provided.';
+        }
+    </script>
+</body>
+
+</html>

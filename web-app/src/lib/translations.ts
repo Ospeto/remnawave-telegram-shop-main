@@ -122,7 +122,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_button': 'နောက်သို့',
         'back_to_plans': 'Plan များသို့',
         'go_home': 'ကျွန်ုပ်၏ Key များသို့',
-        'btn_open_happ': 'Happ ထဲတွင်း ဖွင့်မည်',
+        'btn_open_happ': 'Happ ထဲသို့ ထည့်မည်',
         'success_happ_hint': 'Happ Proxy app ထဲ Key အလိုအလျောက် ထည့်ရန် နှိပ်ပါ',
 
         // Home
