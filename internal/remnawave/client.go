@@ -285,6 +285,19 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 	}
 	username := generateUsername(tgUsername, customerId, telegramId, keyIndex)
 
+	// Idempotency check: if user already exists with this exact username, return it
+	existingUsers, err := r.GetUsersByTelegramId(ctx, telegramId)
+	if err == nil {
+		for _, u := range existingUsers {
+			if strings.EqualFold(u.Username, username) {
+				slog.Info("Idempotency match: User already exists", "username", username, "telegramId", telegramId)
+				return &u, nil
+			}
+		}
+	} else {
+		slog.Warn("Failed to check existing users for idempotency", "error", err)
+	}
+
 	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
 	if err != nil {
 		return nil, err

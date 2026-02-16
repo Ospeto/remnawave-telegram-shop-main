@@ -166,6 +166,12 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		return fmt.Errorf("customer %s not found", utils.MaskHalfInt64(purchase.CustomerID))
 	}
 
+	// Idempotency / Race Condition Check
+	if purchase.Status == database.PurchaseStatusPaid {
+		slog.Info("Purchase already paid, skipping processing", "purchase_id", purchaseId)
+		return nil
+	}
+
 	if messageId, b := s.cache.Get(purchase.ID); b {
 		_, err = s.telegramBot.DeleteMessage(ctx, &bot.DeleteMessageParams{
 			ChatID:    customer.TelegramID,
