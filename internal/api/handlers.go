@@ -206,6 +206,9 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// SyncKeys updates the local DB (marks deleted, updates expiry/status).
 	syncedKeys, syncErr := h.paymentService.SyncKeys(r.Context(), customer.ID, customer.TelegramID)
 
+	// Track if user has any keys in the new system (even deleted ones)
+	hasMigratedKeys := false
+
 	if syncErr == nil && syncedKeys != nil && h.subKeyRepo != nil {
 		// Build stats lookup from synced data
 		statsMap := make(map[int64]payment.KeyStats, len(syncedKeys))
@@ -215,6 +218,9 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 		// Single DB query after sync to get labels/URLs with updated statuses
 		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		if len(localKeys) > 0 {
+			hasMigratedKeys = true
+		}
 		for _, k := range localKeys {
 			if k.Status == "deleted" {
 				continue
@@ -247,6 +253,9 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	} else if h.subKeyRepo != nil {
 		// Fallback: sync unavailable, use local DB only
 		subKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		if len(subKeys) > 0 {
+			hasMigratedKeys = true
+		}
 		for _, k := range subKeys {
 			if k.Status == "deleted" {
 				continue
@@ -268,8 +277,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Legacy fallback: customer has subscription_link but no subscription_key rows
-	if len(keys) == 0 && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+	// Legacy fallback: customer has subscription_link but no subscription_key rows (not migrated yet)
+	if len(keys) == 0 && !hasMigratedKeys && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
 		status := "expired"
 		if isActive {
 			status = "active"
