@@ -46,6 +46,11 @@ type Purchase struct {
 	TrafficLimitGB    int            `db:"traffic_limit_gb"`
 	Days              int            `db:"days"`
 	ExtendKeyID       *int64         `db:"extend_key_id"`
+	PlanLabel         string         `db:"plan_label"`
+	PaymentMethod     string         `db:"payment_method"`
+	PaymentPhone      string         `db:"payment_phone"`
+	VerifiedAt        *time.Time     `db:"verified_at"`
+	TransactionID     string         `db:"transaction_id"`
 }
 
 type PurchaseRepository struct {
@@ -116,7 +121,14 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 			&purchase.CryptoInvoiceID,
 			&purchase.CryptoInvoiceLink,
 			&purchase.YookasaURL,
-			&purchase.YookasaID,
+			&purchase.TrafficLimitGB,
+			&purchase.Days,
+			&purchase.ExtendKeyID,
+			&purchase.PlanLabel,
+			&purchase.PaymentMethod,
+			&purchase.PaymentPhone,
+			&purchase.VerifiedAt,
+			&purchase.TransactionID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase: %w", err)
@@ -161,6 +173,11 @@ func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase
 		&purchase.TrafficLimitGB,
 		&purchase.Days,
 		&purchase.ExtendKeyID,
+		&purchase.PlanLabel,
+		&purchase.PaymentMethod,
+		&purchase.PaymentPhone,
+		&purchase.VerifiedAt,
+		&purchase.TransactionID,
 	)
 
 	if err != nil {
@@ -240,6 +257,8 @@ func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 		&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
 		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
+		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
