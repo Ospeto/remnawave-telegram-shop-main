@@ -6,7 +6,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'loading': 'Loading...',
         'retry': 'Retry',
         'error_prefix': 'Error: ',
-        'powered_by': 'Powered by Wavy VPN',
+        'powered_by': 'Powered by Wavy Private Server',
         'open_in_tg': 'Open this app inside Telegram',
 
         // Navigation / Steps
@@ -17,10 +17,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_to_plans': 'Back to Plans',
         'go_home': 'Go to My Keys',
         'btn_open_happ': 'Open in Happ',
-        'success_happ_hint': 'Tap to auto-import your key into the Happ VPN app',
+        'success_happ_hint': 'Tap to auto-import your key into the Happ Proxy app',
 
         // Home
-        'home_title': 'Wavy VPN',
+        'home_title': 'Wavy Private Server',
         'active_key_count': '{{count}} active key',
         'active_key_count_plural': '{{count}} active keys',
         'no_active_keys': 'No active keys',
@@ -37,7 +37,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // Home Help
         'help_expired': 'This key has expired. Tap Extend below to add more days and keep using it.',
-        'help_btn_add': 'Add to Happ — auto-imports this key into the Happ VPN app',
+        'help_btn_add': 'Add to Happ — auto-imports this key into the Happ Proxy app',
         'help_btn_extend': 'Extend — add more days & data to this key',
         'help_btn_copy': 'copy link to use in any VPN app',
         'tip_multi_key': 'You can buy multiple keys for different devices, or extend an existing one.',
@@ -50,8 +50,8 @@ export const translations: Record<Language, Record<string, string>> = {
         // Welcome
         'welcome_title': 'Welcome!',
         'welcome_text': 'You don\'t have any VPN keys yet. Buy a plan to get started — it only takes a minute!',
-        'download_title': 'Download Happ VPN',
-        'download_text': 'You need to download the Happ VPN app first to use the key.',
+        'download_title': 'Download Happ Proxy',
+        'download_text': 'You need to download the Happ Proxy app first to use the key.',
         'btn_download': '📥 Download App',
         'how_it_works': 'How it works',
         'step_1': 'Choose a plan below',
@@ -112,7 +112,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'loading': 'ခေတ္တစောင့်ပါ...',
         'retry': 'ထပ်ကြိုးစားမည်',
         'error_prefix': 'Error: ',
-        'powered_by': 'Wavy VPN မှ ပံ့ပိုးသည်',
+        'powered_by': 'Wavy Private Server မှ ပံ့ပိုးသည်',
         'open_in_tg': 'Telegram အတွင်း ဖွင့်ပါ',
 
         // Navigation / Steps
@@ -123,10 +123,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_to_plans': 'Plan များသို့',
         'go_home': 'ကျွန်ုပ်၏ Key များသို့',
         'btn_open_happ': 'Happ ထဲတွင်း ဖွင့်မည်',
-        'success_happ_hint': 'Happ VPN app ထဲ Key အလိုအလျောက် ထည့်ရန် နှိပ်ပါ',
+        'success_happ_hint': 'Happ Proxy app ထဲ Key အလိုအလျောက် ထည့်ရန် နှိပ်ပါ',
 
         // Home
-        'home_title': 'Wavy VPN',
+        'home_title': 'Wavy Private Server',
         'active_key_count': 'သက်တမ်းရှိနေသော Key ၁ ခု',
         'active_key_count_plural': 'သက်တမ်းရှိနေသော Key {{count}} ခု',
         'no_active_keys': 'သက်တမ်းရှိ Key မရှိပါ',
@@ -143,7 +143,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // Home Help
         'help_expired': 'Key Expire ဖြစ်သွားပါပြီ။ ဆက်လက်အသုံးပြုရန် အောက်ပါ Extend ခလုတ်ကို နှိပ်ပါ။',
-        'help_btn_add': 'Happ သို့ ထည့်မည် — Happ VPN app ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးမည်',
+        'help_btn_add': 'Happ သို့ ထည့်မည် — Happ Proxy app ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးမည်',
         'help_btn_extend': 'Extend — ရက်နှင့် Data ပမာဏ ထပ်ပေါင်းထည့်မည်',
         'help_btn_copy': 'VPN app တခုခုတွင်သုံးရန် link ကူးယူမည်',
         'tip_multi_key': 'device အမျိုးမျိုးအတွက် Key အများကြီး ဝယ်ထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း Extend လုပ်နိုင်ပါသည်။',
@@ -156,8 +156,8 @@ export const translations: Record<Language, Record<string, string>> = {
         // Welcome
         'welcome_title': 'မင်္ဂလာပါ!',
         'welcome_text': 'သင့်တွင် VPN key မရှိသေးပါ။ စတင်အသုံးပြုရန် Plan တစ်ခုကို ဝယ်ယူပါ — ၁ မိနစ်သာ ကြာပါမည်!',
-        'download_title': 'Happ VPN ကို Download ရယူပါ',
-        'download_text': 'VPN key အသုံးမပြုမီ Happ VPN app ကို အရင် Download လုပ်ထားရန် လိုအပ်ပါသည်။',
+        'download_title': 'Happ Proxy ကို Download ရယူပါ',
+        'download_text': 'VPN key အသုံးမပြုမီ Happ Proxy app ကို အရင် Download လုပ်ထားရန် လိုအပ်ပါသည်။',
         'btn_download': 'App ကို Download လုပ်မည်',
         'how_it_works': 'အလုပ်လုပ်ပုံ',
         'step_1': 'အောက်တွင် Plan တစ်ခု ရွေးပါ',
