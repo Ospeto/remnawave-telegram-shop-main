@@ -16,6 +16,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_button': 'Back',
         'back_to_plans': 'Back to Plans',
         'go_home': 'Go to My Keys',
+        'btn_open_happ': 'Open in Happ',
+        'success_happ_hint': 'Tap to auto-import your key into the Happ VPN app',
 
         // Home
         'home_title': 'Wavy VPN',
@@ -120,6 +122,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_button': 'နောက်သို့',
         'back_to_plans': 'Plan များသို့',
         'go_home': 'ကျွန်ုပ်၏ Key များသို့',
+        'btn_open_happ': 'Happ ထဲတွင်း ဖွင့်မည်',
+        'success_happ_hint': 'Happ VPN app ထဲ Key အလိုအလျောက် ထည့်ရန် နှိပ်ပါ',
 
         // Home
         'home_title': 'Wavy VPN',

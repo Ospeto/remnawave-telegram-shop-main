@@ -25,7 +25,7 @@ export function Checkout() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
-    const [verificationResult, setVerificationResult] = useState<{ status: string, message: string } | null>(null);
+    const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
     const [phoneCopied, setPhoneCopied] = useState(false);
     const [amountCopied, setAmountCopied] = useState(false);
 
@@ -129,14 +129,38 @@ export function Checkout() {
                     {extendKeyId ? t('success_extend') : t('success_new')}
                 </p>
 
-                <div className="tip-box tip-box-success" style={{ marginTop: 8 }}>
+                {/* Primary: Open in Happ */}
+                <button
+                    className="btn-primary"
+                    onClick={() => {
+                        if (verificationResult?.happ_link) {
+                            const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(verificationResult.happ_link)}`;
+                            if (tg?.openLink) {
+                                tg.openLink(redirectUrl);
+                            } else {
+                                window.open(redirectUrl, '_blank');
+                            }
+                        } else {
+                            navigate('/');
+                        }
+                    }}
+                    style={{ marginTop: 12, width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
+                >
+                    {t('btn_open_happ')}
+                </button>
+                <p className="text-hint" style={{ margin: '-8px 0 0', fontSize: 11 }}>
+                    {t('success_happ_hint')}
+                </p>
+
+                <div className="tip-box tip-box-success" style={{ marginTop: 4 }}>
                     <span className="tip-icon">💡</span>
                     <span>
                         {extendKeyId ? t('success_tip_extend') : t('success_tip_new')}
                     </span>
                 </div>
 
-                <button className="btn-primary" onClick={() => navigate('/')} style={{ marginTop: 16 }}>
+                {/* Secondary: Go to My Keys */}
+                <button className="btn-secondary" onClick={() => navigate('/')} style={{ width: '100%', opacity: 0.7 }}>
                     {t('go_home')}
                 </button>
             </div>

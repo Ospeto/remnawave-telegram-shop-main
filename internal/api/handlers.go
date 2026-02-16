@@ -62,9 +62,10 @@ type CreatePurchaseResponse struct {
 }
 
 type UploadScreenshotResponse struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
-	Reason  string `json:"reason,omitempty"`
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+	Reason   string `json:"reason,omitempty"`
+	HappLink string `json:"happ_link,omitempty"`
 }
 
 type PurchaseStatusResponse struct {
@@ -383,6 +384,15 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	if result.Success {
 		resp.Status = "success"
 		resp.Message = "Payment verified successfully!"
+		// Look up the latest subscription key for this customer to build Happ deep link
+		if h.subKeyRepo != nil {
+			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+			if kErr == nil && len(keys) > 0 {
+				// Return the most recently added key's happ link
+				latestKey := keys[len(keys)-1]
+				resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
+			}
+		}
 	} else {
 		resp.Message = result.Reason
 		resp.Reason = result.ReasonKey
