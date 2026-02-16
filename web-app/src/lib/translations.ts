@@ -6,7 +6,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'loading': 'Loading...',
         'retry': 'Retry',
         'error_prefix': 'Error: ',
-        'powered_by': 'Powered by Remnawave',
+        'powered_by': 'Powered by Wavy VPN',
         'open_in_tg': 'Open this app inside Telegram',
 
         // Navigation / Steps
@@ -18,7 +18,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'go_home': 'Go to My Keys',
 
         // Home
-        'home_title': 'Remnawave VPN',
+        'home_title': 'Wavy VPN',
         'active_key_count': '{{count}} active key',
         'active_key_count_plural': '{{count}} active keys',
         'no_active_keys': 'No active keys',
@@ -156,7 +156,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'subtitle_extending': 'Extend လုပ်နေသည်: {{label}}',
         'subtitle_new_key': 'သင့်လိုအပ်ချက်နှင့် ကိုက်ညီမည့် Plan ကို ရွေးပါ',
         'subtitle_new_key_hint': 'Subscription key အသစ် ရရှိပါမည်',
-        'best_value': 'တန်ဖိုးအရှိဆုံး',
+        'best_value': 'အတန်ဆုံး။',
         'unlimited': '♾️ Unlimited',
         'per_day': '/{{currency}}/ရက်',
         'new_expiry': '✓ သက်တမ်းကုန်မည့်ရက်သစ်: {{date}}',
