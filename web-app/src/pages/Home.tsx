@@ -215,7 +215,15 @@ export function Home() {
                                         className="btn-primary"
                                         style={{ padding: '13px', fontSize: 14, fontWeight: 600 }}
                                         onClick={() => {
-                                            const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(key.happ_link)}`;
+                                            const happUrl = key.happ_link;
+                                            // Strategy 1: Try hidden iframe (works on most Android/iOS)
+                                            const iframe = document.createElement('iframe');
+                                            iframe.style.display = 'none';
+                                            iframe.src = happUrl;
+                                            document.body.appendChild(iframe);
+                                            setTimeout(() => iframe.remove(), 3000);
+                                            // Strategy 2: Also try tg.openLink with redirect.html
+                                            const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
                                             if (tg?.openLink) {
                                                 tg.openLink(redirectUrl);
                                             } else {

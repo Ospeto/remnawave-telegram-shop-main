@@ -134,7 +134,15 @@ export function Checkout() {
                     className="btn-primary"
                     onClick={() => {
                         if (verificationResult?.happ_link) {
-                            const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(verificationResult.happ_link)}`;
+                            const happUrl = verificationResult.happ_link;
+                            // Strategy 1: Try hidden iframe (works on most Android/iOS)
+                            const iframe = document.createElement('iframe');
+                            iframe.style.display = 'none';
+                            iframe.src = happUrl;
+                            document.body.appendChild(iframe);
+                            setTimeout(() => iframe.remove(), 3000);
+                            // Strategy 2: Also try tg.openLink with redirect.html
+                            const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
                             if (tg?.openLink) {
                                 tg.openLink(redirectUrl);
                             } else {
