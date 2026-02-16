@@ -57,19 +57,109 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 			http.Error(w, "Unsupported URL scheme", http.StatusBadRequest)
 			return
 		}
+		// Extract the subscription URL from the deep link for copy fallback
+		subURL := strings.TrimPrefix(target, "happ://add/")
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head>
-<meta http-equiv="refresh" content="0;url=%s">
-<title>Redirecting...</title>
-<style>body{background:#1a1a2e;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-.box{text-align:center}.spinner{border:3px solid #333;border-top:3px solid #00d4ff;border-radius:50%%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto 16px}
-@keyframes spin{to{transform:rotate(360deg)}}</style>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Open in Happ</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f0f1a;color:#e0e0e0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#1a1a2e;border-radius:16px;padding:32px 24px;max-width:380px;width:100%%;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+h1{font-size:20px;margin-bottom:8px;color:#fff}
+.sub{font-size:14px;color:#888;margin-bottom:24px}
+.spinner{border:3px solid #333;border-top:3px solid #00d4ff;border-radius:50%%;width:44px;height:44px;animation:spin .8s linear infinite;margin:0 auto 20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.phase-open .fallback{display:none}
+.phase-fallback .loading{display:none}
+.btn{display:block;width:100%%;padding:14px;border-radius:10px;font-size:15px;font-weight:600;text-decoration:none;margin-bottom:10px;border:none;cursor:pointer;transition:transform .15s}
+.btn:active{transform:scale(0.97)}
+.btn-primary{background:linear-gradient(135deg,#00d4ff,#0099cc);color:#fff}
+.btn-android{background:linear-gradient(135deg,#34a853,#1e8e3e);color:#fff}
+.btn-ios{background:linear-gradient(135deg,#007aff,#005bb5);color:#fff}
+.btn-copy{background:#2a2a3e;color:#00d4ff;border:1px solid #333}
+.btn-retry{background:#2a2a3e;color:#fff;border:1px solid #444}
+.divider{color:#555;font-size:13px;margin:16px 0 12px}
+.copied{color:#34a853;font-size:13px;margin-top:6px;opacity:0;transition:opacity .3s}
+.copied.show{opacity:1}
+.icon{font-size:48px;margin-bottom:16px}
+</style>
 </head><body>
-<div class="box"><div class="spinner"></div><p>Opening Happ...</p>
-<p style="font-size:13px;opacity:0.6">If nothing happens, <a href="%s" style="color:#00d4ff">tap here</a></p></div>
-<script>window.location.href="%s";</script>
-</body></html>`, target, target, target)
+<div class="card" id="card">
+  <div class="loading">
+    <div class="spinner"></div>
+    <h1>Opening Happ...</h1>
+    <p class="sub">Please wait</p>
+  </div>
+  <div class="fallback" style="display:none">
+    <div class="icon">📱</div>
+    <h1>Happ Not Found</h1>
+    <p class="sub">Install Happ to add your VPN config automatically</p>
+    <a id="btn-retry" href="%s" class="btn btn-retry">🔄 Try Again</a>
+    <div class="divider">— install Happ —</div>
+    <a id="btn-android" href="https://play.google.com/store/search?q=happ+vpn&c=apps" target="_blank" class="btn btn-android" style="display:none">▶️ Google Play Store</a>
+    <a id="btn-ios" href="https://apps.apple.com/search?term=happ+vpn" target="_blank" class="btn btn-ios" style="display:none">🍎 App Store</a>
+    <div class="divider">— or add manually —</div>
+    <button onclick="copyUrl()" class="btn btn-copy">📋 Copy Subscription URL</button>
+    <p class="copied" id="copied">✅ Copied to clipboard!</p>
+  </div>
+</div>
+<script>
+var deepLink = %q;
+var subUrl = %q;
+
+// Detect platform
+var ua = navigator.userAgent || '';
+var isAndroid = /android/i.test(ua);
+var isIOS = /iphone|ipad|ipod/i.test(ua);
+
+// Show the right store button
+if (isAndroid) document.getElementById('btn-android').style.display = 'block';
+else if (isIOS) document.getElementById('btn-ios').style.display = 'block';
+else {
+  document.getElementById('btn-android').style.display = 'block';
+  document.getElementById('btn-ios').style.display = 'block';
+}
+
+// Try opening the deep link
+var launched = false;
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) launched = true;
+});
+
+window.location.href = deepLink;
+
+// If still here after 2.5s, app probably not installed
+setTimeout(function() {
+  if (!launched) {
+    document.querySelector('.loading').style.display = 'none';
+    document.querySelector('.fallback').style.display = 'block';
+  }
+}, 2500);
+
+function copyUrl() {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(subUrl).then(function() { showCopied(); });
+  } else {
+    var t = document.createElement('textarea');
+    t.value = subUrl;
+    document.body.appendChild(t);
+    t.select();
+    document.execCommand('copy');
+    document.body.removeChild(t);
+    showCopied();
+  }
+}
+function showCopied() {
+  var el = document.getElementById('copied');
+  el.classList.add('show');
+  setTimeout(function() { el.classList.remove('show'); }, 2000);
+}
+</script>
+</body></html>`, target, target, subURL)
 	})
 
 	// Serve React Frontend (SPA support)
