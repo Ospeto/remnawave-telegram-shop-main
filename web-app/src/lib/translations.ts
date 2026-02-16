@@ -38,7 +38,12 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_btn_add': 'Add to Happ — auto-imports this key into the Happ VPN app',
         'help_btn_extend': 'Extend — add more days & data to this key',
         'help_btn_copy': 'copy link to use in any VPN app',
-        'tip_multi_key': 'Tip: You can have multiple keys for different devices, or extend an existing one to add more days.',
+        'tip_multi_key': 'You can buy multiple keys for different devices, or extend an existing one.',
+        'info_device_limit': 'Devices per Key',
+        'info_device_count': '3',
+        'info_servers': 'Server Locations',
+        'info_server_list': 'Thailand · Germany · US · Singapore · Japan',
+        'contact_support': 'Contact Support',
 
         // Welcome
         'welcome_title': 'Welcome!',
@@ -137,7 +142,12 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_btn_add': 'Happ သို့ ထည့်မည် — Happ VPN app ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးမည်',
         'help_btn_extend': 'Extend — ရက်နှင့် Data ပမာဏ ထပ်ပေါင်းထည့်မည်',
         'help_btn_copy': 'VPN app တခုခုတွင်သုံးရန် link ကူးယူမည်',
-        'tip_multi_key': 'အကြံပြုချက်: ဖုန်းအမျိုးမျိုးအတွက် Key အများကြီး ဝယ်ထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း Extend လုပ်နိုင်ပါသည်။',
+        'tip_multi_key': 'device အမျိုးမျိုးအတွက် Key အများကြီး ဝယ်ထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း Extend လုပ်နိုင်ပါသည်။',
+        'info_device_limit': 'Key တစ်ခုနှင့် Device',
+        'info_device_count': '၃ ခု',
+        'info_servers': 'Server တည်နေရာများ',
+        'info_server_list': 'Thailand · Germany · US · Singapore · Japan',
+        'contact_support': 'အကူအညီရယူရန်',
 
         // Welcome
         'welcome_title': 'မင်္ဂလာပါ!',
