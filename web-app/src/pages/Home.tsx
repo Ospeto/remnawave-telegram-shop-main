@@ -144,11 +144,29 @@ export function Home() {
                     {keys.map(key => (
                         <div key={key.id} className={`glass-card ${key.status === 'active' ? 'glass-card-success' : ''}`} style={{ padding: 16 }}>
                             {/* Key header */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
                                 <div>
-                                    <div style={{ fontWeight: 600, fontSize: 15 }}>{key.label || key.username}</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
+                                        <button
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                handleCopy(key.subscription_url, key.id);
+                                            }}
+                                            style={{
+                                                background: 'rgba(255,255,255,0.1)',
+                                                border: 'none', borderRadius: '50%',
+                                                width: 28, height: 28,
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                cursor: 'pointer', color: 'var(--tg-text)',
+                                                transition: 'all 0.2s ease'
+                                            }}
+                                        >
+                                            {copiedId === key.id ? '✅' : '📋'}
+                                        </button>
+                                    </div>
                                     {key.username && key.label && (
-                                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{key.username}</div>
+                                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{key.username}</div>
                                     )}
                                 </div>
                                 <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`}>
@@ -158,18 +176,18 @@ export function Home() {
 
                             {/* Days remaining */}
                             {key.status === 'active' && (
-                                <div style={{ marginBottom: 16 }}>
+                                <div style={{ marginBottom: 20 }}>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                                        <span style={{ fontSize: 28, fontWeight: 700, lineHeight: 1 }}>{key.days_remaining}</span>
-                                        <span className="text-hint" style={{ fontSize: 13 }}>{t('days_left')}</span>
+                                        <span style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{key.days_remaining}</span>
+                                        <span className="text-hint" style={{ fontSize: 14 }}>{t('days_left')}</span>
                                     </div>
                                     {key.expire_at && (
-                                        <div className="text-hint" style={{ fontSize: 11, marginTop: 4 }}>
+                                        <div className="text-hint" style={{ fontSize: 12, marginTop: 4, opacity: 0.7 }}>
                                             {t('expires_on', { date: new Date(key.expire_at).toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric', year: 'numeric' }) })}
                                         </div>
                                     )}
                                     {/* Days Progress bar */}
-                                    <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2, marginTop: 8 }}>
+                                    <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 12 }}>
                                         <div style={{
                                             height: '100%', borderRadius: 2,
                                             background: key.days_remaining > 7 ? '#34c759' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
@@ -180,14 +198,14 @@ export function Home() {
 
                                     {/* Traffic Usage (if limit exists) */}
                                     {key.traffic_limit_gb > 0 && (
-                                        <div style={{ marginTop: 12 }}>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                                        <div style={{ marginTop: 14 }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
                                                 <span className="text-hint">{t('data_usage')}</span>
-                                                <span style={{ fontWeight: 600 }}>
-                                                    {key.traffic_used_gb.toFixed(1)} / {key.traffic_limit_gb.toFixed(0)} GB
+                                                <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                                                    {key.traffic_used_gb.toFixed(1)} <span style={{ opacity: 0.5 }}>/</span> {key.traffic_limit_gb.toFixed(0)} GB
                                                 </span>
                                             </div>
-                                            <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 2 }}>
+                                            <div style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
                                                 <div style={{
                                                     height: '100%', borderRadius: 2,
                                                     background: (key.traffic_used_gb / key.traffic_limit_gb) > 0.9 ? '#ff3b30' : (key.traffic_used_gb / key.traffic_limit_gb) > 0.75 ? '#ff9f0a' : '#007AFF',
@@ -202,18 +220,18 @@ export function Home() {
 
                             {/* Expired key help */}
                             {key.status !== 'active' && (
-                                <div className="tip-box tip-box-warning" style={{ marginBottom: 12 }}>
+                                <div className="tip-box tip-box-warning" style={{ marginBottom: 16 }}>
                                     <span className="tip-icon">💡</span>
                                     <span>{t('help_expired')}</span>
                                 </div>
                             )}
 
                             {/* Action buttons */}
-                            <div style={{ display: 'flex', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: 10 }}>
                                 {key.status === 'active' && key.happ_link && (
                                     <button
                                         className="btn-primary"
-                                        style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}
+                                        style={{ flex: 2, padding: '12px', fontSize: 14, fontWeight: 600, boxShadow: '0 4px 12px rgba(0,122,255,0.2)' }}
                                         onClick={() => {
                                             const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(key.happ_link)}`;
                                             if (tg?.openLink) {
@@ -226,24 +244,9 @@ export function Home() {
                                         {t('btn_add_happ')}
                                     </button>
                                 )}
-                                <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, fontSize: 13, padding: '10px 12px', textDecoration: 'none' }}>
+                                <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, textDecoration: 'none', justifyContent: 'center' }}>
                                     {t('btn_extend')}
                                 </Link>
-                                <button
-                                    className="btn-secondary"
-                                    onClick={() => handleCopy(key.subscription_url, key.id)}
-                                    style={{ flex: 0, minWidth: 44, padding: '10px 12px', fontSize: 13 }}
-                                >
-                                    {copiedId === key.id ? '✅' : '📋'}
-                                </button>
-                            </div>
-
-                            {/* Button explanations */}
-                            <div className="text-hint" style={{ fontSize: 10, marginTop: 8, lineHeight: 1.6, padding: '0 2px' }}>
-                                {key.status === 'active' && key.happ_link && (
-                                    <>{t('help_btn_add')} · </>
-                                )}
-                                {t('help_btn_extend')} · <strong>📋</strong> — {t('help_btn_copy')}
                             </div>
                         </div>
                     ))}
