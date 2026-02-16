@@ -44,6 +44,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
 	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
+	mux.HandleFunc("/api/revenue", withAuth(handler.GetRevenueSummary))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {

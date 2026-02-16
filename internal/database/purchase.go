@@ -250,3 +250,39 @@ func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 
 	return p, nil
 }
+
+// RevenueSummaryRow represents a single row from the revenue_daily view.
+type RevenueSummaryRow struct {
+	Day             string  `json:"day"`
+	PaymentMethod   string  `json:"payment_method"`
+	Currency        string  `json:"currency"`
+	TotalPurchases  int     `json:"total_purchases"`
+	TotalRevenue    float64 `json:"total_revenue"`
+	UniqueCustomers int     `json:"unique_customers"`
+}
+
+// GetRevenueSummary fetches revenue data for the last N days from the revenue_daily view.
+func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) ([]RevenueSummaryRow, error) {
+	query := `SELECT day, COALESCE(payment_method, '') as payment_method, COALESCE(currency, '') as currency, total_purchases, total_revenue, unique_customers
+		FROM revenue_daily
+		WHERE day >= CURRENT_DATE - $1::int
+		ORDER BY day DESC, total_revenue DESC`
+
+	rows, err := pr.pool.Query(ctx, query, days)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query revenue summary: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RevenueSummaryRow
+	for rows.Next() {
+		var r RevenueSummaryRow
+		var dayTime time.Time
+		if err := rows.Scan(&dayTime, &r.PaymentMethod, &r.Currency, &r.TotalPurchases, &r.TotalRevenue, &r.UniqueCustomers); err != nil {
+			return nil, fmt.Errorf("failed to scan revenue row: %w", err)
+		}
+		r.Day = dayTime.Format("2006-01-02")
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}

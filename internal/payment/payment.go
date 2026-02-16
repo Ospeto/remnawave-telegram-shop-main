@@ -214,7 +214,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		}
 		// Insert into subscription_key table
 		if s.subKeyRepo != nil {
-			label := fmt.Sprintf("Key %d", keyIndex)
+			label := fmt.Sprintf("WV-%d-%d", purchase.ID, keyIndex)
 			_, _ = s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
 				CustomerID:      customer.ID,
 				RemnawaveUUID:   remnawaveUser.UUID,
@@ -557,6 +557,15 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 		slog.Error("Error recording mobile payment", "error", err)
 		return nil, err
 	}
+
+	// Copy payment details to purchase row for revenue tracking
+	now := time.Now()
+	_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
+		"transaction_id": info.TransactionID,
+		"payment_method": info.Provider,
+		"payment_phone":  info.PhoneNumber,
+		"verified_at":    now,
+	})
 
 	err = s.ProcessPurchaseById(ctx, purchaseID)
 	if err != nil {

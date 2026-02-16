@@ -144,12 +144,16 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ExtendKeyID != nil {
-		purchaseRepo := h.paymentService.GetPurchaseRepository()
-		_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, map[string]interface{}{
-			"extend_key_id": *req.ExtendKeyID,
-		})
+	// Store plan label and payment phone for revenue tracking
+	updateFields := map[string]interface{}{
+		"plan_label":    plan.Label,
+		"payment_phone": config.MobileBankingPhone(),
 	}
+	if req.ExtendKeyID != nil {
+		updateFields["extend_key_id"] = *req.ExtendKeyID
+	}
+	purchaseRepo := h.paymentService.GetPurchaseRepository()
+	_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, updateFields)
 
 	instructions := fmt.Sprintf(
 		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
@@ -429,4 +433,34 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	daysStr := r.URL.Query().Get("days")
+	days := 30
+	if daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 && d <= 365 {
+			days = d
+		}
+	}
+
+	purchaseRepo := h.paymentService.GetPurchaseRepository()
+	summary, err := purchaseRepo.GetRevenueSummary(r.Context(), days)
+	if err != nil {
+		http.Error(w, "Failed to fetch revenue: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Ensure we return an empty array instead of null for consistency
+	if summary == nil {
+		summary = []database.RevenueSummaryRow{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(summary)
 }
