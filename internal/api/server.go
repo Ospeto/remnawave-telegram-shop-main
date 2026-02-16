@@ -45,14 +45,36 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 
+	// Deep link redirect — opens in system browser to handle custom URL schemes
+	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.Query().Get("url")
+		if target == "" {
+			http.Error(w, "Missing url parameter", http.StatusBadRequest)
+			return
+		}
+		// Only allow happ:// scheme for security
+		if !strings.HasPrefix(target, "happ://") {
+			http.Error(w, "Unsupported URL scheme", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html><head>
+<meta http-equiv="refresh" content="0;url=%s">
+<title>Redirecting...</title>
+<style>body{background:#1a1a2e;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{text-align:center}.spinner{border:3px solid #333;border-top:3px solid #00d4ff;border-radius:50%%;width:40px;height:40px;animation:spin 1s linear infinite;margin:0 auto 16px}
+@keyframes spin{to{transform:rotate(360deg)}}</style>
+</head><body>
+<div class="box"><div class="spinner"></div><p>Opening Happ...</p>
+<p style="font-size:13px;opacity:0.6">If nothing happens, <a href="%s" style="color:#00d4ff">tap here</a></p></div>
+<script>window.location.href="%s";</script>
+</body></html>`, target, target, target)
+	})
+
 	// Serve React Frontend (SPA support)
 	fs := http.FileServer(http.Dir("./web-app/dist"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// If path exists in static, serve it
-		// If not (and not /api), serve index.html for SPA routing
-		// Simple approach: http.FileServer
-		// Better approach for SPA: check if file exists, else serve index.html
-		// For MVP: FileServer is fine if we don't use pushState deeply or if we just serve the root
 		fs.ServeHTTP(w, r)
 	})
 }

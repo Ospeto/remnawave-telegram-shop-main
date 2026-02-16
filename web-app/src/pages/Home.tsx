@@ -172,14 +172,11 @@ export function Home() {
                                         className="btn-primary"
                                         style={{ flex: 1, fontSize: 13, padding: '10px 12px' }}
                                         onClick={() => {
-                                            const isAndroid = /android/i.test(navigator.userAgent);
-                                            if (isAndroid) {
-                                                // Android WebView blocks custom schemes — use Intent URL
-                                                const withoutScheme = key.happ_link.replace(/^happ:\/\//, '');
-                                                const intentUrl = `intent://${withoutScheme}#Intent;scheme=happ;end`;
-                                                window.location.href = intentUrl;
+                                            const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(key.happ_link)}`;
+                                            if (tg?.openLink) {
+                                                tg.openLink(redirectUrl);
                                             } else {
-                                                window.location.href = key.happ_link;
+                                                window.open(redirectUrl, '_blank');
                                             }
                                         }}
                                     >
