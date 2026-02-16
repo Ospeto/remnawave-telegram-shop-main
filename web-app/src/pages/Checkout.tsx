@@ -172,23 +172,29 @@ export function Checkout() {
                     <span className="step-number">2</span>
                     <div className="step-text" style={{ flex: 1 }}>
                         <strong>{t('guide_step_2')}</strong>
-                        <div
-                            onClick={() => copyToClipboard(String(purchase?.amount || ''), 'amount')}
-                            style={{
-                                marginTop: 6, padding: '10px 14px', borderRadius: 10,
+                        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                            <div style={{
+                                flex: 1, padding: '12px 14px', borderRadius: 12,
                                 background: 'rgba(94, 187, 255, 0.06)', border: '1px solid rgba(94, 187, 255, 0.15)',
-                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            <div>
+                                display: 'flex', alignItems: 'center'
+                            }}>
                                 <div className="text-link" style={{ fontSize: 24, fontWeight: 700 }}>
                                     {purchase?.amount?.toLocaleString()} {purchase?.currency}
                                 </div>
                             </div>
-                            <span style={{ fontSize: 12, color: amountCopied ? '#34c759' : 'var(--tg-hint)' }}>
+                            <button
+                                onClick={() => copyToClipboard(String(purchase?.amount || ''), 'amount')}
+                                className="btn-secondary"
+                                style={{
+                                    width: 'auto', padding: '0 20px', borderRadius: 12,
+                                    fontSize: 14, fontWeight: 600,
+                                    background: amountCopied ? '#34c759' : undefined,
+                                    color: amountCopied ? '#fff' : undefined,
+                                    border: amountCopied ? 'none' : undefined
+                                }}
+                            >
                                 {amountCopied ? t('copied') : t('tap_to_copy')}
-                            </span>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -198,21 +204,29 @@ export function Checkout() {
                     <span className="step-number">3</span>
                     <div className="step-text" style={{ flex: 1 }}>
                         <strong>{t('guide_step_3')}</strong>
-                        <div
-                            onClick={() => copyToClipboard(purchase?.payment_phone || '', 'phone')}
-                            style={{
-                                marginTop: 6, padding: '10px 14px', borderRadius: 10,
+                        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                            <div style={{
+                                flex: 1, padding: '12px 14px', borderRadius: 12,
                                 background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)',
-                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace' }}>
-                                {purchase?.payment_phone}
+                                display: 'flex', alignItems: 'center'
+                            }}>
+                                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace' }}>
+                                    {purchase?.payment_phone}
+                                </div>
                             </div>
-                            <span style={{ fontSize: 12, color: phoneCopied ? '#34c759' : 'var(--tg-hint)' }}>
+                            <button
+                                onClick={() => copyToClipboard(purchase?.payment_phone || '', 'phone')}
+                                className="btn-secondary"
+                                style={{
+                                    width: 'auto', padding: '0 20px', borderRadius: 12,
+                                    fontSize: 14, fontWeight: 600,
+                                    background: phoneCopied ? '#34c759' : undefined,
+                                    color: phoneCopied ? '#fff' : undefined,
+                                    border: phoneCopied ? 'none' : undefined
+                                }}
+                            >
                                 {phoneCopied ? t('copied') : t('tap_to_copy')}
-                            </span>
+                            </button>
                         </div>
                     </div>
                 </div>

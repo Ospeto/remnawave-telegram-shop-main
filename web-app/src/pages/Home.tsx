@@ -239,6 +239,24 @@ export function Home() {
                         {t('welcome_text')}
                     </p>
 
+                    {/* Download App Prompt */}
+                    <div className="glass-card" style={{ background: 'rgba(0, 122, 255, 0.1)', border: '1px solid rgba(0, 122, 255, 0.2)', padding: 16, marginBottom: 16, textAlign: 'left' }}>
+                        <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 18 }}>📲</span> {t('download_title')}
+                        </h3>
+                        <p style={{ fontSize: 12, margin: '0 0 12px', opacity: 0.9 }}>
+                            {t('download_text')}
+                        </p>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <a href="https://play.google.com/store/apps/details?id=com.happ.vpn" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                                🤖 Android
+                            </a>
+                            <a href="https://apps.apple.com/app/id6466666666" target="_blank" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                                🍎 iOS
+                            </a>
+                        </div>
+                    </div>
+
                     <div className="tip-box tip-box-info" style={{ textAlign: 'left', marginBottom: 0 }}>
                         <span className="tip-icon">ℹ️</span>
                         <div>

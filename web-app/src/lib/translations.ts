@@ -37,16 +37,19 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_btn_add': 'Add to Happ — auto-imports this key into the Happ VPN app',
         'help_btn_extend': 'Extend — add more days & data to this key',
         'help_btn_copy': 'copy link to use in any VPN app',
-        'tip_multi_key': 'Tip: You can have multiple VPN keys for different devices, or extend an existing one to add more days.',
+        'tip_multi_key': 'Tip: You can have multiple keys for different devices, or extend an existing one to add more days.',
 
         // Welcome
         'welcome_title': 'Welcome!',
         'welcome_text': 'You don\'t have any VPN keys yet. Buy a plan to get started — it only takes a minute!',
+        'download_title': 'Download Happ VPN',
+        'download_text': 'You need to download the Happ VPN app first to use the key.',
+        'btn_download': '📥 Download App',
         'how_it_works': 'How it works',
         'step_1': 'Choose a plan below',
         'step_2': 'Pay via mobile banking',
         'step_3': 'Upload a screenshot — we verify it instantly',
-        'step_4': 'Your VPN key is ready to use!',
+        'step_4': 'Start using your VPN key!',
 
         // Plans
         'loading_plans': 'Loading plans...',
@@ -137,6 +140,9 @@ export const translations: Record<Language, Record<string, string>> = {
         // Welcome
         'welcome_title': 'မင်္ဂလာပါ!',
         'welcome_text': 'သင့်တွင် VPN key မရှိသေးပါ။ စတင်အသုံးပြုရန် Plan တစ်ခုကို ဝယ်ယူပါ — ၁ မိနစ်သာ ကြာပါမည်!',
+        'download_title': 'Happ VPN ကို Download ရယူပါ',
+        'download_text': 'VPN key အသုံးမပြုမီ Happ VPN app ကို အရင် Download လုပ်ထားရန် လိုအပ်ပါသည်။',
+        'btn_download': '📥 App ကို Download လုပ်မည်',
         'how_it_works': 'အလုပ်လုပ်ပုံ',
         'step_1': 'အောက်တွင် Plan တစ်ခု ရွေးပါ',
         'step_2': 'Mobile Banking ဖြင့် ငွေလွှဲပါ',
