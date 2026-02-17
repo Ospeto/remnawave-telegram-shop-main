@@ -25,6 +25,8 @@ interface UserData {
     is_active: boolean;
     expire_at: string | null;
     days_remaining: number;
+    trial_eligible: boolean;
+    trial_days: number;
 }
 
 export function Home() {
@@ -34,6 +36,8 @@ export function Home() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [copiedId, setCopiedId] = useState<number | null>(null);
+    const [trialLoading, setTrialLoading] = useState(false);
+    const [trialError, setTrialError] = useState<string | null>(null);
 
     useEffect(() => {
         if (tg) tg.BackButton.hide();
@@ -59,6 +63,29 @@ export function Home() {
 
     const toggleLanguage = () => {
         setLanguage(language === 'en' ? 'my' : 'en');
+    };
+
+    const handleTrialActivation = async () => {
+        if (!initData || trialLoading) return;
+        setTrialLoading(true);
+        setTrialError(null);
+        try {
+            const res = await fetch('/api/trial', {
+                method: 'POST',
+                headers: { 'Authorization': `twa ${initData}` },
+            });
+            if (res.status === 409) {
+                setTrialError('Trial already used');
+                return;
+            }
+            if (!res.ok) throw new Error(`${res.status}`);
+            // Reload to show the new key
+            window.location.reload();
+        } catch {
+            setTrialError(t('trial_error'));
+        } finally {
+            setTrialLoading(false);
+        }
     };
 
     if (loading) return (
@@ -289,8 +316,43 @@ export function Home() {
             {/* Spacer */}
             <div style={{ flex: 1 }} />
 
+            {/* Trial Button — shown only when eligible (no keys, trial enabled) */}
+            {data?.trial_eligible && keys.length === 0 && (
+                <>
+                    <button
+                        className="btn-primary animate-slide-up"
+                        onClick={handleTrialActivation}
+                        disabled={trialLoading}
+                        style={{
+                            background: 'linear-gradient(135deg, #00d2be, #00b4dc)',
+                            border: 'none',
+                            fontSize: 15,
+                            fontWeight: 700,
+                            letterSpacing: '-0.3px',
+                            opacity: trialLoading ? 0.7 : 1,
+                        }}
+                    >
+                        {trialLoading
+                            ? t('trial_activating')
+                            : t('trial_button', { days: String(data.trial_days) })}
+                    </button>
+                    {trialError && (
+                        <div style={{ color: '#ff3b30', fontSize: 12, textAlign: 'center', marginTop: -8 }}>
+                            {trialError}
+                        </div>
+                    )}
+                </>
+            )}
+
             {/* Buy new key button */}
-            <Link to="/plans" className="btn-primary animate-slide-up" style={{ textDecoration: 'none' }}>
+            <Link to="/plans" className="btn-primary animate-slide-up" style={{
+                textDecoration: 'none',
+                ...(data?.trial_eligible && keys.length === 0 ? {
+                    background: 'transparent',
+                    border: '1px solid rgba(0, 210, 190, 0.3)',
+                    color: '#00d2be',
+                } : {})
+            }}>
                 {keys.length > 0 ? t('btn_buy_new') : t('btn_get_started')}
             </Link>
 

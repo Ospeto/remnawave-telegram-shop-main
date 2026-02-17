@@ -37,6 +37,8 @@ type ValidationResponse struct {
 	IsActive      bool               `json:"is_active"`
 	ExpireAt      *time.Time         `json:"expire_at"`
 	DaysRemaining int                `json:"days_remaining"`
+	TrialEligible bool               `json:"trial_eligible"`
+	TrialDays     int                `json:"trial_days"`
 }
 
 type PlanResponse struct {
@@ -344,16 +346,69 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Determine trial eligibility: trial enabled + no subscription ever created
+	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0
+
 	resp := ValidationResponse{
 		User:          customer,
 		Keys:          keys,
 		IsActive:      isActive,
 		ExpireAt:      customer.ExpireAt,
 		DaysRemaining: daysRemaining,
+		TrialEligible: trialEligible,
+		TrialDays:     config.TrialDays(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if config.TrialDays() == 0 {
+		http.Error(w, "Trial is not available", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// One trial per user: check if they ever had a subscription
+	if customer.SubscriptionLink != nil {
+		http.Error(w, "Trial already used", http.StatusConflict)
+		return
+	}
+
+	ctxWithUsername := context.WithValue(r.Context(), "username", fmt.Sprintf("%d", telegramID))
+	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
+	if err != nil {
+		http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":           "activated",
+		"subscription_url": subURL,
+		"trial_days":       config.TrialDays(),
+	})
 }
 
 func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {

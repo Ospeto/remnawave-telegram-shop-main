@@ -50,6 +50,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
+	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {

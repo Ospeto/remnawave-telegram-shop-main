@@ -47,6 +47,12 @@ export const translations: Record<Language, Record<string, string>> = {
         'info_server_list': 'Thailand · Germany · US · Singapore · Japan',
         'contact_support': 'Contact Support',
 
+        // Trial
+        'trial_button': '🎁 Get Free Trial ({{days}} Days)',
+        'trial_activating': 'Activating trial...',
+        'trial_error': 'Failed to activate trial. Please try again.',
+        'trial_success': 'Trial activated! Your free key is ready.',
+
         // Welcome
         'welcome_title': 'Welcome!',
         'welcome_text': 'You don\'t have any VPN keys yet. Buy a plan to get started — it only takes a minute!',
@@ -152,6 +158,12 @@ export const translations: Record<Language, Record<string, string>> = {
         'info_servers': 'Server Locations',
         'info_server_list': 'Thailand · Germany · US · Singapore · Japan',
         'contact_support': 'Contact Support',
+
+        // Trial
+        'trial_button': '🎁 အခမဲ့ ရက် {{days}} ရက် စမ်းသုံးကြည့်ပါ',
+        'trial_activating': 'Trial ဖွင့်နေသည်...',
+        'trial_error': 'Trial ဖွင့်၍ မရပါ။ ထပ်ကြိုးစားပါ။',
+        'trial_success': 'Trial ဖွင့်ပြီး! အခမဲ့ Key အဆင်သင့်ဖြစ်ပါပြီ။',
 
         // Welcome
         'welcome_title': 'မင်္ဂလာပါ!',
