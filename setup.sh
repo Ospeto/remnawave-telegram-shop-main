@@ -5,6 +5,11 @@
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
+# Ensure stdin reads from the terminal (needed when launched via curl | bash)
+if [ ! -t 0 ]; then
+    exec < /dev/tty
+fi
+
 # ──── Colors & Symbols ──────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
