@@ -199,13 +199,23 @@ func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalT
 	}
 	existingUser := &userResp.Response
 
-	// Calculate new traffic limit: accumulate, don't replace
+	// Calculate new traffic limit
 	newTraffic := additionalTraffic
-	if additionalTraffic > 0 && existingUser.TrafficLimitBytes.IsSet() && existingUser.TrafficLimitBytes.Value > 0 {
-		// Both old and new are limited — add them
-		newTraffic = existingUser.TrafficLimitBytes.Value + additionalTraffic
+	existingTraffic := 0
+	if existingUser.TrafficLimitBytes.IsSet() {
+		existingTraffic = existingUser.TrafficLimitBytes.Value
 	}
-	// If either is 0 (unlimited), keep 0
+
+	if existingTraffic == 0 {
+		// Existing key is unlimited — stay unlimited regardless of extension plan
+		newTraffic = 0
+	} else if additionalTraffic == 0 {
+		// Extending with an unlimited plan — upgrade to unlimited
+		newTraffic = 0
+	} else {
+		// Both are limited — accumulate
+		newTraffic = existingTraffic + additionalTraffic
+	}
 
 	return r.updateUser(ctx, existingUser, newTraffic, days)
 }
