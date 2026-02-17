@@ -366,24 +366,21 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 	return &userCreate.(*remapi.UserResponse).Response, nil
 }
 
-// generateUsername creates a systematic subscription key name.
-// Format: {tg_username}_{last4_customerId}_{telegramId}[_{keyIndex}][_{last4_txn}]
-// Examples: john_0042_987654321, john_0042_987654321_2_A1B2
+// generateUsername creates a subscription key name.
+// Format: wavy_{last4_txnID}_{telegramId}
+// Examples: wavy_A1B2_987654321, wavy_0001_987654321
 func generateUsername(tgUsername string, customerId int64, telegramId int64, keyIndex int, txnID string) string {
-	name := sanitizeUsername(tgUsername)
-	if name == "" {
-		name = "user"
+	var mid string
+	if len(txnID) >= 4 {
+		mid = txnID[len(txnID)-4:]
+	} else if len(txnID) > 0 {
+		mid = fmt.Sprintf("%04s", txnID)
+	} else {
+		mid = fmt.Sprintf("%04d", customerId%10000)
 	}
-	suffix := fmt.Sprintf("%04d", customerId%10000)
-	base := fmt.Sprintf("%s_%s_%d", name, suffix, telegramId)
+	base := fmt.Sprintf("wavy_%s_%d", mid, telegramId)
 	if keyIndex > 1 {
 		base = fmt.Sprintf("%s_%d", base, keyIndex)
-	}
-	// Append last 4 characters of transaction ID for traceability
-	if len(txnID) >= 4 {
-		base = fmt.Sprintf("%s_%s", base, txnID[len(txnID)-4:])
-	} else if len(txnID) > 0 {
-		base = fmt.Sprintf("%s_%s", base, txnID)
 	}
 	return base
 }

@@ -102,15 +102,8 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // Filter plans by extending key's type: unlimited keys → unlimited plans, limited → limited
-    const extendingTrafficLimit = extendingKey ? (extendingKey as any).traffic_limit_gb ?? null : null;
-    const filteredPlans = isExtend && extendingTrafficLimit !== null
-        ? plans.filter(p =>
-            extendingTrafficLimit === 0
-                ? p.traffic_limit_gb === 0       // unlimited key → unlimited plans only
-                : p.traffic_limit_gb > 0         // limited key → limited plans only
-        )
-        : plans;
+    // Show all plans — no filtering by traffic type
+    const filteredPlans = plans;
 
     // Apply discount if valid promo
     const displayPlans = filteredPlans.map(p => {
@@ -215,16 +208,7 @@ export function Plans() {
                 </div>
             )}
 
-            {/* Filtered plans notice */}
-            {isExtend && filteredPlans.length < plans.length && (
-                <div className="tip-box tip-box-warning" style={{ fontSize: 11 }}>
-                    <span className="tip-icon">⚠️</span>
-                    <span>{t('help_filtered_plans', {
-                        type: extendingTrafficLimit === 0 ? 'unlimited' : 'limited',
-                        type_desc: extendingTrafficLimit === 0 ? 'an unlimited' : 'a limited'
-                    })}</span>
-                </div>
-            )}
+
 
             {/* Plan cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

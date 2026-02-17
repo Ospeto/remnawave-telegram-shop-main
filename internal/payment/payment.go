@@ -226,7 +226,15 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 		}
 		// Insert into subscription_key table
 		if s.subKeyRepo != nil {
-			label := fmt.Sprintf("WV-%d-%d", purchase.ID, keyIndex)
+			txnSuffix := ""
+			if len(purchase.TransactionID) >= 4 {
+				txnSuffix = purchase.TransactionID[len(purchase.TransactionID)-4:]
+			} else if len(purchase.TransactionID) > 0 {
+				txnSuffix = purchase.TransactionID
+			} else {
+				txnSuffix = fmt.Sprintf("%04d", purchase.ID%10000)
+			}
+			label := fmt.Sprintf("wavy_%s_%d", txnSuffix, customer.TelegramID)
 			_, err := s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
 				CustomerID:      customer.ID,
 				RemnawaveUUID:   remnawaveUser.UUID,
