@@ -3,7 +3,7 @@
 #  Remnawave Telegram Shop — One-Line Installer
 #
 #  Usage:
-#    bash <(curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop/main/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop-main/main/install.sh)
 #
 #  This script will:
 #    1. Install Docker, Docker Compose, git, curl (if missing)
@@ -26,7 +26,7 @@ CROSS="${RED}✘${NC}"
 ARROW="${CYAN}➜${NC}"
 INFO="${YELLOW}ℹ${NC}"
 
-REPO_URL="https://github.com/Ospeto/remnawave-telegram-shop.git"
+REPO_URL="https://github.com/Ospeto/remnawave-telegram-shop-main.git"
 INSTALL_DIR="/opt/remnawave-shop"
 
 # ──── Helpers ───────────────────────────────────────────────
@@ -172,12 +172,9 @@ if [[ -d "$INSTALL_DIR" ]]; then
 else
     print_arrow "Cloning to ${INSTALL_DIR}..."
     git clone "$REPO_URL" "$INSTALL_DIR" || {
-        # Fallback: try alternative repo URL
-        git clone "https://github.com/Ospeto/remnawave-telegram-shop-main.git" "$INSTALL_DIR" || {
-            print_error "Failed to clone repository."
-            print_info  "Check your internet connection and try again."
-            exit 1
-        }
+        print_error "Failed to clone repository."
+        print_info  "Check your internet connection and try again."
+        exit 1
     }
     print_success "Project downloaded"
 fi
