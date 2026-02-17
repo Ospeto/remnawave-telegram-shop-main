@@ -102,14 +102,8 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // Smart plan filtering for extend:
-    // - Active unlimited key → unlimited plans only (prevent abuse by extending with cheap limited plans)
-    // - Limited key or expired key → all plans available
-    const extendingTrafficLimit = extendingKey ? (extendingKey as any).traffic_limit_gb ?? null : null;
-    const isUnlimitedAndActive = extendingTrafficLimit === 0 && extendingKey?.status === 'active';
-    const filteredPlans = isExtend && isUnlimitedAndActive
-        ? plans.filter(p => p.traffic_limit_gb === 0)
-        : plans;
+    // All plans available for both new keys and extending
+    const filteredPlans = plans;
 
     // Apply discount if valid promo
     const displayPlans = filteredPlans.map(p => {
