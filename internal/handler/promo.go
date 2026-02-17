@@ -7,11 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"remnawave-tg-shop-bot/internal/config"
+
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
 
 func (h Handler) AddPromoCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	// Only admin can create promo codes
+	if update.Message.From.ID != config.GetAdminTelegramId() {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Unauthorized: admin only command.",
+		})
+		return
+	}
+
 	// Format: /addpromo <code_name> <discount_percent> <duration_days> <max_uses>
 	args := strings.Fields(update.Message.Text)
 	if len(args) != 5 {

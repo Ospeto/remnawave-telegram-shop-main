@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
-#  Remnawave Telegram Shop — One-Liner Installer
+#  Remnawave Telegram Shop — One-Line Installer
 #
 #  Usage:
-#    bash <(curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop-main/main/install.sh)
+#    bash <(curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop/main/install.sh)
 #
 #  This script will:
 #    1. Install Docker, Docker Compose, git, curl (if missing)
-#    2. Clone the project
+#    2. Clone the project to /opt/remnawave-shop
 #    3. Launch the interactive setup wizard
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
@@ -26,7 +26,7 @@ CROSS="${RED}✘${NC}"
 ARROW="${CYAN}➜${NC}"
 INFO="${YELLOW}ℹ${NC}"
 
-REPO_URL="https://github.com/Ospeto/remnawave-telegram-shop-main.git"
+REPO_URL="https://github.com/Ospeto/remnawave-telegram-shop.git"
 INSTALL_DIR="/opt/remnawave-shop"
 
 # ──── Helpers ───────────────────────────────────────────────
@@ -47,7 +47,8 @@ echo -e "${NC}"
 
 # ──── Must run as root on Linux ─────────────────────────────
 if [[ "$(uname)" != "Darwin" && "$(id -u)" -ne 0 ]]; then
-    print_error "Please run as root: sudo bash <(curl -fsSL ...)"
+    print_error "Please run as root:"
+    echo -e "    ${CYAN}sudo bash <(curl -fsSL <URL>)${NC}"
     exit 1
 fi
 
@@ -75,19 +76,13 @@ install_pkg() {
 echo -e "  ${CYAN}${BOLD}── Step 1/4 — Prerequisites ──${NC}"
 echo ""
 
-# curl
-if ! command -v curl &>/dev/null; then
-    print_info "Installing curl..."
-    install_pkg curl
-fi
-print_success "curl"
-
-# git
-if ! command -v git &>/dev/null; then
-    print_info "Installing git..."
-    install_pkg git
-fi
-print_success "git"
+for dep in curl git; do
+    if ! command -v "$dep" &>/dev/null; then
+        print_info "Installing ${dep}..."
+        install_pkg "$dep"
+    fi
+    print_success "$dep"
+done
 
 # ──── Step 2: Docker ────────────────────────────────────────
 echo ""
@@ -112,7 +107,6 @@ if ! command -v docker &>/dev/null; then
     systemctl start docker  2>/dev/null || true
     systemctl enable docker 2>/dev/null || true
 
-    # Add invoking user to docker group
     if [[ -n "${SUDO_USER:-}" ]]; then
         usermod -aG docker "$SUDO_USER" 2>/dev/null || true
     fi
@@ -168,14 +162,22 @@ if [[ -d "$INSTALL_DIR" ]]; then
         (cd "$INSTALL_DIR" && git fetch && git reset --hard origin/main) || {
             print_error "git update failed."
         }
+        # Restore .env
+        if [[ -f "$INSTALL_DIR/.env.pre-update" ]]; then
+            cp "$INSTALL_DIR/.env.pre-update" "$INSTALL_DIR/.env"
+            print_success "Restored .env from backup"
+        fi
         print_success "Updated to latest version"
     fi
 else
     print_arrow "Cloning to ${INSTALL_DIR}..."
     git clone "$REPO_URL" "$INSTALL_DIR" || {
-        print_error "Failed to clone repository."
-        print_info  "Check your internet connection and try again."
-        exit 1
+        # Fallback: try alternative repo URL
+        git clone "https://github.com/Ospeto/remnawave-telegram-shop-main.git" "$INSTALL_DIR" || {
+            print_error "Failed to clone repository."
+            print_info  "Check your internet connection and try again."
+            exit 1
+        }
     }
     print_success "Project downloaded"
 fi
@@ -190,4 +192,5 @@ echo ""
 sleep 1
 
 cd "$INSTALL_DIR"
+chmod +x setup.sh
 exec bash setup.sh

@@ -85,8 +85,34 @@ func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (i
 	return id, nil
 }
 
+var purchaseColumns = []string{
+	"id", "amount", "customer_id", "created_at", "month",
+	"paid_at", "currency", "expire_at", "status", "invoice_type",
+	"crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id",
+	"traffic_limit_gb", "days", "extend_key_id",
+	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id",
+}
+
+func scanPurchase(row pgx.Row) (*Purchase, error) {
+	p := &Purchase{}
+	err := row.Scan(
+		&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
+		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
+		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
+		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to scan purchase: %w", err)
+	}
+	return p, nil
+}
+
 func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, invoiceType InvoiceType, status PurchaseStatus) (*[]Purchase, error) {
-	buildSelect := sq.Select("*").
+	buildSelect := sq.Select(purchaseColumns...).
 		From("purchase").
 		Where(sq.And{
 			sq.Eq{"invoice_type": invoiceType},
@@ -107,35 +133,18 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 
 	purchases := []Purchase{}
 	for rows.Next() {
-		purchase := Purchase{}
+		p := Purchase{}
 		err = rows.Scan(
-			&purchase.ID,
-			&purchase.Amount,
-			&purchase.CustomerID,
-			&purchase.CreatedAt,
-			&purchase.Month,
-			&purchase.PaidAt,
-			&purchase.Currency,
-			&purchase.ExpireAt,
-			&purchase.Status,
-			&purchase.InvoiceType,
-			&purchase.CryptoInvoiceID,
-			&purchase.CryptoInvoiceLink,
-			&purchase.YookasaURL,
-			&purchase.TrafficLimitGB,
-			&purchase.Days,
-			&purchase.ExtendKeyID,
-			&purchase.PlanLabel,
-			&purchase.PaymentMethod,
-			&purchase.PaymentPhone,
-			&purchase.VerifiedAt,
-			&purchase.TransactionID,
-			&purchase.PromoCodeID,
+			&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
+			&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
+			&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
+			&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
+			&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan purchase: %w", err)
 		}
-		purchases = append(purchases, purchase)
+		purchases = append(purchases, p)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -146,7 +155,7 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 }
 
 func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase, error) {
-	buildSelect := sq.Select("*").
+	buildSelect := sq.Select(purchaseColumns...).
 		From("purchase").
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
@@ -155,42 +164,16 @@ func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase
 	if err != nil {
 		return nil, err
 	}
-	purchase := &Purchase{}
 
-	err = cr.pool.QueryRow(ctx, sql, args...).Scan(
-		&purchase.ID,
-		&purchase.Amount,
-		&purchase.CustomerID,
-		&purchase.CreatedAt,
-		&purchase.Month,
-		&purchase.PaidAt,
-		&purchase.Currency,
-		&purchase.ExpireAt,
-		&purchase.Status,
-		&purchase.InvoiceType,
-		&purchase.CryptoInvoiceID,
-		&purchase.CryptoInvoiceLink,
-		&purchase.YookasaURL,
-		&purchase.YookasaID,
-		&purchase.TrafficLimitGB,
-		&purchase.Days,
-		&purchase.ExtendKeyID,
-		&purchase.PlanLabel,
-		&purchase.PaymentMethod,
-		&purchase.PaymentPhone,
-		&purchase.VerifiedAt,
-		&purchase.TransactionID,
-		&purchase.PromoCodeID,
-	)
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
 
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to query purchase: %w", err)
-	}
-
-	return purchase, nil
+// allowedPurchaseFields is a whitelist of columns that can be updated via UpdateFields.
+var allowedPurchaseFields = map[string]bool{
+	"status": true, "paid_at": true, "crypto_invoice_url": true,
+	"crypto_invoice_id": true, "plan_label": true, "payment_phone": true,
+	"extend_key_id": true, "transaction_id": true, "payment_method": true,
+	"verified_at": true,
 }
 
 func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates map[string]interface{}) error {
@@ -203,6 +186,9 @@ func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates
 		Where(sq.Eq{"id": id})
 
 	for field, value := range updates {
+		if !allowedPurchaseFields[field] {
+			return fmt.Errorf("disallowed field in purchase update: %s", field)
+		}
 		buildUpdate = buildUpdate.Set(field, value)
 	}
 
@@ -213,12 +199,12 @@ func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates
 
 	result, err := p.pool.Exec(ctx, sql, args...)
 	if err != nil {
-		return fmt.Errorf("failed to update customer: %w", err)
+		return fmt.Errorf("failed to update purchase: %w", err)
 	}
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		return fmt.Errorf("no customer found with id: %d", id)
+		return fmt.Errorf("no purchase found with id: %d", id)
 	}
 
 	return nil
@@ -236,7 +222,7 @@ func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) 
 }
 
 func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
-	query := sq.Select("*").
+	query := sq.Select(purchaseColumns...).
 		From("purchase").
 		Where(sq.And{
 			sq.Eq{"customer_id": customerID},
@@ -252,22 +238,7 @@ func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 		return nil, fmt.Errorf("build query: %w", err)
 	}
 
-	p := &Purchase{}
-	err = pr.pool.QueryRow(ctx, sql, args...).Scan(
-		&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
-		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
-		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
-		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
-		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("query purchase: %w", err)
-	}
-
-	return p, nil
+	return scanPurchase(pr.pool.QueryRow(ctx, sql, args...))
 }
 
 // RevenueSummaryRow represents a single row from the revenue_daily view.

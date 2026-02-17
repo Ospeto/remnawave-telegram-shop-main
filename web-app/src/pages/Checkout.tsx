@@ -65,7 +65,7 @@ export function Checkout() {
             .then(setPurchase)
             .catch(err => setError(err.message))
             .finally(() => setLoading(false));
-    }, [planIndex, initData, extendKeyId]);
+    }, [planIndex, initData, extendKeyId, promoCode]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];

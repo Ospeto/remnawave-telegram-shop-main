@@ -927,130 +927,31 @@ do_edit_pricing() {
 do_setup_miniapp() {
     print_header "📱 Mini App Setup"
     echo ""
-    print_info  "This will set up the Mini App inside Telegram."
-    print_info  "Everything will be done automatically for you."
+    print_info  "The Mini App is built automatically inside Docker."
+    print_info  "You only need to set your public HTTPS URL."
     echo ""
 
-    # ── Step 1: Ensure Node.js is installed ─────────────────
-    print_section "Step 1/4 — Checking Node.js"
-
-    if command -v node &>/dev/null; then
-        local node_ver
-        node_ver=$(node -v)
-        print_success "Node.js is already installed: $node_ver"
-    else
-        print_info "Node.js is not installed. Installing automatically..."
-        echo ""
-
-        if [[ "$(uname)" == "Darwin" ]]; then
-            if command -v brew &>/dev/null; then
-                print_arrow "Installing via Homebrew..."
-                brew install node || {
-                    print_error "Failed to install Node.js via Homebrew."
-                    print_info  "Please install manually: https://nodejs.org"
-                    return 1
-                }
-            else
-                print_error "Homebrew not found. Please install Node.js manually:"
-                print_info  "Visit https://nodejs.org and download the installer."
-                return 1
-            fi
-        elif [[ -f /etc/debian_version ]]; then
-            print_arrow "Installing Node.js 20.x via NodeSource..."
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && \
-            sudo apt-get install -y nodejs || {
-                print_error "Failed to install Node.js."
-                print_info  "Please install manually: https://nodejs.org"
-                return 1
-            }
-        elif [[ -f /etc/redhat-release ]]; then
-            print_arrow "Installing Node.js 20.x via NodeSource..."
-            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - && \
-            sudo yum install -y nodejs || {
-                print_error "Failed to install Node.js."
-                print_info  "Please install manually: https://nodejs.org"
-                return 1
-            }
-        else
-            print_error "Could not detect your OS. Please install Node.js manually:"
-            print_info  "Visit https://nodejs.org"
-            return 1
-        fi
-
-        if command -v node &>/dev/null; then
-            print_success "Node.js installed successfully: $(node -v)"
-        else
-            print_error "Node.js installation failed. Please install manually."
-            return 1
-        fi
-    fi
-
-    if ! command -v npm &>/dev/null; then
-        print_error "npm not found (should come with Node.js). Please reinstall Node.js."
-        return 1
-    fi
-    print_success "npm found: $(npm -v)"
-
-    # ── Step 2: Install dependencies & build ────────────────
-    print_section "Step 2/4 — Building Mini App"
-
-    if [[ ! -d "${SCRIPT_DIR}/web-app" ]]; then
-        print_error "web-app/ directory not found!"
-        print_info  "Make sure you downloaded the complete project."
-        return 1
-    fi
-
-    print_arrow "Clean install of packages..."
-    (cd "${SCRIPT_DIR}/web-app" && rm -rf node_modules package-lock.json && npm cache clean --force && npm install --silent) || {
-        print_error "npm install failed. Check errors above."
-        return 1
-    }
-    print_success "Packages installed."
-
-    print_arrow "Building frontend..."
-    (cd "${SCRIPT_DIR}/web-app" && npm run build) || {
-        print_error "Build failed. Check errors above."
-        return 1
-    }
-    print_success "Mini App built successfully → web-app/dist/"
-
-    # ── Step 3: Configure MINI_APP_URL ──────────────────────
-    print_section "Step 3/4 — Setting Mini App URL"
-
-    local public_ip=""
-    public_ip=$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null || \
-                curl -s --connect-timeout 5 https://ifconfig.me 2>/dev/null || \
-                echo "")
-
+    # ── Detect domain / IP ──────────────────────────────────
     local current_url=""
     if [[ -f "$ENV_FILE" ]]; then
         current_url=$(grep -E '^MINI_APP_URL=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     fi
 
-    echo ""
-    print_info  "The Mini App needs a public HTTPS URL to work inside Telegram."
-    echo ""
-    echo -e "  ${CYAN}${BOLD}How to get a URL (pick one):${NC}"
-    echo ""
-    echo -e "    ${GREEN}Option A${NC} — You already have a domain with SSL"
-    echo -e "             ${DIM}Example: https://shop.yourdomain.com${NC}"
-    echo ""
-    echo -e "    ${GREEN}Option B${NC} — Use Cloudflare Tunnel ${DIM}(free, no domain needed)${NC}"
-    echo -e "             ${DIM}Run:  cloudflared tunnel --url http://localhost:8080${NC}"
-    echo -e "             ${DIM}Copy the https://xxx.trycloudflare.com URL${NC}"
-    echo ""
-    echo -e "    ${GREEN}Option C${NC} — Use ngrok ${DIM}(free, temporary)${NC}"
-    echo -e "             ${DIM}Run:  ngrok http 8080${NC}"
-    echo -e "             ${DIM}Copy the https://xxx.ngrok-free.app URL${NC}"
-    echo ""
-    if [[ -n "$public_ip" ]]; then
-        print_info  "Your server's public IP: ${public_ip}"
+    local domain=""
+    if [[ -f "$ENV_FILE" ]]; then
+        domain=$(grep -E '^DOMAIN_NAME=' "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true)
     fi
+
+    echo -e "  ${CYAN}${BOLD}The Mini App URL should be your domain with HTTPS:${NC}"
     echo ""
+    if [[ -n "$domain" ]]; then
+        echo -e "    ${GREEN}Suggested${NC}: https://${domain}"
+        echo ""
+    fi
 
     local suggested="${current_url}"
-    if [[ -z "$suggested" && -n "$public_ip" ]]; then
-        suggested="https://${public_ip}"
+    if [[ -z "$suggested" && -n "$domain" ]]; then
+        suggested="https://${domain}"
     fi
 
     declare -A CFG
@@ -1078,15 +979,13 @@ do_setup_miniapp() {
             print_success "MINI_APP_URL set to: ${CFG[miniapp_url]}"
         else
             print_error ".env file not found. Run Fresh Install first (option 1)."
-            print_info  "Your URL: ${CFG[miniapp_url]} — save it for later!"
             return 1
         fi
     else
         print_info "Skipped. You can set MINI_APP_URL in .env later."
     fi
 
-    # ── Step 4: Auto-restart services ───────────────────────
-    print_section "Step 4/4 — Restarting Services"
+    # ── Restart services ────────────────────────────────────
     echo ""
     echo -ne "  ${ARROW}  Restart services now to apply changes? ${DIM}(y/n)${NC} [y]: "
     local restart

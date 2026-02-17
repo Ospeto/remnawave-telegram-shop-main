@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	sq "github.com/Masterminds/squirrel"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"log/slog"
 	"remnawave-tg-shop-bot/utils"
 	"time"
+
+	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v4"
+	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 type CustomerRepository struct {
@@ -165,6 +166,13 @@ func (cr *CustomerRepository) FindOrCreate(ctx context.Context, customer *Custom
 	return &result, nil
 }
 
+// allowedCustomerFields is a whitelist of columns that can be updated via UpdateFields.
+var allowedCustomerFields = map[string]bool{
+	"subscription_link": true,
+	"expire_at":         true,
+	"language":          true,
+}
+
 func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, updates map[string]interface{}) error {
 	if len(updates) == 0 {
 		return nil
@@ -175,6 +183,9 @@ func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, update
 		Where(sq.Eq{"id": id})
 
 	for field, value := range updates {
+		if !allowedCustomerFields[field] {
+			return fmt.Errorf("disallowed field in customer update: %s", field)
+		}
 		buildUpdate = buildUpdate.Set(field, value)
 	}
 
@@ -183,16 +194,8 @@ func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, update
 		return fmt.Errorf("failed to build update query: %w", err)
 	}
 
-	tx, err := cr.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
 	result, err := cr.pool.Exec(ctx, sql, args...)
 	if err != nil {
-		if err := tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("failed to rollback transaction: %w", err)
-		}
 		return fmt.Errorf("failed to update customer: %w", err)
 	}
 
@@ -201,9 +204,6 @@ func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, update
 		return fmt.Errorf("no customer found with id: %s", utils.MaskHalfInt64(id))
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
 	return nil
 }
 
@@ -267,11 +267,9 @@ func (cr *CustomerRepository) CreateBatch(ctx context.Context, customers []Custo
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	_, err = cr.pool.Exec(ctx, sqlStr, args...)
+	_, err = tx.Exec(ctx, sqlStr, args...)
 	if err != nil {
-		if err := tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("failed to rollback transaction: %w", err)
-		}
+		_ = tx.Rollback(ctx)
 		return fmt.Errorf("failed to execute batch insert: %w", err)
 	}
 
@@ -300,11 +298,9 @@ func (cr *CustomerRepository) UpdateBatch(ctx context.Context, customers []Custo
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	_, err = cr.pool.Exec(ctx, query, args...)
+	_, err = tx.Exec(ctx, query, args...)
 	if err != nil {
-		if err := tx.Rollback(ctx); err != nil {
-			return fmt.Errorf("failed to rollback transaction: %w", err)
-		}
+		_ = tx.Rollback(ctx)
 		return fmt.Errorf("failed to execute batch update: %w", err)
 	}
 

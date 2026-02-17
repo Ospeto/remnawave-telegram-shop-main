@@ -130,8 +130,8 @@ func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte
 	}
 
 	url := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
-		c.model, c.apiKey,
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent",
+		c.model,
 	)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
@@ -139,6 +139,7 @@ func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

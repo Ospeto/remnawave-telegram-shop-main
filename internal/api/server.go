@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
@@ -33,7 +34,10 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return corsMiddleware(authMiddleware(next))
+		return corsMiddleware(maxBodySize(authMiddleware(next), 1<<20)) // 1MB default
+	}
+	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
+		return corsMiddleware(maxBodySize(authMiddleware(adminMiddleware(next)), 1<<20))
 	}
 	public := func(next http.HandlerFunc) http.HandlerFunc {
 		return corsMiddleware(next)
@@ -44,7 +48,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
 	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
-	mux.HandleFunc("/api/revenue", withAuth(handler.GetRevenueSummary))
+	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
@@ -164,16 +168,27 @@ function showCopied() {
 </body></html>`, target, target, subURL)
 	})
 
-	// Serve React Frontend (SPA support)
+	// Serve React Frontend (SPA support — serves index.html for unknown paths)
 	fs := http.FileServer(http.Dir("./web-app/dist"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fs.ServeHTTP(w, r)
+		// If the requested file exists, serve it directly
+		path := "./web-app/dist" + r.URL.Path
+		if _, err := os.Stat(path); err == nil {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		// Otherwise serve index.html for SPA routing
+		http.ServeFile(w, r, "./web-app/dist/index.html")
 	})
 }
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := "*"
+		if domain := os.Getenv("DOMAIN_NAME"); domain != "" {
+			origin = "https://" + domain
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 
@@ -182,6 +197,28 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		next(w, r)
+	}
+}
+
+// maxBodySize limits the request body size.
+func maxBodySize(next http.HandlerFunc, maxBytes int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+		}
+		next(w, r)
+	}
+}
+
+// adminMiddleware checks if the authenticated user is the admin.
+func adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+		if !ok || telegramID != config.GetAdminTelegramId() {
+			http.Error(w, "Forbidden: admin only", http.StatusForbidden)
+			return
+		}
 		next(w, r)
 	}
 }

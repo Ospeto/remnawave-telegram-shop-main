@@ -2,10 +2,12 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
@@ -70,7 +72,10 @@ func (r *PromoCodeRepository) FindByCode(ctx context.Context, code string) (*Pro
 		&promo.CreatedAt,
 	)
 	if err != nil {
-		return nil, err // Caller checks pgx.ErrNoRows if needed
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to find promo code: %w", err)
 	}
 
 	return &promo, nil
@@ -120,4 +125,18 @@ func (r *PromoCodeRepository) IncrementUsage(ctx context.Context, id int64) erro
 		return fmt.Errorf("failed to execute update query: %w", err)
 	}
 	return nil
+}
+
+// IncrementUsageAtomic atomically increments usage only if within limits and not expired.
+// Returns true if a slot was claimed, false if the code is exhausted or expired.
+func (r *PromoCodeRepository) IncrementUsageAtomic(ctx context.Context, id int64) (bool, error) {
+	query := `UPDATE promo_codes SET used_count = used_count + 1
+		WHERE id = $1 AND used_count < max_uses AND valid_until > NOW()`
+
+	result, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to increment promo usage: %w", err)
+	}
+
+	return result.RowsAffected() > 0, nil
 }
