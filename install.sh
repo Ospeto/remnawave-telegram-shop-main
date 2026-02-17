@@ -3,7 +3,7 @@
 #  Remnawave Telegram Shop — One-Line Installer
 #
 #  Usage:
-#    bash <(curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop-main/main/install.sh)
+#    curl -fsSL https://raw.githubusercontent.com/Ospeto/remnawave-telegram-shop-main/main/install.sh | sudo bash
 #
 #  This script will:
 #    1. Install Docker, Docker Compose, git, curl (if missing)
@@ -11,6 +11,11 @@
 #    3. Launch the interactive setup wizard
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
+
+# Reopen stdin from terminal so interactive prompts work when piped from curl
+if [ ! -t 0 ]; then
+    exec < /dev/tty
+fi
 
 # ──── Colors ────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -190,4 +195,5 @@ sleep 1
 
 cd "$INSTALL_DIR"
 chmod +x setup.sh
-exec bash setup.sh
+# Ensure stdin comes from terminal for the interactive wizard
+exec bash setup.sh < /dev/tty
