@@ -81,7 +81,7 @@ export function Home() {
             if (!res.ok) throw new Error(`${res.status}`);
             // Reload to show the new key
             window.location.reload();
-        } catch {
+        } catch (err) {
             setTrialError(t('trial_error'));
         } finally {
             setTrialLoading(false);
