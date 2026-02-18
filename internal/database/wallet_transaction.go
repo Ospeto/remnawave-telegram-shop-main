@@ -18,13 +18,13 @@ const (
 )
 
 type WalletTransaction struct {
-	ID          int64                 `db:"id"`
-	CustomerID  int64                 `db:"customer_id"`
-	Amount      float64               `db:"amount"`
-	Type        WalletTransactionType `db:"type"`
-	PurchaseID  *int64                `db:"purchase_id"`
-	Description string                `db:"description"`
-	CreatedAt   time.Time             `db:"created_at"`
+	ID          int64                 `db:"id" json:"id"`
+	CustomerID  int64                 `db:"customer_id" json:"customer_id"`
+	Amount      float64               `db:"amount" json:"amount"`
+	Type        WalletTransactionType `db:"type" json:"type"`
+	PurchaseID  *int64                `db:"purchase_id" json:"purchase_id"`
+	Description string                `db:"description" json:"description"`
+	CreatedAt   time.Time             `db:"created_at" json:"created_at"`
 }
 
 type WalletTransactionRepository struct {
