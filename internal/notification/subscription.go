@@ -28,7 +28,7 @@ func NewSubscriptionService(customerRepository customerRepository,
 	telegramBot *bot.Bot,
 	tm *translation.Manager) *SubscriptionService {
 	svc := &SubscriptionService{customerRepository: customerRepository, telegramBot: telegramBot, tm: tm}
-	svc.notify = svc.sendNotification
+	svc.notify = svc.SendNotification
 	return svc
 }
 func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
@@ -48,7 +48,7 @@ func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
 
 		send := s.notify
 		if send == nil {
-			send = s.sendNotification
+			send = s.SendNotification
 		}
 
 		err := send(ctx, customer)
@@ -79,7 +79,7 @@ func (s *SubscriptionService) getCustomersWithExpiringSubscriptions() (*[]databa
 	return dbCustomers, nil
 }
 
-func (s *SubscriptionService) sendNotification(ctx context.Context, customer database.Customer) error {
+func (s *SubscriptionService) SendNotification(ctx context.Context, customer database.Customer) error {
 	expireDate := customer.ExpireAt.Format("02.01.2006")
 
 	messageText := fmt.Sprintf(

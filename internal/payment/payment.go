@@ -21,6 +21,8 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
+const TestTransactionID = "01004063070995016447"
+
 type PaymentService struct {
 	purchaseRepository  *database.PurchaseRepository
 	remnawaveClient     *remnawave.Client
@@ -595,7 +597,7 @@ type VerificationResult struct {
 	ReasonKey string // translation key
 }
 
-func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
+func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string, testMode bool) (*VerificationResult, error) {
 	if s.geminiClient == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
@@ -634,6 +636,44 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 	if strings.TrimSpace(info.TransactionID) == "" {
 		return &VerificationResult{Success: false, Reason: "No transaction ID found", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
+
+	// === TEST MODE BYPASS ===
+	if testMode && strings.TrimSpace(info.TransactionID) == TestTransactionID {
+		slog.Info("Test Mode: Magic Transaction ID matched. Bypassing checks.", "purchase_id", purchaseID)
+		// Skip duplicate check, amount check, etc.
+		// Record verification as "TEST_MODE_BYPASS"
+		_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
+			PurchaseID:    purchaseID,
+			TransactionID: info.TransactionID,
+			Provider:      info.Provider,
+			PhoneNumber:   info.PhoneNumber,
+			Amount:        info.Amount,
+			Note:          info.Note + " [TEST_MODE]",
+			Verified:      true,
+		})
+		if err != nil {
+			slog.Error("Error recording mobile payment (test mode)", "error", err)
+			return nil, err
+		}
+
+		// Update purchase fields
+		now := time.Now()
+		_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
+			"transaction_id": info.TransactionID,
+			"payment_method": info.Provider + " [TEST]",
+			"payment_phone":  info.PhoneNumber,
+			"verified_at":    now,
+		})
+
+		err = s.ProcessPurchaseById(ctx, purchaseID)
+		if err != nil {
+			slog.Error("Error processing verified mobile purchase (test mode)", "error", err)
+			return nil, err
+		}
+
+		return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
+	}
+	// ========================
 
 	// 2. Check for duplicate transaction ID
 	exists, err := s.mobilePaymentRepo.ExistsByTransactionID(ctx, info.TransactionID)

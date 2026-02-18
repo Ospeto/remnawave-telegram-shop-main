@@ -134,7 +134,7 @@ func main() {
 	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
 
 	mobilePayCache := cache.NewCache(1 * time.Hour)
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, referralRepository, promoCodeRepository, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, referralRepository, promoCodeRepository, messageCache, mobilePayCache)
 
 	me, err := b.GetMe(ctx)
 	if err != nil {
@@ -175,6 +175,8 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/transactions", bot.MatchTypePrefix, h.TransactionsCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
 
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackReferral, bot.MatchTypeExact, h.ReferralCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackBuy, bot.MatchTypeExact, h.BuyCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)

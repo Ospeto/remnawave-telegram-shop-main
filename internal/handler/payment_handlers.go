@@ -294,7 +294,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	verifyCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	result, err := h.paymentService.VerifyMobilePayment(verifyCtx, int64(purchaseID), imageBytes, mimeType)
+	result, err := h.paymentService.VerifyMobilePayment(verifyCtx, int64(purchaseID), imageBytes, mimeType, h.TestMode)
 	if err != nil {
 		slog.Error("Error verifying mobile payment", "error", err)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
