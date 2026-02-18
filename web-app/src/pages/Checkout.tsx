@@ -395,29 +395,41 @@ export function Checkout() {
                             onClick={() => {
                                 const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
                                 const isAndroid = /android/i.test(userAgent);
-                                const isIOS = /iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream;
+                                const isTelegramWebView = /Telegram/i.test(userAgent) || tg !== null;
 
-                                if (isAndroid) {
-                                    // Android: Use intent with browser fallback (handled by system)
-                                    window.location.href = m.android;
-                                } else if (isIOS) {
-                                    // iOS: Try custom scheme. Safe to try, if not installed nothing happens or Safari shows error.
-                                    // window.open often blocked or stays in iframe. location.href is better for app switch.
-                                    window.location.href = m.ios;
-
-                                    // Fallback UI helper (optional):
-                                    // We could set a timeout to show a "Download app" hint or fallback to web, 
-                                    // but automatic fallback on iOS webview is tricky. 
-                                    // Ideally, let's try to open web if they stay on page? 
-                                    // For now, sticking to strict app switch request.
+                                // Store current time to detect if app opened
+                                const startTime = Date.now();
+                                const deepLinkUrl = isAndroid ? m.android : m.ios;
+                                
+                                // Try to open the app using the best method for the platform
+                                if (isTelegramWebView && tg?.openLink) {
+                                    // In Telegram WebView, use openLink for external URLs
+                                    // This works better for web fallbacks
+                                    tg.openLink(deepLinkUrl);
                                 } else {
-                                    // Desktop/Other: Open Web
-                                    if (tg?.openLink) {
-                                        tg.openLink(m.web);
-                                    } else {
-                                        window.open(m.web, '_blank');
-                                    }
+                                    // Standard web approach
+                                    window.location.href = deepLinkUrl;
                                 }
+
+                                // Fallback: if app didn't open within 2.5 seconds, show options
+                                setTimeout(() => {
+                                    const timeElapsed = Date.now() - startTime;
+                                    // If we're still on the page after 2.5 seconds, app likely isn't installed
+                                    if (document.visibilityState === 'visible' && timeElapsed >= 2400) {
+                                        // Show confirmation dialog for fallback
+                                        const shouldOpenWeb = confirm(
+                                            `${m.name} app doesn't seem to be installed or couldn't open.\n\n` +
+                                            `Open ${m.name} website in browser instead?`
+                                        );
+                                        if (shouldOpenWeb) {
+                                            if (tg?.openLink) {
+                                                tg.openLink(m.web);
+                                            } else {
+                                                window.open(m.web, '_blank');
+                                            }
+                                        }
+                                    }
+                                }, 2500);
                             }}
                         >
                             {m.name} ↗
