@@ -80,8 +80,9 @@ func (s *WalletService) PurchaseWithBalance(ctx context.Context, customerID int6
 	}
 
 	// 2. Create Instant Payment
-	// PaymentService.CreateWalletPayment handles atomic deduction and recording.
-	_, err = s.paymentService.CreateWalletPayment(ctx, planPrice, days, trafficGB, customer, promoCode)
+	// We delegate to PaymentService.CreatePurchase which handles atomic deduction (via DeductBalance)
+	// and transaction recording.
+	_, _, err = s.paymentService.CreatePurchase(ctx, planPrice, days, trafficGB, customer, database.InvoiceTypeWalletPayment, promoCode)
 	if err != nil {
 		return err
 	}

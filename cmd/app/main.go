@@ -198,9 +198,13 @@ func main() {
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService)
 
+	// Rate Limiter: 10 req/s, burst 20
+	// This prevents abuse while allowing normal usage patterns.
+	limiter := api.NewRateLimiter(10, 20)
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.GetHealthCheckPort()),
-		Handler: mux,
+		Handler: limiter.Middleware(mux),
 	}
 	go func() {
 		log.Printf("Server listening on %s", srv.Addr)

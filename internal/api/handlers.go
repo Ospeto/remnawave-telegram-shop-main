@@ -751,6 +751,21 @@ func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate duration if enabled
+	if req.Enabled {
+		isValidDuration := false
+		for _, plan := range config.Plans() {
+			if plan.Days == req.Duration {
+				isValidDuration = true
+				break
+			}
+		}
+		if !isValidDuration {
+			http.Error(w, "Invalid auto-renew duration", http.StatusBadRequest)
+			return
+		}
+	}
+
 	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
 		http.Error(w, "Failed to update auto-renew: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -13,6 +13,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/text v0.31.0
+	golang.org/x/time v0.14.0
 )
 
 require (

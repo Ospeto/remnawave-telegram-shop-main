@@ -45,13 +45,18 @@ export function Checkout() {
 
     const purchaseCreated = useRef(false);
 
+    const idempotencyKey = useRef(crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2));
+
     const amountParam = searchParams.get('amount');
 
     useEffect(() => {
         if (!planIndex || !initData || purchaseCreated.current) return;
         purchaseCreated.current = true;
 
-        const body: any = { plan_index: parseInt(planIndex) };
+        const body: any = {
+            plan_index: parseInt(planIndex),
+            idempotency_key: idempotencyKey.current
+        };
         if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
         if (promoCode) body.promo_code = promoCode;
         if (isWalletTopup) {
