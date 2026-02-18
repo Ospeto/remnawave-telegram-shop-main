@@ -257,12 +257,29 @@ export function Checkout() {
                 </div>
 
                 {/* Accepted methods badges */}
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 12 }}>
-                    {['KPay', 'Wave', 'AYA Pay'].map(m => (
-                        <span key={m} style={{
-                            padding: '4px 12px', borderRadius: 20, fontSize: 12,
-                            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.08)'
-                        }}>{m}</span>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12 }}>
+                    {[
+                        { name: 'KPay', scheme: 'kbzpay://', color: '#0057b8' },
+                        { name: 'Wave', scheme: 'wavemoney://', color: '#ffd100', txColor: '#000' },
+                        { name: 'AYA Pay', scheme: 'ayapay://', color: '#ed1c24' }
+                    ].map(m => (
+                        <a
+                            key={m.name}
+                            href={m.scheme}
+                            style={{
+                                padding: '6px 14px', borderRadius: 20, fontSize: 12,
+                                background: m.color, color: m.txColor || '#fff',
+                                textDecoration: 'none', fontWeight: 700,
+                                opacity: 0.9, transition: 'transform 0.1s',
+                                border: 'none', cursor: 'pointer'
+                            }}
+                            onClick={() => {
+                                // Try to open deep link logic
+                                setTimeout(() => window.location.href = m.scheme, 100);
+                            }}
+                        >
+                            {m.name} ↗
+                        </a>
                     ))}
                 </div>
             </div>
