@@ -29,8 +29,8 @@ const (
 	usernameKey   contextKey = "username"
 )
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -51,6 +51,11 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
+
+	// Wallet endpoints
+	mux.HandleFunc("/api/wallet", withAuth(handler.GetWallet))
+	mux.HandleFunc("/api/wallet/history", withAuth(handler.GetWalletHistory))
+	mux.HandleFunc("/api/wallet/autorenew", withAuth(handler.UpdateAutoRenew))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {

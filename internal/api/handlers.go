@@ -50,9 +50,10 @@ type PlanResponse struct {
 }
 
 type CreatePurchaseRequest struct {
-	PlanIndex   int    `json:"plan_index"`
-	ExtendKeyID *int64 `json:"extend_key_id,omitempty"`
-	PromoCode   string `json:"promo_code,omitempty"`
+	PlanIndex     int    `json:"plan_index"`
+	ExtendKeyID   *int64 `json:"extend_key_id,omitempty"`
+	PromoCode     string `json:"promo_code,omitempty"`
+	PaymentMethod string `json:"payment_method,omitempty"`
 }
 
 type CreatePurchaseResponse struct {
@@ -62,6 +63,16 @@ type CreatePurchaseResponse struct {
 	Currency     string `json:"currency"`
 	Instructions string `json:"instructions"`
 	InvoiceType  string `json:"invoice_type"`
+}
+
+// WalletServiceInterface defines the interface for wallet operations
+type WalletServiceInterface interface {
+	GetBalance(ctx context.Context, customerID int64) (float64, error)
+	GetTransactionHistory(ctx context.Context, customerID int64, limit int) ([]database.WalletTransaction, error)
+	HasSufficientBalance(ctx context.Context, customerID int64, amount float64) (bool, error)
+	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
+	SetAutoRenew(ctx context.Context, customerID int64, enabled bool, duration int) error
+	GetAutoRenewStatus(ctx context.Context, customerID int64) (enabled bool, duration int, err error)
 }
 
 type UploadScreenshotResponse struct {
@@ -85,6 +96,7 @@ type APIHandler struct {
 	translation         *translation.Manager
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
+	walletService       WalletServiceInterface
 }
 
 func NewAPIHandler(
@@ -94,6 +106,7 @@ func NewAPIHandler(
 	tm *translation.Manager,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
+	walletService WalletServiceInterface,
 ) *APIHandler {
 	return &APIHandler{
 		customerRepo:        customerRepo,
@@ -102,6 +115,7 @@ func NewAPIHandler(
 		translation:         tm,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
+		walletService:       walletService,
 	}
 }
 
@@ -181,6 +195,14 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	invoiceType := database.InvoiceTypeMobileBanking
+	if req.PaymentMethod == "crypto" {
+		invoiceType = database.InvoiceTypeCrypto
+	} else if req.PaymentMethod == "wallet" {
+		invoiceType = database.InvoiceTypeWalletPayment
+	} else if req.PaymentMethod == "wallet_topup" {
+		invoiceType = database.InvoiceTypeWalletTopUp
+	}
+
 	ctxWithUsername := context.WithValue(r.Context(), "username", username)
 
 	// Delegate to PaymentService with Promo Code
@@ -587,4 +609,131 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)
+}
+
+// --- Wallet Handlers ---
+
+func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	balance, err := h.walletService.GetBalance(r.Context(), customer.ID)
+	if err != nil {
+		http.Error(w, "Failed to get balance: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	autoRenew, autoRenewDuration, err := h.walletService.GetAutoRenewStatus(r.Context(), customer.ID)
+	if err != nil {
+		http.Error(w, "Failed to get auto-renew status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"balance":             balance,
+		"currency":            config.Currency(),
+		"auto_renew":          autoRenew,
+		"auto_renew_duration": autoRenewDuration,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) GetWalletHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 20
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	history, err := h.walletService.GetTransactionHistory(r.Context(), customer.ID, limit)
+	if err != nil {
+		http.Error(w, "Failed to get transaction history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
+func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Enabled  bool `json:"enabled"`
+		Duration int  `json:"duration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
+		http.Error(w, "Failed to update auto-renew: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }

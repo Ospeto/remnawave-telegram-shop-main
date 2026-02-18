@@ -18,6 +18,7 @@ import (
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/remnawave"
+	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
@@ -64,6 +65,10 @@ func main() {
 	referralRepository := database.NewReferralRepository(pool)
 	promoCodeRepository := database.NewPromoCodeRepository(pool)
 	subKeyRepo := database.NewSubscriptionKeyRepository(pool)
+	walletTxRepo := database.NewWalletTransactionRepository(pool)
+
+	// Initialize repositories first
+	// walletTxRepo is already Init at line 68
 
 	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
 	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
@@ -82,7 +87,33 @@ func main() {
 		panic(err)
 	}
 
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepository)
+	// Actually, walletService calls paymentService.CreatePurchase.
+	// PaymentService does NOT need walletService strictly for basic ops, but maybe for some checks?
+	// Let's check PaymentService struct. It has `walletService` field added in previous thought?
+	// Wait, I haven't added walletService field to PaymentService struct yet in code?
+	// Let's check if I added it. I don't recall adding it to PaymentService struct in `payment.go`.
+	// I added `CreateWalletPayment` to `payment.go`.
+	// `WalletService` calls `PaymentService`. CONSTANT -> `NewWalletService` takes `PaymentService`.
+	// So `PaymentService` must be created FIRST.
+
+	// Create PaymentService first (without walletService dependency if possible, or refactor).
+	// Checking `payment.go` again... it does NOT import `wallet`.
+	// So PaymentService does NOT depend on WalletService.
+	// WalletService depends on PaymentService.
+
+	// BUT! `main.go` line 90 in original file tried to pass `walletService` to `NewPaymentService`.
+	// I must have hallucinated that requirement or added it in a way I didn't verify.
+	// Let's check `payment.NewPaymentService` signature.
+	// From previous `view_file` of `payment.go` (step 572), `NewPaymentService` does NOT take `WalletService`.
+	// Params: translation, purchaseRepo, remnawaveClient, customerRepo, telegramBot, cryptoPayClient, referralRepo, cache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepo.
+	// So I should NOT pass `walletService` to `NewPaymentService`.
+
+	// Initialize PaymentService FIRST (no circular dependency now)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+
+	// Initialize WalletService SECOND (depends on PaymentService)
+	// Also needs walletTxRepo
+	walletService := wallet.NewWalletService(paymentService, customerRepository, purchaseRepository, remnawaveClient, b, tm, subKeyRepo, walletTxRepo)
 
 	cronScheduler := setupInvoiceChecker(purchaseRepository, cryptoPayClient, paymentService)
 	if cronScheduler != nil {
@@ -95,6 +126,10 @@ func main() {
 	subscriptionNotificationCronScheduler := subscriptionChecker(subService)
 	subscriptionNotificationCronScheduler.Start()
 	defer subscriptionNotificationCronScheduler.Stop()
+
+	autoRenewCronScheduler := autoRenewChecker(customerRepository, walletService, paymentService, tm, b)
+	autoRenewCronScheduler.Start()
+	defer autoRenewCronScheduler.Stop()
 
 	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
 
@@ -159,7 +194,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.GetHealthCheckPort()),
@@ -321,8 +356,26 @@ func checkCryptoPayInvoice(
 	for _, invoice := range *invoices {
 		if invoice.InvoiceID != nil && invoice.IsPaid() {
 			payload := strings.Split(invoice.Payload, "&")
-			purchaseID, err := strconv.Atoi(strings.Split(payload[0], "=")[1])
-			username := strings.Split(payload[1], "=")[1]
+			if len(payload) < 2 {
+				slog.Warn("Malformed invoice payload", "payload", invoice.Payload, "invoiceId", invoice.InvoiceID)
+				continue
+			}
+			purchaseIDStr := strings.Split(payload[0], "=")
+			if len(purchaseIDStr) < 2 {
+				slog.Warn("Malformed purchase ID in payload", "payload", invoice.Payload, "invoiceId", invoice.InvoiceID)
+				continue
+			}
+			usernameStr := strings.Split(payload[1], "=")
+			if len(usernameStr) < 2 {
+				slog.Warn("Malformed username in payload", "payload", invoice.Payload, "invoiceId", invoice.InvoiceID)
+				continue
+			}
+			purchaseID, err := strconv.Atoi(purchaseIDStr[1])
+			if err != nil {
+				slog.Warn("Invalid purchase ID in payload", "payload", invoice.Payload, "invoiceId", invoice.InvoiceID, "error", err)
+				continue
+			}
+			username := usernameStr[1]
 			ctxWithUsername := context.WithValue(ctx, "username", username)
 			err = paymentService.ProcessPurchaseById(ctxWithUsername, int64(purchaseID))
 			if err != nil {
@@ -334,4 +387,104 @@ func checkCryptoPayInvoice(
 		}
 	}
 
+}
+
+func autoRenewChecker(
+	customerRepository *database.CustomerRepository,
+	walletService *wallet.WalletService,
+	paymentService *payment.PaymentService,
+	tm *translation.Manager,
+	b *bot.Bot,
+) *cron.Cron {
+	c := cron.New()
+
+	// Run daily at 9:00 AM to check for subscriptions expiring in 3 days
+	_, err := c.AddFunc("0 9 * * *", func() {
+		ctx := context.Background()
+		processAutoRenewals(ctx, customerRepository, walletService, paymentService, tm, b)
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	return c
+}
+
+func processAutoRenewals(
+	ctx context.Context,
+	customerRepository *database.CustomerRepository,
+	walletService *wallet.WalletService,
+	paymentService *payment.PaymentService,
+	tm *translation.Manager,
+	b *bot.Bot,
+) {
+	// Find customers with auto_renew=true and expire_at within 3 days
+	threeDaysFromNow := time.Now().Add(3 * 24 * time.Hour)
+	customers, err := customerRepository.FindByAutoRenewExpiring(ctx, threeDaysFromNow)
+	if err != nil {
+		slog.Error("Error finding customers for auto-renewal", "error", err)
+		return
+	}
+
+	for _, customer := range customers {
+		// Find matching plan for auto_renew_duration
+		plan := findPlanByDuration(customer.AutoRenewDuration)
+		if plan == nil {
+			slog.Warn("No matching plan for auto-renew duration", "customer_id", customer.ID, "duration", customer.AutoRenewDuration)
+			continue
+		}
+
+		// Check if customer has sufficient balance
+		hasBalance, err := walletService.HasSufficientBalance(ctx, customer.ID, float64(plan.Price))
+		if err != nil {
+			slog.Error("Error checking balance for auto-renewal", "customer_id", customer.ID, "error", err)
+			continue
+		}
+
+		if !hasBalance {
+			// Send notification about insufficient balance
+			_, err = b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: customer.TelegramID,
+				Text:   tm.GetText(customer.Language, "auto_renew_insufficient_balance"),
+			})
+			if err != nil {
+				slog.Error("Error sending auto-renew notification", "customer_id", customer.ID, "error", err)
+			}
+			continue
+		}
+
+		// Attempt auto-renewal
+		_, purchaseID, err := paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, &customer, database.InvoiceTypeWalletPayment, "")
+		if err != nil {
+			slog.Error("Auto-renewal failed", "customer_id", customer.ID, "error", err)
+			// Send failure notification
+			_, _ = b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: customer.TelegramID,
+				Text:   tm.GetText(customer.Language, "auto_renew_failed"),
+			})
+			continue
+		}
+
+		slog.Info("Auto-renewal successful", "customer_id", customer.ID, "purchase_id", purchaseID)
+
+		// Send success notification
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: customer.TelegramID,
+			Text:   tm.GetText(customer.Language, "auto_renew_success"),
+		})
+		if err != nil {
+			slog.Error("Error sending auto-renew success notification", "customer_id", customer.ID, "error", err)
+		}
+	}
+}
+
+func findPlanByDuration(days int) *config.Plan {
+	plans := config.Plans()
+	for _, plan := range plans {
+		if plan.Days == days {
+			return &plan
+		}
+	}
+	return nil
 }

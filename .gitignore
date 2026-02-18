@@ -343,3 +343,4 @@ fabric.properties
 /app
 /bin/
 web-app/dist/
+web-app/node_modules/

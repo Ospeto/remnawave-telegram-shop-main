@@ -34,6 +34,7 @@ type PaymentService struct {
 	mobilePaymentRepo   *database.MobilePaymentRepository
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
+	walletTxRepo        *database.WalletTransactionRepository
 }
 
 func NewPaymentService(
@@ -49,6 +50,7 @@ func NewPaymentService(
 	mobilePaymentRepo *database.MobilePaymentRepository,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
+	walletTxRepo *database.WalletTransactionRepository,
 ) *PaymentService {
 	return &PaymentService{
 		purchaseRepository:  purchaseRepository,
@@ -63,6 +65,7 @@ func NewPaymentService(
 		mobilePaymentRepo:   mobilePaymentRepo,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
+		walletTxRepo:        walletTxRepo,
 	}
 }
 
@@ -187,7 +190,25 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 
 	const bytesInGB = 1073741824
 
-	if purchase.ExtendKeyID != nil {
+	if purchase.InvoiceType == database.InvoiceTypeWalletTopUp {
+		// WALLET TOP-UP
+		err := s.customerRepository.AddBalance(ctx, customer.ID, purchase.Amount)
+		if err != nil {
+			slog.Error("CRITICAL: Failed to add balance for wallet top-up", "purchase_id", purchaseId, "error", err)
+			return err
+		}
+		slog.Info("Wallet top-up successful", "purchase_id", purchaseId, "amount", purchase.Amount, "customer_id", customer.ID)
+		// Log transaction
+		if s.walletTxRepo != nil {
+			_, _ = s.walletTxRepo.Create(ctx, &database.WalletTransaction{
+				CustomerID:  customer.ID,
+				Amount:      purchase.Amount,
+				Type:        database.WalletTransactionTypeTopup,
+				PurchaseID:  &purchaseId,
+				Description: "Wallet Top-up",
+			})
+		}
+	} else if purchase.ExtendKeyID != nil {
 		// EXTEND existing key
 		existingKey, err := s.subKeyRepo.FindByID(ctx, *purchase.ExtendKeyID)
 		if err != nil || existingKey == nil {
@@ -401,6 +422,10 @@ func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days
 		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID)
 	case database.InvoiceTypeMobileBanking:
 		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
+	case database.InvoiceTypeWalletTopUp:
+		return s.createWalletTopUpInvoice(ctx, amount, customer)
+	case database.InvoiceTypeWalletPayment:
+		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
@@ -504,6 +529,62 @@ func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount 
 
 	slog.Info("Mobile banking purchase created", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
 	// No external URL needed — user sends screenshot directly
+	return "", purchaseId, nil
+}
+
+func (s PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+	// Check if customer has sufficient balance logic is handled by DeductBalance (atomic)
+	// But we check first to fail fast before creating purchase
+	if customer.Balance < amount {
+		return "", 0, fmt.Errorf("insufficient wallet balance")
+	}
+
+	// Create purchase record
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
+	})
+	if err != nil {
+		slog.Error("Error creating wallet purchase", "error", err)
+		return "", 0, err
+	}
+
+	// Deduct balance immediately
+	if err := s.customerRepository.DeductBalance(ctx, customer.ID, amount); err != nil {
+		slog.Error("Error deducting wallet balance", "error", err, "purchase_id", purchaseId)
+		// Mark purchase as cancelled
+		s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{"status": database.PurchaseStatusCancel})
+		return "", 0, fmt.Errorf("failed to deduct balance: %w", err)
+	}
+
+	// Log transaction if repo exists
+	if s.walletTxRepo != nil {
+		_, err := s.walletTxRepo.Create(ctx, &database.WalletTransaction{
+			CustomerID:  customer.ID,
+			Amount:      -amount,
+			Type:        database.WalletTransactionTypePurchase,
+			PurchaseID:  &purchaseId,
+			Description: fmt.Sprintf("Purchase plan %d days", days),
+		})
+		if err != nil {
+			slog.Error("Failed to log wallet transaction (non-fatal)", "error", err)
+		}
+	}
+
+	// Process the purchase immediately (no waiting for payment confirmation)
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		slog.Error("Error processing wallet purchase", "error", err, "purchase_id", purchaseId)
+		return "", 0, err
+	}
+
+	slog.Info("Wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
 	return "", purchaseId, nil
 }
 
@@ -663,4 +744,82 @@ func phoneMatchesSuffix(expected, actual string, n int) bool {
 		actSuffix = actual[len(actual)-n:]
 	}
 	return expSuffix == actSuffix
+}
+
+func (s PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer) (url string, purchaseId int64, err error) {
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletTopUp,
+		Status:         database.PurchaseStatusPending,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0, // Not applicable for top-up
+		Days:           0, // Not applicable
+		TrafficLimitGB: 0, // Not applicable
+	})
+	if err != nil {
+		slog.Error("Error creating wallet top-up", "error", err)
+		return "", 0, err
+	}
+	slog.Info("Wallet top-up invoice created", "purchase_id", purchaseId, "customer_id", customer.ID)
+	return "", purchaseId, nil
+}
+
+func (s PaymentService) CreateWalletPayment(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string) (int64, error) {
+	// 1. Calculate final amount
+	var promoID *int64
+	if promoCode != "" && s.promoCodeRepository != nil {
+		promo, err := s.promoCodeRepository.FindByCode(ctx, promoCode)
+		if err == nil && promo != nil {
+			claimed, _ := s.promoCodeRepository.IncrementUsageAtomic(ctx, promo.ID)
+			if claimed {
+				discount := float64(promo.DiscountPercent) / 100.0
+				amount = amount * (1 - discount)
+				amount = math.Round(amount)
+				promoID = &promo.ID
+			}
+		}
+	}
+
+	// 2. Check and Deduct Balance
+	if customer.Balance < amount {
+		return 0, fmt.Errorf("insufficient balance")
+	}
+
+	// Create Purchase Record
+	purchaseId, err := s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Status:         database.PurchaseStatusPending,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	// Deduct
+	err = s.customerRepository.DeductBalance(ctx, customer.ID, amount)
+	if err != nil {
+		_ = s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{"status": database.PurchaseStatusCancel})
+		return 0, fmt.Errorf("insufficient balance")
+	}
+
+	// Success! Process delivery.
+	_ = s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{
+		"payment_method": "wallet",
+		"paid_at":        time.Now(),
+	})
+
+	err = s.ProcessPurchaseById(ctx, purchaseId)
+	if err != nil {
+		slog.Error("CRITICAL: Wallet payment deducted but delivery failed", "purchase_id", purchaseId, "error", err)
+		return purchaseId, err
+	}
+
+	return purchaseId, nil
 }

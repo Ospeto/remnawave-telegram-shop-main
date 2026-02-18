@@ -33,6 +33,7 @@ export function Plans() {
 
     const extendKeyId = searchParams.get('extend');
     const isExtend = !!extendKeyId;
+    const isWalletTopup = searchParams.get('walletTopup') === 'true';
 
     // Find the key being extended
     const extendingKey = userData?.keys?.find(k => k.id === Number(extendKeyId));
@@ -41,9 +42,10 @@ export function Plans() {
     useEffect(() => {
         if (tg) {
             tg.BackButton.show();
-            tg.BackButton.onClick(() => navigate('/'));
+            // If topup, back to Wallet. Else Home.
+            tg.BackButton.onClick(() => navigate(isWalletTopup ? '/wallet' : '/'));
         }
-    }, [tg, navigate]);
+    }, [tg, navigate, isWalletTopup]);
 
     useEffect(() => {
         if (!initData) return;
@@ -127,27 +129,22 @@ export function Plans() {
             {/* Header */}
             <div style={{ textAlign: 'center', padding: '8px 0' }}>
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
-                    {isExtend ? t('title_extend') : t('title_choose_plan')}
+                    {isWalletTopup ? t('title_top_up') : (isExtend ? t('title_extend') : t('title_choose_plan'))}
                 </h1>
-                {isExtend && extendingKey && (
+                {isExtend && extendingKey && !isWalletTopup && (
                     <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
                         {t('subtitle_extending', { label: extendingKey.label })}
                         {currentExpiry && <> · {t('expires_on', { date: currentExpiry.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric' }) })}</>}
                     </p>
                 )}
-                {!isExtend && (
-                    <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                        {t('subtitle_new_key')}
-                    </p>
-                )}
-                {!isExtend && (
+                {!isExtend && !isWalletTopup && (
                     <div className="text-hint" style={{ fontSize: 11, marginTop: 4, opacity: 0.7 }}>
                         {t('subtitle_new_key_hint')}
                     </div>
                 )}
             </div>
 
-            {/* Promo Code Input */}
+            {/* Promo Code Input - Hide for TopUp? Maybe allow promo on topup? Actually promo usually applies to plan purchase. Let's allow it for consistency unless business logic forbids. */}
             <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input
                     type="text"
@@ -193,7 +190,7 @@ export function Plans() {
             )}
 
             {/* Extend explanation */}
-            {isExtend && (
+            {isExtend && !isWalletTopup && (
                 <div className="tip-box tip-box-info">
                     <span className="tip-icon">ℹ️</span>
                     <span>{t('help_extend_info')}</span>
@@ -201,14 +198,12 @@ export function Plans() {
             )}
 
             {/* New key explanation */}
-            {!isExtend && (
+            {!isExtend && !isWalletTopup && (
                 <div className="tip-box tip-box-info">
                     <span className="tip-icon">ℹ️</span>
                     <span>{t('help_new_key_info')}</span>
                 </div>
             )}
-
-
 
             {/* Plan cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -219,6 +214,7 @@ export function Plans() {
 
                     let checkoutUrl = `/checkout/${originalIdx}?`;
                     if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
+                    if (isWalletTopup) checkoutUrl += `walletTopup=true&`;
                     if (appliedPromoCode) checkoutUrl += `promo=${encodeURIComponent(appliedPromoCode)}`;
 
                     return (
@@ -228,14 +224,14 @@ export function Plans() {
                             style={{ textDecoration: 'none', color: 'inherit' }}
                         >
                             <div
-                                className={`glass-card ${idx === bestIdx ? 'glass-card-active' : ''}`}
+                                className={`glass-card ${idx === bestIdx && !isWalletTopup ? 'glass-card-active' : ''}`}
                                 style={{
                                     padding: 16,
                                     position: 'relative',
                                     transition: 'transform 0.15s ease',
                                 }}
                             >
-                                {idx === bestIdx && (
+                                {idx === bestIdx && !isWalletTopup && (
                                     <div style={{
                                         position: 'absolute', top: -8, right: 12,
                                         background: 'linear-gradient(135deg, #5ebbff, #007AFF)',
@@ -249,17 +245,24 @@ export function Plans() {
 
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{plan.label}</div>
-                                        <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <span>📅 {plan.days} {t('days_left').replace(' left', '')}</span>
-                                            <span style={{ opacity: 0.3 }}>·</span>
-                                            <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
-                                                {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : t('unlimited')}
-                                            </span>
-                                        </div>
-                                        {isExtend && (
+                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{isWalletTopup ? `${plan.price.toLocaleString()} ${plan.currency}` : plan.label}</div>
+                                        {!isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <span>📅 {plan.days} {t('days_left').replace(' left', '')}</span>
+                                                <span style={{ opacity: 0.3 }}>·</span>
+                                                <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
+                                                    {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : t('unlimited')}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {isExtend && !isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
                                                 {t('new_expiry', { date: calcNewExpiry(plan.days) })}
+                                            </div>
+                                        )}
+                                        {isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 3 }}>
+                                                {t('top_up_amount', { amount: plan.price.toLocaleString(), currency: plan.currency })}
                                             </div>
                                         )}
                                     </div>
@@ -273,9 +276,11 @@ export function Plans() {
                                             </div>
                                         )}
                                         <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
-                                        <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                            {Math.round(price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
-                                        </div>
+                                        {!isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
+                                                {Math.round(price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>

@@ -147,6 +147,22 @@ export function Home() {
                 </button>
             </div>
 
+            {/* Wallet Button */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+                <Link to="/wallet" className="glass-card" style={{
+                    padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+                    textDecoration: 'none', color: 'var(--tg-text)',
+                    background: 'rgba(255, 255, 255, 0.05)'
+                }}>
+                    <div style={{ fontSize: 24 }}>👛</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 15 }}>{t('wallet_title')}</div>
+                        <div className="text-hint" style={{ fontSize: 12 }}>{t('wallet_subtitle')}</div>
+                    </div>
+                    <div style={{ fontSize: 18, opacity: 0.5 }}>→</div>
+                </Link>
+            </div>
+
             {/* Download App Prompt - Visible for all users */}
             <div className="glass-card" style={{ background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03))', border: '1px solid rgba(0, 210, 190, 0.15)', padding: 16, textAlign: 'left' }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>

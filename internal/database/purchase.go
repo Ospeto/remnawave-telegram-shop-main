@@ -17,6 +17,8 @@ type InvoiceType string
 const (
 	InvoiceTypeCrypto        InvoiceType = "crypto"
 	InvoiceTypeMobileBanking InvoiceType = "mobile_banking"
+	InvoiceTypeWalletTopUp   InvoiceType = "wallet_topup"
+	InvoiceTypeWalletPayment InvoiceType = "wallet_payment"
 )
 
 type PurchaseStatus string
