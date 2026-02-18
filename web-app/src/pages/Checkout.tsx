@@ -259,27 +259,52 @@ export function Checkout() {
                 {/* Accepted methods badges */}
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12 }}>
                     {[
-                        { name: 'KPay', scheme: 'kbzpay://', color: '#0057b8' },
-                        { name: 'Wave', scheme: 'wavemoney://', color: '#ffd100', txColor: '#000' },
-                        { name: 'AYA Pay', scheme: 'ayapay://', color: '#ed1c24' }
+                        {
+                            name: 'KPay',
+                            color: '#0057b8',
+                            ios: 'kbzpay://',
+                            android: 'intent://#Intent;scheme=kbzpay;package=com.kbzbank.kpaywallet;S.browser_fallback_url=https://www.kbzpay.com;end',
+                            web: 'https://www.kbzpay.com'
+                        },
+                        {
+                            name: 'Wave',
+                            color: '#ffd100',
+                            txColor: '#000',
+                            ios: 'wavemoney://',
+                            android: 'intent://#Intent;scheme=wavemoney;package=com.wavemoney.consumer;S.browser_fallback_url=https://www.wavemoney.com.mm;end',
+                            web: 'https://www.wavemoney.com.mm'
+                        },
+                        {
+                            name: 'AYA Pay',
+                            color: '#ed1c24',
+                            ios: 'ayapay://',
+                            android: 'intent://#Intent;scheme=ayapay;package=com.ayaplus.wallet;S.browser_fallback_url=https://www.ayapay.com;end',
+                            web: 'https://www.ayapay.com'
+                        }
                     ].map(m => (
-                        <a
+                        <button
                             key={m.name}
-                            href={m.scheme}
                             style={{
                                 padding: '6px 14px', borderRadius: 20, fontSize: 12,
                                 background: m.color, color: m.txColor || '#fff',
-                                textDecoration: 'none', fontWeight: 700,
-                                opacity: 0.9, transition: 'transform 0.1s',
+                                fontWeight: 700, opacity: 0.9, transition: 'transform 0.1s',
                                 border: 'none', cursor: 'pointer'
                             }}
                             onClick={() => {
-                                // Try to open deep link logic
-                                setTimeout(() => window.location.href = m.scheme, 100);
+                                const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+                                let url = m.web;
+
+                                if (/android/i.test(userAgent)) {
+                                    url = m.android;
+                                } else if (/iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream) {
+                                    url = m.ios;
+                                }
+
+                                window.open(url, '_blank');
                             }}
                         >
                             {m.name} ↗
-                        </a>
+                        </button>
                     ))}
                 </div>
             </div>
