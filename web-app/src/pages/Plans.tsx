@@ -104,23 +104,39 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // All plans available for both new keys and extending
-    const filteredPlans = plans;
+    // Fixed top-up amounts
+    const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
 
-    // Apply discount if valid promo
-    const displayPlans = filteredPlans.map(p => {
-        if (discountPercent > 0) {
-            return { ...p, discountedPrice: Math.round(p.price * (1 - discountPercent / 100)) };
+    // Determine what to display: either plans or top-up amounts
+    const itemsToDisplay = isWalletTopup
+        ? TOPUP_AMOUNTS.map(amount => ({
+            label: `${amount.toLocaleString()} ${plans[0]?.currency || 'MMK'}`, // Use currency from first plan or default
+            days: 0,
+            price: amount,
+            traffic_limit_gb: 0,
+            currency: plans[0]?.currency || 'MMK',
+            isTopUp: true
+        }))
+        : plans;
+
+    // Apply discount if valid promo (only for plans, not top-ups typically, but let's keep logic general if needed)
+    // For top-ups, we usually don't discount the top-up amount itself in this UI logic unless promo applies.
+    const displayItems = itemsToDisplay.map((item: any) => {
+        if (!isWalletTopup && discountPercent > 0) {
+            return { ...item, discountedPrice: Math.round(item.price * (1 - discountPercent / 100)) };
         }
-        return p;
+        return item;
     });
 
-    // Best value = lowest price per day (within filtered set)
-    const bestIdx = displayPlans.length > 0
-        ? displayPlans.reduce((b, p, i) => {
+    // Best value logic only applies to Plans
+    const bestIdx = !isWalletTopup && displayItems.length > 0
+        ? displayItems.reduce((b, p, i) => {
             const priceP = (p as any).discountedPrice || p.price;
-            const priceB = (displayPlans[b] as any).discountedPrice || displayPlans[b].price;
-            return (priceP / p.days) < (priceB / displayPlans[b].days) ? i : b;
+            const priceB = (displayItems[b] as any).discountedPrice || displayItems[b].price;
+            // Avoid division by zero if days is 0 (shouldn't happen for plans)
+            const daysP = p.days || 1;
+            const daysB = (displayItems[b] as any).days || 1;
+            return (priceP / daysP) < (priceB / daysB) ? i : b;
         }, 0)
         : -1;
 
@@ -144,46 +160,48 @@ export function Plans() {
                 )}
             </div>
 
-            {/* Promo Code Input - Hide for TopUp? Maybe allow promo on topup? Actually promo usually applies to plan purchase. Let's allow it for consistency unless business logic forbids. */}
-            <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input
-                    type="text"
-                    value={promoCode}
-                    onChange={(e) => {
-                        setPromoCode(e.target.value);
-                        if (promoStatus !== 'idle') setPromoStatus('idle');
-                    }}
-                    placeholder="Promo Code"
-                    style={{
-                        flex: 1,
-                        background: 'rgba(255,255,255,0.05)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8,
-                        padding: '10px 12px',
-                        color: 'white',
-                        fontSize: 14,
-                        outline: 'none'
-                    }}
-                />
-                <button
-                    onClick={handleApplyPromo}
-                    disabled={promoStatus === 'validating' || !promoCode.trim()}
-                    className="btn-secondary"
-                    style={{
-                        padding: '10px 16px',
-                        fontSize: 13,
-                        opacity: !promoCode.trim() ? 0.5 : 1
-                    }}
-                >
-                    {promoStatus === 'validating' ? '...' : 'Apply'}
-                </button>
-            </div>
-            {promoStatus === 'valid' && (
+            {/* Promo Code Input - Hide for TopUp? Based on previous thought, allow it for consistency but maybe disable for TopUp if not supported. Let's hide for topup for now to simplify. */}
+            {!isWalletTopup && (
+                <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                        type="text"
+                        value={promoCode}
+                        onChange={(e) => {
+                            setPromoCode(e.target.value);
+                            if (promoStatus !== 'idle') setPromoStatus('idle');
+                        }}
+                        placeholder="Promo Code"
+                        style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            color: 'white',
+                            fontSize: 14,
+                            outline: 'none'
+                        }}
+                    />
+                    <button
+                        onClick={handleApplyPromo}
+                        disabled={promoStatus === 'validating' || !promoCode.trim()}
+                        className="btn-secondary"
+                        style={{
+                            padding: '10px 16px',
+                            fontSize: 13,
+                            opacity: !promoCode.trim() ? 0.5 : 1
+                        }}
+                    >
+                        {promoStatus === 'validating' ? '...' : 'Apply'}
+                    </button>
+                </div>
+            )}
+            {!isWalletTopup && promoStatus === 'valid' && (
                 <div style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     ✅ Code applied! {discountPercent}% off
                 </div>
             )}
-            {promoStatus === 'invalid' && (
+            {!isWalletTopup && promoStatus === 'invalid' && (
                 <div style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     ❌ Invalid or expired code
                 </div>
@@ -205,16 +223,19 @@ export function Plans() {
                 </div>
             )}
 
-            {/* Plan cards */}
+            {/* Plan/Top-up cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {displayPlans.map((plan, idx) => {
-                    const originalIdx = plans.findIndex(p => p.label === plan.label && p.days === plan.days); // Robust find
-                    const price = (plan as any).discountedPrice || plan.price;
-                    const hasDiscount = (plan as any).discountedPrice && (plan as any).discountedPrice < plan.price;
+                {displayItems.map((item: any, idx: number) => {
+                    // For Plans: find original index. For TopUp: use dummy index -1.
+                    const originalIdx = isWalletTopup ? -1 : plans.findIndex(p => p.label === item.label && p.days === item.days);
+                    const price = item.discountedPrice || item.price;
+                    const hasDiscount = item.discountedPrice && item.discountedPrice < item.price;
 
                     let checkoutUrl = `/checkout/${originalIdx}?`;
                     if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
-                    if (isWalletTopup) checkoutUrl += `walletTopup=true&`;
+                    if (isWalletTopup) {
+                        checkoutUrl += `walletTopup=true&amount=${item.price}&`;
+                    }
                     if (appliedPromoCode) checkoutUrl += `promo=${encodeURIComponent(appliedPromoCode)}`;
 
                     return (
@@ -245,24 +266,25 @@ export function Plans() {
 
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{isWalletTopup ? `${plan.price.toLocaleString()} ${plan.currency}` : plan.label}</div>
+                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{item.label}</div>
                                         {!isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                <span>📅 {plan.days} {t('days_left').replace(' left', '')}</span>
+                                                <span>📅 {item.days} {t('days_left').replace(' left', '')}</span>
                                                 <span style={{ opacity: 0.3 }}>·</span>
-                                                <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
-                                                    {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : t('unlimited')}
+                                                <span style={item.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
+                                                    {item.traffic_limit_gb > 0 ? `📊 ${item.traffic_limit_gb} GB` : t('unlimited')}
                                                 </span>
                                             </div>
                                         )}
                                         {isExtend && !isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
-                                                {t('new_expiry', { date: calcNewExpiry(plan.days) })}
+                                                {t('new_expiry', { date: calcNewExpiry(item.days) })}
                                             </div>
                                         )}
+                                        {/* For Top-up, label is just the amount, maybe add hint? */}
                                         {isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 12, marginTop: 3 }}>
-                                                {t('top_up_amount', { amount: plan.price.toLocaleString(), currency: plan.currency })}
+                                                {t('top_up_amount', { amount: item.price.toLocaleString(), currency: item.currency })}
                                             </div>
                                         )}
                                     </div>
@@ -272,13 +294,13 @@ export function Plans() {
                                         </div>
                                         {hasDiscount && (
                                             <div style={{ fontSize: 13, textDecoration: 'line-through', opacity: 0.5 }}>
-                                                {plan.price.toLocaleString()}
+                                                {item.price.toLocaleString()}
                                             </div>
                                         )}
-                                        <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
+                                        <div className="text-hint" style={{ fontSize: 11 }}>{item.currency}</div>
                                         {!isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                                {Math.round(price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
+                                                {Math.round(price / item.days)} {t('per_day', { currency: item.currency.toLowerCase() })}
                                             </div>
                                         )}
                                     </div>

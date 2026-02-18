@@ -45,6 +45,8 @@ export function Checkout() {
 
     const purchaseCreated = useRef(false);
 
+    const amountParam = searchParams.get('amount');
+
     useEffect(() => {
         if (!planIndex || !initData || purchaseCreated.current) return;
         purchaseCreated.current = true;
@@ -52,7 +54,10 @@ export function Checkout() {
         const body: any = { plan_index: parseInt(planIndex) };
         if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
         if (promoCode) body.promo_code = promoCode;
-        if (isWalletTopup) body.payment_method = 'wallet_topup';
+        if (isWalletTopup) {
+            body.payment_method = 'wallet_topup';
+            if (amountParam) body.amount = parseInt(amountParam);
+        }
 
         fetch('/api/purchase', {
             method: 'POST',
@@ -79,7 +84,7 @@ export function Checkout() {
                 .then(data => setWalletBalance(data.balance))
                 .catch(() => { }); // Ignore error, simple hide wallet option
         }
-    }, [planIndex, initData, extendKeyId, promoCode, isWalletTopup]);
+    }, [planIndex, initData, extendKeyId, promoCode, isWalletTopup, amountParam]);
 
     const handlePayWithWallet = async () => {
         if (!purchase || payingWithWallet) return;
@@ -389,15 +394,30 @@ export function Checkout() {
                             }}
                             onClick={() => {
                                 const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
-                                let url = m.web;
+                                const isAndroid = /android/i.test(userAgent);
+                                const isIOS = /iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream;
 
-                                if (/android/i.test(userAgent)) {
-                                    url = m.android;
-                                } else if (/iPad|iPhone|iPod/.test(userAgent) && !(window as any).MSStream) {
-                                    url = m.ios;
+                                if (isAndroid) {
+                                    // Android: Use intent with browser fallback (handled by system)
+                                    window.location.href = m.android;
+                                } else if (isIOS) {
+                                    // iOS: Try custom scheme. Safe to try, if not installed nothing happens or Safari shows error.
+                                    // window.open often blocked or stays in iframe. location.href is better for app switch.
+                                    window.location.href = m.ios;
+
+                                    // Fallback UI helper (optional):
+                                    // We could set a timeout to show a "Download app" hint or fallback to web, 
+                                    // but automatic fallback on iOS webview is tricky. 
+                                    // Ideally, let's try to open web if they stay on page? 
+                                    // For now, sticking to strict app switch request.
+                                } else {
+                                    // Desktop/Other: Open Web
+                                    if (tg?.openLink) {
+                                        tg.openLink(m.web);
+                                    } else {
+                                        window.open(m.web, '_blank');
+                                    }
                                 }
-
-                                window.open(url, '_blank');
                             }}
                         >
                             {m.name} ↗
