@@ -155,7 +155,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'back_to_plans': 'အစီအစဉ်များသို့',
         'go_home': 'ပင်မစာမျက်နှာသို့',
         'btn_open_happ': 'Happ တွင် ဖွင့်မည်',
-        'success_happ_hint': 'Happ Proxy အက်ပ်ထဲသို့ Key အလိုအလျောက် ထည့်သွင်းရန် နှိပ်ပါ',
+        'success_happ_hint': 'Happ Proxy App ထဲသို့ Key အလိုအလျောက် ထည့်သွင်းရန် နှိပ်ပါ',
 
         // Home
         'home_title': 'Wavy Private Server',
@@ -175,7 +175,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // Home Help
         'help_expired': 'Key သက်တမ်းကုန်ဆုံးသွားပါပြီ။ ဆက်လက်အသုံးပြုရန် အောက်ပါ "သက်တမ်းတိုးမည်" ခလုတ်ကို နှိပ်ပါ။',
-        'help_btn_add': 'Happ သို့ ထည့်မည် — Happ Proxy အက်ပ်ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးပါမည်',
+        'help_btn_add': 'Happ သို့ ထည့်မည် — Happ Proxy App ထဲသို့ အလိုအလျောက် ထည့်သွင်းပေးပါမည်',
         'help_btn_extend': 'သက်တမ်းတိုးမည် — ရက်နှင့် Data ပမာဏ ထပ်ပေါင်းထည့်ပါမည်',
         'help_btn_copy': 'VPN အက်ပ်တစ်ခုခုတွင် အသုံးပြုရန် Link ကူးယူပါမည်',
         'tip_multi_key': 'စက်ပစ္စည်း (Device) အမျိုးမျိုးအတွက် Key အများအပြား ဝယ်ယူထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း သက်တမ်းတိုးနိုင်ပါသည်။',
@@ -195,8 +195,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'welcome_title': 'မင်္ဂလာပါ!',
         'welcome_text': 'သင့်တွင် VPN Key မရှိသေးပါ။ စတင်အသုံးပြုရန် အစီအစဉ် (Plan) တစ်ခုကို ဝယ်ယူနိုင်ပါသည်။ ၁ မိနစ်သာ ကြာပါမည်။',
         'download_title': 'Happ Proxy ကို Download ရယူပါ',
-        'download_text': 'VPN Key အသုံးမပြုမီ Happ Proxy အက်ပ်ကို အရင် Download လုပ်ထားရန် လိုအပ်ပါသည်။',
-        'btn_download': 'အက်ပ် Download ရယူမည်',
+        'download_text': 'VPN Key အသုံးမပြုမီ Happ Proxy App ကို Download လုပ်ပြီးထည့်သွင်းထားရန် လိုအပ်ပါသည်။',
+        'btn_download': 'App Download ရယူမည်',
         'how_it_works': 'အလုပ်လုပ်ပုံ',
         'step_1': 'အောက်ပါ Plan များထဲမှ တစ်ခုကို ရွေးချယ်ပါ',
         'step_2': 'Mobile Banking ဖြင့် ငွေလွှဲပါ',
@@ -254,8 +254,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'verify_error_tip': 'လွှဲထားသော ပမာဏနှင့် ဖုန်းနံပါတ် တူညီမှု ရှိမရှိ ပြန်လည်စစ်ဆေးပါ။ Screenshot တွင် Transaction အချက်အလက်များ ထင်ရှားမှု ရှိမရှိ စစ်ဆေးပါ။',
 
         // Wallet
-        'wallet_title': 'ကျွန်ုပ်၏ Wallet',
-        'wallet_subtitle': 'ငွေဖြည့်သွင်းခြင်းနှင့် ဝန်ဆောင်မှုများကို စီမံခန့်ခွဲပါ',
+        'wallet_title': 'My Wallet',
+        'wallet_subtitle': 'အလိုအလျောက်ဝန်ဆောင်မှုစနစ်',
         'current_balance': 'လက်ကျန်ငွေ',
         'top_up_wallet': 'ငွေဖြည့်သွင်းမည် (Top Up)',
         'auto_renew_title': 'အလိုအလျောက် သက်တမ်းတိုးစနစ်',

@@ -385,12 +385,13 @@ export function Home() {
                 <div className="glass-card" style={{
                     padding: '16px 12px', textAlign: 'center',
                     background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.06))',
-                    border: '1px solid rgba(0, 210, 190, 0.15)'
+                    border: '1px solid rgba(0, 210, 190, 0.15)',
+                    display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%'
                 }}>
                     <div style={{ fontSize: 26, fontWeight: 800, color: '#00d2be', lineHeight: 1, letterSpacing: '-0.5px' }}>
                         {t('info_device_count')}
                     </div>
-                    <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px' }}>
+                    <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px', lineHeight: 1.2 }}>
                         {t('info_device_limit')}
                     </div>
                 </div>
@@ -398,7 +399,8 @@ export function Home() {
                 <div className="glass-card" style={{
                     padding: '16px 12px', textAlign: 'center',
                     background: 'linear-gradient(135deg, rgba(0, 180, 220, 0.06), rgba(0, 150, 255, 0.06))',
-                    border: '1px solid rgba(0, 180, 220, 0.15)'
+                    border: '1px solid rgba(0, 180, 220, 0.15)',
+                    display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100%'
                 }}>
                     <div style={{ fontSize: 26, fontWeight: 800, color: '#00b4dc', lineHeight: 1, letterSpacing: '-0.5px' }}>
                         5
