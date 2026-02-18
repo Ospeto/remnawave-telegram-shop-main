@@ -112,6 +112,30 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_tip_extend': 'Go back to see your updated key with the new expiry date.',
         'success_tip_new': 'Go back to your keys and tap "Add to Happ" to start using your VPN, or copy the link for any VPN app.',
         'verify_error_tip': 'Double-check that the amount and phone number match exactly. Make sure the screenshot clearly shows the transaction details.',
+
+        // Wallet
+        'wallet_title': 'My Wallet',
+        'wallet_subtitle': 'Manage your balance & subscriptions',
+        'current_balance': 'Current Balance',
+        'top_up_wallet': 'Top Up Wallet',
+        'auto_renew_title': 'Auto-Renewal',
+        'auto_renew_enabled': 'On - Renews every {{days}} days',
+        'auto_renew_disabled': 'Off - Tap to enable',
+        'transaction_history': 'Transaction History',
+        'no_transactions': 'No transactions yet',
+        'transaction_topup': 'Wallet Top-up',
+        'transaction_purchase': 'Plan Purchase',
+        'transaction_refund': 'Refund',
+        'wallet_info': 'Funds in your wallet never expire and can be used for any future purchase.',
+
+        // Wallet Tips
+        'wallet_tips_title': 'Why use Wallet?',
+        'wallet_tip_1_title': 'Never Get Disconnected',
+        'wallet_tip_1_desc': 'Enable auto-renew to keep your VPN running 24/7 without interruption.',
+        'wallet_tip_2_title': 'Instant Activation',
+        'wallet_tip_2_desc': 'Skip the screenshot verification. Wallet payments are approved instantly.',
+        'wallet_tip_3_title': 'Save Time',
+        'wallet_tip_3_desc': 'Top up once, pay for months. No need to open your banking app every time.',
     },
     my: {
         // General
@@ -224,5 +248,30 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_tip_extend': 'နောက်သို့ ပြန်သွားပြီး သက်တမ်းရက် အသစ်ကို စစ်ဆေးနိုင်ပါသည်။',
         'success_tip_new': 'နောက်သို့ ပြန်သွားပြီး "Happ သို့ ထည့်မည်" ကို နှိပ်၍ အသုံးပြုနိုင်ပါပြီ။',
         'verify_error_tip': 'ပမာဏနှင့် ဖုန်းနံပါတ် တူညီမှု ရှိမရှိ ပြန်စစ်ပါ။ Screenshot တွင် Transaction အချက်အလက်များ ထင်ရှားမှု ရှိမရှိ စစ်ဆေးပါ။',
+
+        // Wallet
+        'wallet_title': 'ကျွန်ုပ်၏ Wallet',
+        'wallet_subtitle': 'ငွေဖြည့်ခြင်းနှင့် Auto-Renewal ဝန်ဆောင်မှု',
+        'current_balance': 'လက်ကျန်ငွေ',
+        'top_up_wallet': 'ငွေဖြည့်မည်',
+        'auto_renew_title': 'အလိုအလျောက် သက်တမ်းတိုးခြင်း',
+        'auto_renew_enabled': 'ဖွင့်ထားသည် - {{days}} ရက်တိုင်း သက်တမ်းတိုးမည်',
+        'auto_renew_disabled': 'ပိတ်ထားသည် - ဖွင့်ရန် နှိပ်ပါ',
+        'transaction_history': 'အသုံးပြုမှု မှတ်တမ်း',
+        'no_transactions': 'မှတ်တမ်း မရှိသေးပါ',
+        'transaction_topup': 'Wallet ငွေဖြည့်',
+        'transaction_purchase': 'Plan ဝယ်ယူမှု',
+        'transaction_refund': 'ငွေပြန်အမ်းမှု',
+        'wallet_info': 'Wallet အတွင်းရှိငွေသည် သက်တမ်းကုန်ဆုံးခြင်း မရှိပါ။',
+
+        // Wallet Tips
+        'wallet_tips_title': 'Wallet ကို ဘာကြောင့် သုံးသင့်သလဲ?',
+        'wallet_tip_1_title': 'လိုင်းပြတ်တောက်မှု မရှိတော့ပါ',
+        'wallet_tip_1_desc': 'Auto-renewal ဖွင့်ထားပါက သက်တမ်းကုန်ခါနီးတိုင်း အလိုအလျောက် သက်တမ်းတိုးပေးသဖြင့် 24/7 အသုံးပြုနိုင်ပါသည်။',
+        'wallet_tip_2_title': 'မိနစ်ပိုင်းအတွင်း ရရှိမည်',
+        'wallet_tip_2_desc': 'Screenshot တင်ပြီး စောင့်ဆိုင်းနေရန် မလိုတော့ပါ။ Wallet ဖြင့် ဝယ်ပါက Key ချက်ချင်း ရရှိပါသည်။',
+        'wallet_tip_3_title': 'အချိန်ကုန် သက်သာသည်',
+        'wallet_tip_3_desc': 'တစ်ခါတည်း ငွေဖြည့်ထားပြီး လပေါင်းများစွာ အသုံးပြုနိုင်ပါသည်။ ခဏခဏ ငွေလွှဲနေရန် မလိုတော့ပါ။',
     }
 };
+

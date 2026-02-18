@@ -38,7 +38,7 @@ export function Wallet() {
   useEffect(() => {
     if (!initData) return;
     const headers = { 'Authorization': `twa ${initData}` };
-    
+
     Promise.all([
       fetch('/api/wallet', { headers }).then(r => r.json()),
       fetch('/api/wallet/history?limit=10', { headers }).then(r => r.json()),
@@ -53,7 +53,7 @@ export function Wallet() {
 
   const toggleAutoRenew = async () => {
     if (!wallet || updatingAutoRenew) return;
-    
+
     setUpdatingAutoRenew(true);
     try {
       const res = await fetch('/api/wallet/autorenew', {
@@ -67,7 +67,7 @@ export function Wallet() {
           duration: wallet.auto_renew_duration,
         }),
       });
-      
+
       if (res.ok) {
         setWallet({ ...wallet, auto_renew: !wallet.auto_renew });
       }
@@ -129,7 +129,7 @@ export function Wallet() {
         <div style={{ fontSize: 36, fontWeight: 800, marginBottom: 4 }}>
           {wallet.balance.toLocaleString()} {wallet.currency}
         </div>
-        <button 
+        <button
           className="btn-primary"
           style={{ marginTop: 16, width: '100%' }}
           onClick={() => navigate('/plans?walletTopup=true')}
@@ -146,7 +146,7 @@ export function Wallet() {
               {t('auto_renew_title')}
             </div>
             <div className="text-hint" style={{ fontSize: 12 }}>
-              {wallet.auto_renew 
+              {wallet.auto_renew
                 ? t('auto_renew_enabled', { days: wallet.auto_renew_duration })
                 : t('auto_renew_disabled')
               }
@@ -187,7 +187,7 @@ export function Wallet() {
         <h2 style={{ fontSize: 16, fontWeight: 700, margin: '16px 0 12px' }}>
           {t('transaction_history')}
         </h2>
-        
+
         {transactions.length === 0 ? (
           <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
@@ -206,9 +206,9 @@ export function Wallet() {
                     {new Date(tx.created_at).toLocaleDateString()}
                   </div>
                 </div>
-                <div style={{ 
-                  fontSize: 15, 
-                  fontWeight: 700, 
+                <div style={{
+                  fontSize: 15,
+                  fontWeight: 700,
                   color: getTransactionColor(tx.type),
                 }}>
                   {tx.amount > 0 ? '+' : ''}{tx.amount.toLocaleString()} {wallet.currency}
@@ -219,11 +219,36 @@ export function Wallet() {
         )}
       </div>
 
-      {/* Info Box */}
-      <div className="tip-box tip-box-info" style={{ marginTop: 'auto' }}>
-        <span className="tip-icon">💡</span>
-        <span>{t('wallet_info')}</span>
+      {/* Business Value Tips Section */}
+      <div style={{ marginTop: 16 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 12px' }}>
+          {t('wallet_tips_title')}
+        </h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {[1, 2, 3].map(num => (
+            <div key={num} className="glass-card" style={{ padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 16,
+                background: 'rgba(52, 199, 89, 0.1)', color: '#34c759',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 16, fontWeight: 'bold'
+              }}>
+                {num === 1 ? '⚡' : num === 2 ? '🚀' : '⏳'}
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                  {t(`wallet_tip_${num}_title`)}
+                </div>
+                <div className="text-hint" style={{ fontSize: 12, lineHeight: 1.4 }}>
+                  {t(`wallet_tip_${num}_desc`)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+
+      <div style={{ height: 20 }} />
     </div>
   );
 }

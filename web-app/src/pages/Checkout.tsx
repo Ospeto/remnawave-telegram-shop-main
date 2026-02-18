@@ -358,83 +358,9 @@ export function Checkout() {
                     </div>
                 </div>
 
-                {/* Accepted methods badges */}
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12 }}>
-                    {[
-                        {
-                            name: 'KPay',
-                            color: '#0057b8',
-                            ios: 'kbzpay://',
-                            android: 'intent://#Intent;scheme=kbzpay;package=com.kbzbank.kpaywallet;S.browser_fallback_url=https://www.kbzpay.com;end',
-                            web: 'https://www.kbzpay.com'
-                        },
-                        {
-                            name: 'Wave',
-                            color: '#ffd100',
-                            txColor: '#000',
-                            ios: 'wavemoney://',
-                            android: 'intent://#Intent;scheme=wavemoney;package=com.wavemoney.consumer;S.browser_fallback_url=https://www.wavemoney.com.mm;end',
-                            web: 'https://www.wavemoney.com.mm'
-                        },
-                        {
-                            name: 'AYA Pay',
-                            color: '#ed1c24',
-                            ios: 'ayapay://',
-                            android: 'intent://#Intent;scheme=ayapay;package=com.ayaplus.wallet;S.browser_fallback_url=https://www.ayapay.com;end',
-                            web: 'https://www.ayapay.com'
-                        }
-                    ].map(m => (
-                        <button
-                            key={m.name}
-                            style={{
-                                padding: '6px 14px', borderRadius: 20, fontSize: 12,
-                                background: m.color, color: m.txColor || '#fff',
-                                fontWeight: 700, opacity: 0.9, transition: 'transform 0.1s',
-                                border: 'none', cursor: 'pointer'
-                            }}
-                            onClick={() => {
-                                const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
-                                const isAndroid = /android/i.test(userAgent);
-                                const isTelegramWebView = /Telegram/i.test(userAgent) || tg !== null;
-
-                                // Store current time to detect if app opened
-                                const startTime = Date.now();
-                                const deepLinkUrl = isAndroid ? m.android : m.ios;
-                                
-                                // Try to open the app using the best method for the platform
-                                if (isTelegramWebView && tg?.openLink) {
-                                    // In Telegram WebView, use openLink for external URLs
-                                    // This works better for web fallbacks
-                                    tg.openLink(deepLinkUrl);
-                                } else {
-                                    // Standard web approach
-                                    window.location.href = deepLinkUrl;
-                                }
-
-                                // Fallback: if app didn't open within 2.5 seconds, show options
-                                setTimeout(() => {
-                                    const timeElapsed = Date.now() - startTime;
-                                    // If we're still on the page after 2.5 seconds, app likely isn't installed
-                                    if (document.visibilityState === 'visible' && timeElapsed >= 2400) {
-                                        // Show confirmation dialog for fallback
-                                        const shouldOpenWeb = confirm(
-                                            `${m.name} app doesn't seem to be installed or couldn't open.\n\n` +
-                                            `Open ${m.name} website in browser instead?`
-                                        );
-                                        if (shouldOpenWeb) {
-                                            if (tg?.openLink) {
-                                                tg.openLink(m.web);
-                                            } else {
-                                                window.open(m.web, '_blank');
-                                            }
-                                        }
-                                    }
-                                }, 2500);
-                            }}
-                        >
-                            {m.name} ↗
-                        </button>
-                    ))}
+                {/* Accepted methods guidance text instead of buttons */}
+                <div style={{ marginTop: 12, textAlign: 'center', fontSize: 13, color: 'rgba(255, 255, 255, 0.5)' }}>
+                    Accepted: KPay · Wave · AYA Pay
                 </div>
             </div>
 
