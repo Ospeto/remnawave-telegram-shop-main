@@ -50,5 +50,4 @@ func NewHandler(
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
 	}
-	}
 }
