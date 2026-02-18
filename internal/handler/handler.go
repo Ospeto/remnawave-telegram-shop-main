@@ -22,7 +22,6 @@ type Handler struct {
 	promoCodeRepository *database.PromoCodeRepository
 	cache               *cache.Cache
 	mobilePayCache      *cache.Cache // telegramID → purchaseID for pending mobile screenshots
-	TestMode            bool
 }
 
 func NewHandler(
@@ -50,6 +49,19 @@ func NewHandler(
 		promoCodeRepository: promoCodeRepository,
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
-		TestMode:            false,
+	}
+	// Note: TestMode is managed by PaymentService now.
+	return &Handler{
+		syncService:         syncService,
+		paymentService:      paymentService,
+		customerRepository:  customerRepository,
+		purchaseRepository:  purchaseRepository,
+		cryptoPayClient:     cryptoPayClient,
+		translation:         translation,
+		subscriptionService: subscriptionService,
+		referralRepository:  referralRepository,
+		promoCodeRepository: promoCodeRepository,
+		cache:               cache,
+		mobilePayCache:      mobilePayCache,
 	}
 }

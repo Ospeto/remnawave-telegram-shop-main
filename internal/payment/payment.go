@@ -14,6 +14,7 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
 	"strings"
+	"sync"
 	"time"
 
 	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
@@ -37,6 +38,8 @@ type PaymentService struct {
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
 	walletTxRepo        *database.WalletTransactionRepository
+	testMode            bool
+	testModeMu          sync.RWMutex
 }
 
 func NewPaymentService(
@@ -74,6 +77,18 @@ func NewPaymentService(
 // GetPurchaseRepository exposes the purchase repository for external use (e.g. API handlers).
 func (s PaymentService) GetPurchaseRepository() *database.PurchaseRepository {
 	return s.purchaseRepository
+}
+
+func (s *PaymentService) SetTestMode(enabled bool) {
+	s.testModeMu.Lock()
+	defer s.testModeMu.Unlock()
+	s.testMode = enabled
+}
+
+func (s *PaymentService) IsTestMode() bool {
+	s.testModeMu.RLock()
+	defer s.testModeMu.RUnlock()
+	return s.testMode
 }
 
 func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
@@ -597,7 +612,7 @@ type VerificationResult struct {
 	ReasonKey string // translation key
 }
 
-func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string, testMode bool) (*VerificationResult, error) {
+func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
 	if s.geminiClient == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
@@ -638,7 +653,7 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 	}
 
 	// === TEST MODE BYPASS ===
-	if testMode && strings.TrimSpace(info.TransactionID) == TestTransactionID {
+	if s.IsTestMode() && strings.TrimSpace(info.TransactionID) == TestTransactionID {
 		slog.Info("Test Mode: Magic Transaction ID matched. Bypassing checks.", "purchase_id", purchaseID)
 		// Skip duplicate check, amount check, etc.
 		// Record verification as "TEST_MODE_BYPASS"

@@ -532,7 +532,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType, false)
+	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
 	if err != nil {
 		http.Error(w, "Verification error: "+err.Error(), http.StatusInternalServerError)
 		return
