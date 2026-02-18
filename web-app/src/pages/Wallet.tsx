@@ -127,7 +127,7 @@ export function Wallet() {
           {t('current_balance')}
         </div>
         <div style={{ fontSize: 36, fontWeight: 800, marginBottom: 4 }}>
-          {wallet.balance.toLocaleString()} {wallet.currency}
+          {(wallet?.balance || 0).toLocaleString()} {wallet?.currency || ''}
         </div>
         <button
           className="btn-primary"
@@ -211,7 +211,7 @@ export function Wallet() {
                   fontWeight: 700,
                   color: getTransactionColor(tx.type),
                 }}>
-                  {tx.amount > 0 ? '+' : ''}{tx.amount.toLocaleString()} {wallet.currency}
+                  {tx.amount > 0 ? '+' : ''}{(tx.amount || 0).toLocaleString()} {wallet.currency}
                 </div>
               </div>
             ))}
