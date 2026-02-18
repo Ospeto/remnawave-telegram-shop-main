@@ -222,9 +222,9 @@ body {
 }
 
 .tip-box-warning {
-  background: rgba(255, 159, 10, 0.06);
-  border: 1px solid rgba(255, 159, 10, 0.12);
-  color: #ff9f0a;
+  background: rgba(255, 59, 48, 0.08);
+  border: 1px solid rgba(255, 59, 48, 0.2);
+  color: #ff3b30;
 }
 
 .tip-box-success {

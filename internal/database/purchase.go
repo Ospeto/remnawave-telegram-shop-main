@@ -276,3 +276,41 @@ func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) (
 	}
 	return result, rows.Err()
 }
+
+// RecentPaidRow holds a paid purchase with the customer's Telegram ID.
+type RecentPaidRow struct {
+	PurchaseID    int64
+	TelegramID    int64
+	Amount        float64
+	Currency      string
+	PlanLabel     string
+	PaymentMethod string
+	PaidAt        time.Time
+}
+
+// FindRecentPaid returns the most recently paid purchases, up to limit rows.
+func (pr *PurchaseRepository) FindRecentPaid(ctx context.Context, limit int) ([]RecentPaidRow, error) {
+	query := `
+		SELECT p.id, c.telegram_id, p.amount, p.currency, p.plan_label, p.payment_method, p.paid_at
+		FROM purchase p
+		JOIN customer c ON c.id = p.customer_id
+		WHERE p.status = 'paid' AND p.paid_at IS NOT NULL
+		ORDER BY p.paid_at DESC
+		LIMIT $1`
+
+	rows, err := pr.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent paid purchases: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RecentPaidRow
+	for rows.Next() {
+		var r RecentPaidRow
+		if err := rows.Scan(&r.PurchaseID, &r.TelegramID, &r.Amount, &r.Currency, &r.PlanLabel, &r.PaymentMethod, &r.PaidAt); err != nil {
+			return nil, fmt.Errorf("failed to scan recent paid row: %w", err)
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}

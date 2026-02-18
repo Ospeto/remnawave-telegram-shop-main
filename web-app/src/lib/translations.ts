@@ -88,7 +88,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'payment_details': 'Payment Details',
         'amount_to_send': 'Amount to Send',
         'send_to_phone': 'Send to Phone Number',
-        'warning_no_note': '⚠️ Do NOT add any note or remark',
+        'warning_no_note': '⚠️ Write only "Payment" in the note/remark field',
         'upload_btn': 'Upload Payment Screenshot',
         'uploading_btn': 'Verifying your payment...',
         'upload_hint': 'After you\'ve sent the money, take a screenshot of the confirmation and upload it here. We\'ll verify it automatically in seconds.',
@@ -101,9 +101,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'guide_step_3': 'To this phone number',
         'tap_to_copy': 'Tap to copy',
         'copied': 'Copied!',
-        'guide_step_4': 'Leave the note/remark empty',
-        'guide_step_4_hint': 'Do NOT write anything like "VPN" or "subscription"',
-        'important_warning': 'Important: Send the exact amount shown above. Different amounts will fail verification. Do not add any notes or remarks.',
+        'guide_step_4': 'Write "Payment" in the note/remark',
+        'guide_step_4_hint': 'Do NOT write "VPN", "Outline", or anything else — just "Payment"',
+        'important_warning': 'Important: Send the exact amount shown above. In the note/remark field, write only "Payment". Do NOT write "VPN", "Outline", or anything else — your key will not be issued.',
 
         // Success / Fail
         'success_title': 'Payment Verified!',
@@ -214,7 +214,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'tap_to_copy': 'ဖိပီး ကူးယူပါ',
         'copied': 'ကူးယူပြီး!',
         'guide_step_4': 'Note/Remark တွင် "Payment" ဟုသာ ရေးပါ',
-        "guide_step_4_hint": '"VPN", "Outline" စာသားများ လုံးဝ မရေးပါနှင့်။ ရေးသားပါက Key ထုတ်ပေးမည် မဟုတ်ပါ။',
+        "guide_step_4_hint": '"VPN", "Outline" မရေးပါနှင့်။ "Payment" ဟုသာ ရေးပါ — အခြားစာသားများ ရေးပါက Key ထုတ်ပေးမည် မဟုတ်ပါ။',
         'important_warning': 'အရေးကြီးသည်: ပြထားသော ပမာဏ အတိအကျ လွှဲပါ။ Note/Remark တွင် "Payment" ဟုသာ ရေးပါ။ "VPN", "Outline" ဟု ရေးပါက Key ထုတ်ပေးမည် မဟုတ်ပါ။',
 
         // Success / Fail

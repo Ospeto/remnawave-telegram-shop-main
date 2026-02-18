@@ -140,3 +140,53 @@ func (r *PromoCodeRepository) IncrementUsageAtomic(ctx context.Context, id int64
 
 	return result.RowsAffected() > 0, nil
 }
+
+// ListAll returns all promo codes ordered by creation date descending.
+func (r *PromoCodeRepository) ListAll(ctx context.Context) ([]PromoCode, error) {
+	buildSelect := sq.Select("*").
+		From("promo_codes").
+		OrderBy("created_at DESC").
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build select query: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query promo codes: %w", err)
+	}
+	defer rows.Close()
+
+	var codes []PromoCode
+	for rows.Next() {
+		var p PromoCode
+		if err := rows.Scan(&p.ID, &p.Code, &p.DiscountPercent, &p.MaxUses, &p.UsedCount, &p.ValidUntil, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan promo code: %w", err)
+		}
+		codes = append(codes, p)
+	}
+	return codes, rows.Err()
+}
+
+// Delete removes a promo code by its code name. Returns error if not found.
+func (r *PromoCodeRepository) Delete(ctx context.Context, code string) error {
+	buildDelete := sq.Delete("promo_codes").
+		Where(sq.Eq{"code": code}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildDelete.ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build delete query: %w", err)
+	}
+
+	result, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to delete promo code: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("promo code '%s' not found", code)
+	}
+	return nil
+}

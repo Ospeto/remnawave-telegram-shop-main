@@ -28,7 +28,6 @@ export function Checkout() {
     const [uploading, setUploading] = useState(false);
     const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
     const [phoneCopied, setPhoneCopied] = useState(false);
-    const [amountCopied, setAmountCopied] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -96,15 +95,10 @@ export function Checkout() {
         }
     };
 
-    const copyToClipboard = (text: string, type: 'phone' | 'amount') => {
+    const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text).then(() => {
-            if (type === 'phone') {
-                setPhoneCopied(true);
-                setTimeout(() => setPhoneCopied(false), 2000);
-            } else {
-                setAmountCopied(true);
-                setTimeout(() => setAmountCopied(false), 2000);
-            }
+            setPhoneCopied(true);
+            setTimeout(() => setPhoneCopied(false), 2000);
         });
     };
 
@@ -217,19 +211,6 @@ export function Checkout() {
                                     {purchase?.amount?.toLocaleString()} {purchase?.currency}
                                 </div>
                             </div>
-                            <button
-                                onClick={() => copyToClipboard(String(purchase?.amount || ''), 'amount')}
-                                className="btn-secondary"
-                                style={{
-                                    width: 'auto', padding: '0 20px', borderRadius: 12,
-                                    fontSize: 14, fontWeight: 600,
-                                    background: amountCopied ? '#34c759' : undefined,
-                                    color: amountCopied ? '#fff' : undefined,
-                                    border: amountCopied ? 'none' : undefined
-                                }}
-                            >
-                                {amountCopied ? t('copied') : t('tap_to_copy')}
-                            </button>
                         </div>
                     </div>
                 </div>
@@ -250,17 +231,17 @@ export function Checkout() {
                                 </div>
                             </div>
                             <button
-                                onClick={() => copyToClipboard(purchase?.payment_phone || '', 'phone')}
+                                onClick={() => copyToClipboard(purchase?.payment_phone || '')}
                                 className="btn-secondary"
                                 style={{
-                                    width: 'auto', padding: '0 20px', borderRadius: 12,
-                                    fontSize: 14, fontWeight: 600,
+                                    width: 'auto', padding: '0 16px', borderRadius: 12,
+                                    fontSize: 18,
                                     background: phoneCopied ? '#34c759' : undefined,
                                     color: phoneCopied ? '#fff' : undefined,
                                     border: phoneCopied ? 'none' : undefined
                                 }}
                             >
-                                {phoneCopied ? t('copied') : t('tap_to_copy')}
+                                {phoneCopied ? '✓' : '📋'}
                             </button>
                         </div>
                     </div>

@@ -3,13 +3,14 @@ package notification
 import (
 	"context"
 	"fmt"
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 	"log/slog"
+	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
-	"remnawave-tg-shop-bot/internal/handler"
 	"remnawave-tg-shop-bot/internal/translation"
 	"time"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 type customerRepository interface {
@@ -94,8 +95,10 @@ func (s *SubscriptionService) sendNotification(ctx context.Context, customer dat
 			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{
 					{
-						Text:         s.tm.GetText(customer.Language, "renew_subscription_button"),
-						CallbackData: handler.CallbackBuy,
+						Text: s.tm.GetText(customer.Language, "renew_subscription_button"),
+						WebApp: &models.WebAppInfo{
+							URL: config.GetMiniAppURL() + "/plans?extend=" + fmt.Sprintf("%d", customer.ID),
+						},
 					},
 				},
 			},
