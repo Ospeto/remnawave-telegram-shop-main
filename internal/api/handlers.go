@@ -9,8 +9,11 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
 	"time"
+
+	"github.com/go-telegram/bot"
 )
 
 // --- Response types ---
@@ -63,9 +66,99 @@ type CreatePurchaseResponse struct {
 	InvoiceType  string `json:"invoice_type"`
 }
 
-// ... (WalletServiceInterface remains unchanged)
+// WalletServiceInterface defines the interface for wallet operations
+type WalletServiceInterface interface {
+	GetBalance(ctx context.Context, customerID int64) (float64, error)
+	GetTransactionHistory(ctx context.Context, customerID int64, limit int) ([]database.WalletTransaction, error)
+	HasSufficientBalance(ctx context.Context, customerID int64, amount float64) (bool, error)
+	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
+	SetAutoRenew(ctx context.Context, customerID int64, enabled bool, duration int) error
+	GetAutoRenewStatus(ctx context.Context, customerID int64) (enabled bool, duration int, err error)
+}
 
-// ...
+type UploadScreenshotResponse struct {
+	Status   string `json:"status"`
+	Message  string `json:"message"`
+	Reason   string `json:"reason,omitempty"`
+	HappLink string `json:"happ_link,omitempty"`
+}
+
+type PurchaseStatusResponse struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+}
+
+// --- Handler ---
+
+type APIHandler struct {
+	customerRepo        *database.CustomerRepository
+	paymentService      *payment.PaymentService
+	telegramBot         *bot.Bot
+	translation         *translation.Manager
+	subKeyRepo          *database.SubscriptionKeyRepository
+	promoCodeRepository *database.PromoCodeRepository
+	walletService       WalletServiceInterface
+}
+
+func NewAPIHandler(
+	customerRepo *database.CustomerRepository,
+	paymentService *payment.PaymentService,
+	telegramBot *bot.Bot,
+	tm *translation.Manager,
+	subKeyRepo *database.SubscriptionKeyRepository,
+	promoCodeRepository *database.PromoCodeRepository,
+	walletService WalletServiceInterface,
+) *APIHandler {
+	return &APIHandler{
+		customerRepo:        customerRepo,
+		paymentService:      paymentService,
+		telegramBot:         telegramBot,
+		translation:         tm,
+		subKeyRepo:          subKeyRepo,
+		promoCodeRepository: promoCodeRepository,
+		walletService:       walletService,
+	}
+}
+
+// --- Handlers ---
+
+func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "Missing code", http.StatusBadRequest)
+		return
+	}
+
+	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
+	if err != nil {
+		http.Error(w, "Invalid code", http.StatusNotFound)
+		return
+	}
+
+	if promo.UsedCount >= promo.MaxUses {
+		http.Error(w, "Code usage limit reached", http.StatusForbidden)
+		return
+	}
+
+	if time.Now().After(promo.ValidUntil) {
+		http.Error(w, "Code expired", http.StatusForbidden)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"valid":            true,
+		"code":             promo.Code,
+		"discount_percent": promo.DiscountPercent,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
 
 func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -97,7 +190,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	var price float64
 	var days int
-	var trafficLimit float64
+	var trafficLimit int
 	var label string
 
 	if invoiceType == database.InvoiceTypeWalletTopUp {
