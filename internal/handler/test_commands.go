@@ -56,7 +56,7 @@ func (h *Handler) NotiCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	if len(args) < 2 {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   "Usage: /noti <telegram_id>",
+			Text:   "Usage: /noti <telegram_id> or /notify <telegram_id>",
 		})
 		return
 	}

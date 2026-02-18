@@ -653,9 +653,13 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 	}
 
 	// === TEST MODE BYPASS ===
-	if s.IsTestMode() && strings.TrimSpace(info.TransactionID) == TestTransactionID {
-		slog.Info("Test Mode: Magic Transaction ID matched. Bypassing checks.", "purchase_id", purchaseID)
-		// Skip duplicate check, amount check, etc.
+	// In Test Mode, we accept:
+	// 1. "Magic" Transaction ID (bypasses everything)
+	// 2. Any valid-looking receipt (bypasses duplicate/amount checks)
+	if s.IsTestMode() {
+		isMagic := strings.TrimSpace(info.TransactionID) == TestTransactionID
+		slog.Info("Test Mode processing", "purchase_id", purchaseID, "is_magic", isMagic)
+
 		// Record verification as "TEST_MODE_BYPASS"
 		_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
 			PurchaseID:    purchaseID,

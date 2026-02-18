@@ -283,7 +283,7 @@ export function Checkout() {
                         disabled={payingWithWallet}
                         style={{ width: '100%', background: '#34c759' }}
                     >
-                        {payingWithWallet ? 'Processing...' : `Pay ${purchase?.amount.toLocaleString()} ${purchase?.currency}`}
+                        {payingWithWallet ? 'Processing...' : `Pay ${(purchase?.amount || 0).toLocaleString()} ${purchase?.currency || ''}`}
                     </button>
                 </div>
             )}
@@ -315,7 +315,7 @@ export function Checkout() {
                                 display: 'flex', alignItems: 'center'
                             }}>
                                 <div className="text-link" style={{ fontSize: 24, fontWeight: 700 }}>
-                                    {purchase?.amount?.toLocaleString()} {purchase?.currency}
+                                    {(purchase?.amount || 0).toLocaleString()} {purchase?.currency || ''}
                                 </div>
                             </div>
                         </div>
