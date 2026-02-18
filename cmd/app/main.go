@@ -265,10 +265,21 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {
 
 func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil && update.Message.From.ID == config.GetAdminTelegramId() {
+		if update.Message == nil {
+			return
+		}
+		adminID := config.GetAdminTelegramId()
+		userID := update.Message.From.ID
+
+		if userID == adminID {
 			next(ctx, b, update)
 		} else {
-			return
+			slog.Warn("Unauthorized admin command attempt", "user_id", userID, "admin_id", adminID, "command", update.Message.Text)
+			// Optional: Reply to user saying unauthorized? Maybe better to stay silent security-wise, but for debugging prompt:
+			// b.SendMessage(ctx, &bot.SendMessageParams{
+			// 	ChatID: update.Message.Chat.ID,
+			// 	Text:   fmt.Sprintf("⛔ Unauthorized. Your ID: %d. Expected Admin ID: %d", userID, adminID),
+			// })
 		}
 	}
 }

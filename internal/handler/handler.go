@@ -50,18 +50,5 @@ func NewHandler(
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
 	}
-	// Note: TestMode is managed by PaymentService now.
-	return &Handler{
-		syncService:         syncService,
-		paymentService:      paymentService,
-		customerRepository:  customerRepository,
-		purchaseRepository:  purchaseRepository,
-		cryptoPayClient:     cryptoPayClient,
-		translation:         translation,
-		subscriptionService: subscriptionService,
-		referralRepository:  referralRepository,
-		promoCodeRepository: promoCodeRepository,
-		cache:               cache,
-		mobilePayCache:      mobilePayCache,
 	}
 }
