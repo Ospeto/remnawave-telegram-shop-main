@@ -680,6 +680,60 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 	return "", purchaseId, nil
 }
 
+// CreatePurchaseWithExtend is like createWalletPurchase but sets ExtendKeyID so
+// ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
+// rather than creating a brand-new user. Used by the per-key auto-renew cron.
+func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64) (url string, purchaseId int64, err error) {
+	if customer.Balance < amount {
+		return "", 0, fmt.Errorf("insufficient wallet balance")
+	}
+
+	// Create the purchase record with ExtendKeyID set.
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    &keyID,
+	})
+	if err != nil {
+		slog.Error("Error creating extend-key wallet purchase", "error", err)
+		return "", 0, err
+	}
+
+	// Deduct balance atomically.
+	if err := s.customerRepository.DeductBalance(ctx, customer.ID, amount); err != nil {
+		slog.Error("Error deducting wallet balance for extend-key", "error", err, "purchase_id", purchaseId)
+		s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{"status": database.PurchaseStatusCancel})
+		return "", 0, fmt.Errorf("failed to deduct balance: %w", err)
+	}
+
+	// Log the transaction.
+	if s.walletTxRepo != nil {
+		if _, err := s.walletTxRepo.Create(ctx, &database.WalletTransaction{
+			CustomerID:  customer.ID,
+			Amount:      -amount,
+			Type:        database.WalletTransactionTypePurchase,
+			PurchaseID:  &purchaseId,
+			Description: fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days),
+		}); err != nil {
+			slog.Error("Failed to log extend-key wallet transaction (non-fatal)", "error", err)
+		}
+	}
+
+	// Process immediately: follows the ExtendKeyID branch in ProcessPurchaseById.
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		slog.Error("Error processing extend-key wallet purchase", "error", err, "purchase_id", purchaseId)
+		return "", 0, err
+	}
+
+	slog.Info("Extend-key wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "key_id", keyID, "customer_id", utils.MaskHalfInt64(customer.ID))
+	return "", purchaseId, nil
+}
+
 // VerificationResult holds the outcome of a mobile payment screenshot check.
 type VerificationResult struct {
 	Success   bool

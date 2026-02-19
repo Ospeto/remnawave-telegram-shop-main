@@ -57,6 +57,9 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/wallet/history", withAuth(handler.GetWalletHistory))
 	mux.HandleFunc("/api/wallet/autorenew", withAuth(handler.UpdateAutoRenew))
 
+	// Per-key auto-renew toggle
+	mux.HandleFunc("/api/keys/autorenew", withAuth(handler.UpdateKeyAutoRenew))
+
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("url")

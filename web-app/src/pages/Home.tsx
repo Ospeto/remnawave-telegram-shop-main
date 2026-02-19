@@ -18,6 +18,7 @@ interface SubscriptionKey {
     status: string;
     traffic_used_gb: number;
     traffic_limit_gb: number;
+    auto_renew: boolean;
 }
 
 interface UserData {
@@ -48,6 +49,7 @@ export function Home() {
     const [copiedId, setCopiedId] = useState<number | null>(null);
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
+    const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
 
     const authHeaders = initData ? { 'Authorization': `twa ${initData}` } : undefined;
 
@@ -73,6 +75,37 @@ export function Home() {
             setCopiedId(id);
             setTimeout(() => setCopiedId(null), 2000);
         });
+    };
+
+    const toggleKeyAutoRenew = async (keyId: number, currentValue: boolean) => {
+        if (!initData || togglingAutoRenewId === keyId) return;
+        setTogglingAutoRenewId(keyId);
+        try {
+            const res = await fetch('/api/keys/autorenew', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `twa ${initData}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ key_id: keyId, enabled: !currentValue }),
+            });
+            if (res.ok) {
+                // Optimistic update — flip the local state immediately
+                setData(prev => {
+                    if (!prev) return prev;
+                    return {
+                        ...prev,
+                        keys: prev.keys.map(k =>
+                            k.id === keyId ? { ...k, auto_renew: !currentValue } : k
+                        ),
+                    };
+                });
+            }
+        } catch (err) {
+            console.warn('Failed to toggle key auto-renew:', err);
+        } finally {
+            setTogglingAutoRenewId(null);
+        }
     };
 
     const toggleLanguage = () => {
@@ -318,6 +351,40 @@ export function Home() {
                                             {copiedId === key.id ? t('copied') : t('btn_copy_key')}
                                         </button>
                                     </div>
+
+                                    {/* Per-key auto-renew toggle */}
+                                    {key.status === 'active' && (
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 4 }}>
+                                            <div>
+                                                <div style={{ fontSize: 13, fontWeight: 600 }}>🔄 {t('auto_renew_title')}</div>
+                                                <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>
+                                                    {key.auto_renew ? t('auto_renew_enabled', { days: 30 }) : t('auto_renew_disabled')}
+                                                </div>
+                                            </div>
+                                            <button
+                                                role="switch"
+                                                aria-checked={key.auto_renew}
+                                                aria-label={t('auto_renew_title')}
+                                                onClick={() => toggleKeyAutoRenew(key.id, key.auto_renew)}
+                                                disabled={togglingAutoRenewId === key.id}
+                                                style={{
+                                                    width: 46, height: 28, borderRadius: 14, border: 'none',
+                                                    background: key.auto_renew ? '#34c759' : 'rgba(255,255,255,0.15)',
+                                                    position: 'relative', cursor: togglingAutoRenewId === key.id ? 'not-allowed' : 'pointer',
+                                                    transition: 'background 0.2s', opacity: togglingAutoRenewId === key.id ? 0.7 : 1,
+                                                    flexShrink: 0,
+                                                }}
+                                            >
+                                                <div style={{
+                                                    width: 22, height: 22, borderRadius: 11, background: '#fff',
+                                                    position: 'absolute', top: 3,
+                                                    left: key.auto_renew ? 21 : 3,
+                                                    transition: 'left 0.2s',
+                                                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                                                }} />
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         );

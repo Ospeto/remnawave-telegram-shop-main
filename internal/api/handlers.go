@@ -29,6 +29,7 @@ type KeyResponse struct {
 	Status          string     `json:"status"`
 	TrafficUsedGB   float64    `json:"traffic_used_gb"`
 	TrafficLimitGB  float64    `json:"traffic_limit_gb"`
+	AutoRenew       bool       `json:"auto_renew"`
 }
 
 type ValidationResponse struct {
@@ -74,6 +75,7 @@ type WalletServiceInterface interface {
 	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
 	SetAutoRenew(ctx context.Context, customerID int64, enabled bool, duration int) error
 	GetAutoRenewStatus(ctx context.Context, customerID int64) (enabled bool, duration int, err error)
+	SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error
 }
 
 type UploadScreenshotResponse struct {
@@ -342,6 +344,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				Status:          k.Status,
 				TrafficUsedGB:   usedGB,
 				TrafficLimitGB:  limitGB,
+				AutoRenew:       k.AutoRenew,
 			})
 		}
 	} else if h.subKeyRepo != nil {
@@ -367,6 +370,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				ExpireAt:        k.ExpireAt,
 				DaysRemaining:   kDays,
 				Status:          k.Status,
+				AutoRenew:       k.AutoRenew,
 			})
 		}
 	}
@@ -767,6 +771,54 @@ func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
 		http.Error(w, "Failed to update auto-renew: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// UpdateKeyAutoRenew toggles the auto_renew flag on a specific subscription key.
+// POST /api/keys/autorenew
+// Body: { "key_id": 42, "enabled": true }
+func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		KeyID   int64 `json:"key_id"`
+		Enabled bool  `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.KeyID == 0 {
+		http.Error(w, "Missing key_id", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// SetKeyAutoRenew validates that key.customer_id == customer.ID internally.
+	if err := h.walletService.SetKeyAutoRenew(r.Context(), req.KeyID, customer.ID, req.Enabled); err != nil {
+		http.Error(w, "Failed to update key auto-renew: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 

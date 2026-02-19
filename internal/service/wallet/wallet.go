@@ -166,3 +166,39 @@ func (s *WalletService) GetAutoRenewStatus(ctx context.Context, customerID int64
 	}
 	return customer.AutoRenew, customer.AutoRenewDuration, nil
 }
+
+// SetKeyAutoRenew toggles auto-renew for a specific subscription key.
+// Ownership is validated inside the repository (customerID must match key.customer_id).
+func (s *WalletService) SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error {
+	return s.subKeyRepo.SetAutoRenew(ctx, keyID, customerID, enabled)
+}
+
+// ExtendKeyWithBalance extends a specific subscription key using the customer's
+// wallet balance. It validates balance first, then delegates to the payment
+// service which charges the wallet and calls Remnawave's extend API.
+func (s *WalletService) ExtendKeyWithBalance(ctx context.Context, keyID int64, customerID int64, planPrice float64, days int, trafficGB int) error {
+	customer, err := s.customerRepo.FindById(ctx, customerID)
+	if err != nil {
+		return err
+	}
+	if customer == nil {
+		return fmt.Errorf("customer not found")
+	}
+	if customer.Balance < planPrice {
+		return fmt.Errorf("insufficient balance: have %.2f, need %.2f", customer.Balance, planPrice)
+	}
+
+	// Ownership check: make sure the key belongs to this customer.
+	key, err := s.subKeyRepo.FindByID(ctx, keyID)
+	if err != nil {
+		return err
+	}
+	if key == nil || key.CustomerID != customerID {
+		return fmt.Errorf("key %d not found or not owned by this customer", keyID)
+	}
+
+	// Delegate to CreatePurchase with ExtendKeyID set — this charges the wallet
+	// and calls Remnawave ExtendUser on the specific key UUID.
+	_, _, err = s.paymentService.CreatePurchaseWithExtend(ctx, planPrice, days, trafficGB, customer, keyID)
+	return err
+}

@@ -113,7 +113,7 @@ func main() {
 	subscriptionNotificationCronScheduler.Start()
 	defer subscriptionNotificationCronScheduler.Stop()
 
-	autoRenewJob := autorenew.New(customerRepository, walletService, paymentService, tm, b)
+	autoRenewJob := autorenew.New(subKeyRepo, customerRepository, walletService, tm, b)
 	autoRenewCron := cron.New()
 	_, err = autoRenewCron.AddFunc("0 9 * * *", func() {
 		cronCtx := newCronContext("auto_renew")
