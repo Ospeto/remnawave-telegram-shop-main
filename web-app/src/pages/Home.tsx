@@ -182,8 +182,16 @@ export function Home() {
                 <Link to="/wallet" className="glass-card" style={{
                     padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
                     textDecoration: 'none', color: 'var(--tg-text)',
-                    background: 'rgba(255, 255, 255, 0.05)'
-                }}>
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                    cursor: 'pointer'
+                }}
+                    onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.98)')}
+                    onMouseUp={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                    onTouchStart={(e) => (e.currentTarget.style.transform = 'scale(0.98)')}
+                    onTouchEnd={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                >
                     <div style={{
                         width: 40, height: 40, borderRadius: 20,
                         background: 'linear-gradient(135deg, rgba(52, 199, 89, 0.1), rgba(48, 209, 88, 0.05))',
