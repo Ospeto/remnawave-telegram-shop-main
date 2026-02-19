@@ -102,17 +102,44 @@ export function Wallet() {
         </p>
       </div>
 
-      {/* Balance Card */}
-      <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
-        <div className="text-hint" style={{ fontSize: 13, marginBottom: 8 }}>
+      {/* Balance Card - Premium Digital Card */}
+      <div className="digital-card animate-slide-up" style={{ padding: '24px', textAlign: 'center', position: 'relative' }}>
+        {/* Decorative card chip icon */}
+        <div style={{
+          position: 'absolute', top: 20, left: 24,
+          width: 40, height: 28, borderRadius: 6,
+          background: 'linear-gradient(135deg, rgba(255,255,255,0.4), rgba(255,255,255,0.1))',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }} aria-hidden="true" />
+
+        {/* Visa-style contactless icon */}
+        <div style={{
+          position: 'absolute', top: 20, right: 24,
+          fontSize: 24, opacity: 0.8
+        }} aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
+            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
+            <line x1="12" y1="20" x2="12.01" y2="20" />
+          </svg>
+        </div>
+
+        <div className="text-hint" style={{ fontSize: '13px', marginBottom: 8, color: 'rgba(255,255,255,0.8)', marginTop: 20 }}>
           {t('current_balance')}
         </div>
-        <div style={{ fontSize: 36, fontWeight: 800, marginBottom: 4 }}>
+        <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: 24, textShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
           {(wallet?.balance || 0).toLocaleString()} {wallet?.currency || ''}
         </div>
         <button
           className="btn-primary"
-          style={{ marginTop: 16, width: '100%' }}
+          style={{
+            marginTop: 0, width: '100%',
+            background: 'rgba(255,255,255,0.2)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.2)',
+            boxShadow: 'none'
+          }}
           onClick={() => navigate('/plans?walletTopup=true')}
         >
           {t('top_up_wallet')}
