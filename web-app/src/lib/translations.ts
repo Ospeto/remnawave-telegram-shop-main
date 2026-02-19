@@ -129,6 +129,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'transaction_purchase': 'Plan Purchase',
         'transaction_refund': 'Refund',
         'wallet_info': 'Funds in your wallet never expire and can be used for any future purchase.',
+        'no_refund_title': 'Refund Policy',
+        'no_refund_desc': 'All purchases are final and non-refundable. Funds in your wallet do not expire.',
 
         // Wallet Tips
         'wallet_tips_title': 'Why use Wallet?',
@@ -290,6 +292,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'transaction_purchase': 'Plan ဝယ်ယူခြင်း',
         'transaction_refund': 'ငွေပြန်အမ်းခြင်း',
         'wallet_info': 'Wallet အတွင်းရှိ ငွေများသည် သက်တမ်းကုန်ဆုံးခြင်း မရှိဘဲ လိုအပ်သလို အသုံးပြုနိုင်ပါသည်။',
+        'no_refund_title': 'ငွေပြန်အမ်းခြင်း ဆိုင်ရာ မူဝါဒ',
+        'no_refund_desc': 'ဝန်ဆောင်မှု ဝယ်ယူပြီးပါက ငွေပြန်အမ်းခြင်း (Refund) ပြုလုပ်၍ မရနိုင်ပါ။ Wallet အတွင်းရှိ ငွေများမှာမူ သက်တမ်းကုန်ဆုံးခြင်း မရှိဘဲ လိုအပ်သလို ဆက်လက် အသုံးပြုနိုင်ပါသည်။',
 
         // Wallet Tips
         'wallet_tips_title': 'Wavy Wallet ၏ အားသာချက်များ',
