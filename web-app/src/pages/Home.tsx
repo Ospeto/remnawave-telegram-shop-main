@@ -6,6 +6,7 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { TipBox } from '../components/TipBox';
 import { UserData } from '../lib/types';
+import { useMXBrownSound } from '../lib/useMXBrownSound';
 
 
 
@@ -25,6 +26,7 @@ export function Home() {
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
     const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
+    const { playClick } = useMXBrownSound();
 
     const authHeaders = initData ? { 'Authorization': `twa ${initData}` } : undefined;
 
@@ -174,7 +176,7 @@ export function Home() {
                 </div>
                 {/* Language Switcher */}
                 <button
-                    onClick={toggleLanguage}
+                    onClick={() => { playClick(); toggleLanguage(); }}
                     className="btn-secondary"
                     aria-label={language === 'en' ? 'Switch to Myanmar' : 'Switch to English'}
                     style={{ width: 'auto', padding: '8px 12px', fontSize: 'var(--font-body)', borderRadius: 20 }}
@@ -349,7 +351,7 @@ export function Home() {
                                         <button
                                             className="btn-primary"
                                             style={{ padding: '13px', fontSize: 'var(--font-body)', fontWeight: 600 }}
-                                            onClick={() => handleHappLink(key.happ_link)}
+                                            onClick={() => { playClick(); handleHappLink(key.happ_link); }}
                                         >
                                             {t('btn_add_happ')}
                                         </button>
@@ -360,7 +362,7 @@ export function Home() {
                                         </Link>
                                         <button
                                             className="btn-secondary"
-                                            onClick={() => handleCopy(key.subscription_url, key.id)}
+                                            onClick={() => { playClick(); handleCopy(key.subscription_url, key.id); }}
                                             aria-label={copiedId === key.id ? t('copied') : t('btn_copy_key')}
                                             style={{ flex: 1, padding: '12px', fontSize: 'var(--font-body)', fontWeight: 500 }}
                                         >
@@ -382,7 +384,7 @@ export function Home() {
                                                 role="switch"
                                                 aria-checked={key.auto_renew}
                                                 aria-label={t('auto_renew_title')}
-                                                onClick={() => toggleKeyAutoRenew(key.id, key.auto_renew)}
+                                                onClick={() => { playClick(); toggleKeyAutoRenew(key.id, key.auto_renew); }}
                                                 disabled={togglingAutoRenewId === key.id}
                                                 style={{
                                                     width: 46, height: 28, borderRadius: 14, border: 'none',
@@ -440,7 +442,7 @@ export function Home() {
                 <>
                     <button
                         className="btn-primary animate-slide-up"
-                        onClick={handleTrialActivation}
+                        onClick={() => { playClick(); handleTrialActivation(); }}
                         disabled={trialLoading}
                         style={{
                             background: 'linear-gradient(135deg, #00d2be, #00b4dc)',

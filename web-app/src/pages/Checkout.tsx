@@ -4,6 +4,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { TipBox } from '../components/TipBox';
+import { useMXBrownSound } from '../lib/useMXBrownSound';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -18,6 +19,7 @@ export function Checkout() {
     const { planIndex } = useParams();
     const { tg, initData } = useTelegram();
     const { t } = useLanguage();
+    const { playClick } = useMXBrownSound();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
 
@@ -183,7 +185,7 @@ export function Checkout() {
         <div className="screen-center">
             <div style={{ fontSize: 48 }} aria-hidden="true">❌</div>
             <p style={{ color: 'var(--color-danger)', textAlign: 'center', fontSize: 14 }}>{error}</p>
-            <button className="btn-secondary" onClick={() => navigate('/plans')}>{t('back_to_plans')}</button>
+            <button className="btn-secondary" onClick={() => { playClick(); navigate('/plans'); }}>{t('back_to_plans')}</button>
         </div>
     );
 
@@ -199,7 +201,7 @@ export function Checkout() {
                 {verificationResult?.happ_link && (
                     <button
                         className="btn-primary"
-                        onClick={() => handleHappLink(verificationResult.happ_link!)}
+                        onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!); }}
                         style={{ marginTop: 12, width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
                     >
                         {t('btn_open_happ')}
@@ -222,7 +224,7 @@ export function Checkout() {
                     {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
                 </TipBox>
 
-                <button className="btn-secondary" onClick={() => navigate(isWalletTopup ? '/wallet' : '/')} style={{ width: '100%', opacity: 0.7 }}>
+                <button className="btn-secondary" onClick={() => { playClick(); navigate(isWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%', opacity: 0.7 }}>
                     {isWalletTopup ? t('back_to_wallet') : t('go_home')}
                 </button>
             </div>
@@ -268,7 +270,7 @@ export function Checkout() {
                     )}
                     <button
                         className="btn-primary"
-                        onClick={handlePayWithWallet}
+                        onClick={() => { playClick(); handlePayWithWallet(); }}
                         disabled={payingWithWallet}
                         style={{ width: '100%', background: 'var(--color-success)', opacity: payingWithWallet ? 0.7 : 1 }}
                     >
@@ -300,7 +302,7 @@ export function Checkout() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ fontWeight: 700 }}>{(purchase?.amount || 0).toLocaleString()}</div>
                             <button
-                                onClick={() => copyToClipboard(String(purchase?.amount))}
+                                onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }}
                                 className="btn-secondary"
                                 style={{ padding: '4px 8px', fontSize: 14, minWidth: 32 }}
                             >
@@ -317,7 +319,7 @@ export function Checkout() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>{purchase?.payment_phone}</div>
                             <button
-                                onClick={() => copyToClipboard(purchase?.payment_phone || '')}
+                                onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }}
                                 className="btn-secondary"
                                 style={{ padding: '4px 8px', fontSize: 14, minWidth: 32, color: phoneCopied ? 'var(--color-success)' : undefined }}
                             >
@@ -354,7 +356,7 @@ export function Checkout() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <button
                     disabled={uploading}
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => { playClick(); fileInputRef.current?.click(); }}
                     className="btn-primary"
                     style={{
                         fontSize: 17,

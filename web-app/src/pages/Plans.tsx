@@ -5,6 +5,7 @@ import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
+import { useMXBrownSound } from '../lib/useMXBrownSound';
 
 
 
@@ -12,6 +13,7 @@ export function Plans() {
     const { tg, initData } = useTelegram();
     const { t, language } = useLanguage();
     const navigate = useNavigate();
+    const { playClick } = useMXBrownSound();
     const [searchParams] = useSearchParams();
     const [plans, setPlans] = useState<Plan[]>([]);
     const [userData, setUserData] = useState<UserData | null>(null);
@@ -184,7 +186,7 @@ export function Plans() {
                         onBlur={e => (e.target.style.border = '1px solid var(--input-border)')}
                     />
                     <button
-                        onClick={handleApplyPromo}
+                        onClick={() => { playClick(); handleApplyPromo(); }}
                         disabled={promoStatus === 'validating' || !promoCode.trim()}
                         className="btn-secondary"
                         style={{
