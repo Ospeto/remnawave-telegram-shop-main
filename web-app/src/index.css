@@ -11,6 +11,16 @@
   --tg-btn: var(--tg-theme-button-color, #5ebbff);
   --tg-btn-text: var(--tg-theme-button-text-color, #ffffff);
   --tg-secondary: var(--tg-theme-secondary-bg-color, #1a1a2e);
+
+  /* Typography Scale */
+  --font-h1: 20px;
+  --font-h2: 16px;
+  --font-body: 14px;
+  --font-caption: 12px;
+
+  --weight-bold: 700;
+  --weight-semibold: 600;
+  --weight-regular: 400;
 }
 
 * {
