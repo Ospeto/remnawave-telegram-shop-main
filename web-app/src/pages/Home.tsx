@@ -183,12 +183,12 @@ export function Home() {
                 </button>
             </div>
 
-            {/* Wallet Button */}
+            {/* Wallet Button - Premium Digital Card */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
-                <Link to="/wallet" className="glass-card" style={{
-                    padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12,
+                <Link to="/wallet" className="digital-card animate-slide-up" style={{
+                    padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
                     textDecoration: 'none', color: 'var(--tg-text)',
-                    background: 'rgba(255, 255, 255, 0.05)',
+                    // Removed manual background to let .digital-card gradient shine
                     transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
                     cursor: 'pointer'
                 }}
@@ -199,22 +199,29 @@ export function Home() {
                     onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                 >
                     <div style={{
-                        width: 40, height: 40, borderRadius: 20,
-                        background: 'linear-gradient(135deg, rgba(52, 199, 89, 0.1), rgba(48, 209, 88, 0.05))',
+                        width: 44, height: 44, borderRadius: 12,
+                        background: 'rgba(255, 255, 255, 0.15)',
+                        backdropFilter: 'blur(10px)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: '#30d158', border: '1px solid rgba(52, 199, 89, 0.15)'
+                        color: '#ffffff',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
                     }} aria-hidden="true">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4" />
                             <path d="M4 6v12a2 2 0 0 0 2 2h14v-4" />
                             <path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z" />
                         </svg>
                     </div>
                     <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'var(--weight-semibold)', fontSize: '15px' }}>{t('wallet_title')}</div>
-                        <div className="text-hint" style={{ fontSize: 'var(--font-caption)' }}>{t('wallet_subtitle')}</div>
+                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px', color: '#ffffff', letterSpacing: '0.2px' }}>{t('wallet_title')}</div>
+                        <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.9)', marginTop: 1 }}>{t('wallet_subtitle')}</div>
                     </div>
-                    <div style={{ fontSize: 18, opacity: 0.5 }} aria-hidden="true">→</div>
+                    <div style={{
+                        width: 28, height: 28, borderRadius: 14,
+                        background: 'rgba(255,255,255,0.1)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 14, color: '#ffffff'
+                    }} aria-hidden="true">→</div>
                 </Link>
             </div>
 
