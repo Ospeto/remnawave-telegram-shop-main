@@ -184,7 +184,18 @@ export function Home() {
                     textDecoration: 'none', color: 'var(--tg-text)',
                     background: 'rgba(255, 255, 255, 0.05)'
                 }}>
-                    <div style={{ fontSize: 24 }} aria-hidden="true">👛</div>
+                    <div style={{
+                        width: 40, height: 40, borderRadius: 20,
+                        background: 'linear-gradient(135deg, rgba(52, 199, 89, 0.1), rgba(48, 209, 88, 0.05))',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: '#30d158', border: '1px solid rgba(52, 199, 89, 0.15)'
+                    }} aria-hidden="true">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M20 12V8H6a2 2 0 0 1-2-2c0-1.1.9-2 2-2h12v4" />
+                            <path d="M4 6v12a2 2 0 0 0 2 2h14v-4" />
+                            <path d="M18 12a2 2 0 0 0-2 2c0 1.1.9 2 2 2h4v-4h-4z" />
+                        </svg>
+                    </div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600, fontSize: 15 }}>{t('wallet_title')}</div>
                         <div className="text-hint" style={{ fontSize: 12 }}>{t('wallet_subtitle')}</div>

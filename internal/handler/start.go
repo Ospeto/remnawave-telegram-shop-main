@@ -6,9 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
-	"log/slog"
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -67,7 +68,7 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		}
 	}
 
-	inlineKeyboard := h.buildStartKeyboard(existingCustomer, langCode)
+	inlineKeyboard := h.buildStartKeyboard(existingCustomer, "my")
 
 	m, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
@@ -98,7 +99,7 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText(langCode, "greeting"),
+		Text: h.translation.GetText("my", "greeting"),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)
@@ -110,7 +111,6 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 	defer cancel()
 
 	callback := update.CallbackQuery
-	langCode := callback.From.LanguageCode
 
 	existingCustomer, err := h.customerRepository.FindByTelegramId(ctxWithTime, callback.From.ID)
 	if err != nil {
@@ -118,7 +118,7 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		return
 	}
 
-	inlineKeyboard := h.buildStartKeyboard(existingCustomer, langCode)
+	inlineKeyboard := h.buildStartKeyboard(existingCustomer, "my")
 
 	_, err = b.EditMessageText(ctxWithTime, &bot.EditMessageTextParams{
 		ChatID:    callback.Message.Message.Chat.ID,
@@ -127,7 +127,7 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText(langCode, "greeting"),
+		Text: h.translation.GetText("my", "greeting"),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)
