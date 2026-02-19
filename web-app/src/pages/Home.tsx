@@ -159,8 +159,8 @@ export function Home() {
                     }}
                 />
                 <div style={{ flex: 1 }}>
-                    <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>{t('home_title')}</h1>
-                    <p className="text-hint" style={{ fontSize: 12, margin: 0 }}>
+                    <h1 style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: 0 }}>{t('home_title')}</h1>
+                    <p className="text-hint" style={{ fontSize: 'var(--font-caption)', margin: 0 }}>
                         {activeKeys.length > 0
                             ? (activeKeys.length === 1 ? t('active_key_count', { count: 1 }) : t('active_key_count_plural', { count: activeKeys.length }))
                             : t('no_active_keys')}
@@ -171,7 +171,7 @@ export function Home() {
                     onClick={toggleLanguage}
                     className="btn-secondary"
                     aria-label={language === 'en' ? 'Switch to Myanmar' : 'Switch to English'}
-                    style={{ width: 'auto', padding: '8px 12px', fontSize: 14, borderRadius: 20 }}
+                    style={{ width: 'auto', padding: '8px 12px', fontSize: 'var(--font-body)', borderRadius: 20 }}
                 >
                     {language === 'en' ? '🇺🇸 EN' : '🇲🇲 MY'}
                 </button>
@@ -205,8 +205,8 @@ export function Home() {
                         </svg>
                     </div>
                     <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 15 }}>{t('wallet_title')}</div>
-                        <div className="text-hint" style={{ fontSize: 12 }}>{t('wallet_subtitle')}</div>
+                        <div style={{ fontWeight: 'var(--weight-semibold)', fontSize: '15px' }}>{t('wallet_title')}</div>
+                        <div className="text-hint" style={{ fontSize: 'var(--font-caption)' }}>{t('wallet_subtitle')}</div>
                     </div>
                     <div style={{ fontSize: 18, opacity: 0.5 }} aria-hidden="true">→</div>
                 </Link>
@@ -214,17 +214,17 @@ export function Home() {
 
             {/* Download App Prompt */}
             <div className="glass-card" style={{ background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03))', border: '1px solid rgba(0, 210, 190, 0.15)', padding: 16 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <h3 style={{ fontSize: 'var(--font-body)', fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {t('download_title')}
                 </h3>
-                <p style={{ fontSize: 12, margin: '0 0 12px', opacity: 0.9 }}>
+                <p style={{ fontSize: 'var(--font-caption)', margin: '0 0 12px', opacity: 0.9 }}>
                     {t('download_text')}
                 </p>
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                    <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         Android
                     </a>
-                    <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 12, padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                    <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         iOS
                     </a>
                 </div>
@@ -253,9 +253,9 @@ export function Home() {
                                 {/* Key header */}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                                     <div>
-                                        <div style={{ fontWeight: 700, fontSize: 16, letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
+                                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: 'var(--font-h2)', letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
                                         {key.username && key.label && (
-                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{key.username}</div>
+                                            <div className="text-hint" style={{ fontSize: 'var(--font-caption)', marginTop: 2 }}>{key.username}</div>
                                         )}
                                     </div>
                                     <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`}>
@@ -268,10 +268,10 @@ export function Home() {
                                     <div style={{ marginBottom: 20 }}>
                                         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                                             <span style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, letterSpacing: '-1px' }}>{key.days_remaining}</span>
-                                            <span className="text-hint" style={{ fontSize: 14 }}>{t('days_left')}</span>
+                                            <span className="text-hint" style={{ fontSize: 'var(--font-body)' }}>{t('days_left')}</span>
                                         </div>
                                         {key.expire_at && (
-                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 4, opacity: 0.7 }}>
+                                            <div className="text-hint" style={{ fontSize: 'var(--font-caption)', marginTop: 4, opacity: 0.7 }}>
                                                 {t('expires_on', { date: new Date(key.expire_at).toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric', year: 'numeric' }) })}
                                             </div>
                                         )}
@@ -288,16 +288,17 @@ export function Home() {
                                                 height: '100%', borderRadius: 2,
                                                 background: key.days_remaining > 7 ? '#00d2be' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
                                                 width: `${daysPct}%`,
-                                                transition: 'width 0.5s ease'
+                                                transition: 'width 0.5s ease',
+                                                boxShadow: '0 0 10px rgba(0, 210, 190, 0.5)' // Added glow per Council
                                             }} />
                                         </div>
 
                                         {/* Traffic Usage (if limit exists) */}
                                         {key.traffic_limit_gb > 0 && (
                                             <div style={{ marginTop: 14 }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 6 }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-caption)', marginBottom: 6 }}>
                                                     <span className="text-hint">{t('data_usage')}</span>
-                                                    <span style={{ fontWeight: 600, fontFamily: 'monospace' }}>
+                                                    <span style={{ fontWeight: 'var(--weight-semibold)', fontFamily: 'monospace' }}>
                                                         {key.traffic_used_gb.toFixed(1)} <span style={{ opacity: 0.5 }}>/</span> {key.traffic_limit_gb.toFixed(0)} GB
                                                     </span>
                                                 </div>
@@ -313,7 +314,8 @@ export function Home() {
                                                         height: '100%', borderRadius: 2,
                                                         background: trafficPct > 90 ? '#ff3b30' : trafficPct > 75 ? '#ff9f0a' : '#00b4dc',
                                                         width: `${trafficPct}%`,
-                                                        transition: 'width 0.5s ease'
+                                                        transition: 'width 0.5s ease',
+                                                        boxShadow: '0 0 8px rgba(0, 180, 220, 0.4)' // Added glow per Council
                                                     }} />
                                                 </div>
                                             </div>
@@ -333,21 +335,21 @@ export function Home() {
                                     {key.status === 'active' && key.happ_link && (
                                         <button
                                             className="btn-primary"
-                                            style={{ padding: '13px', fontSize: 14, fontWeight: 600 }}
+                                            style={{ padding: '13px', fontSize: 'var(--font-body)', fontWeight: 600 }}
                                             onClick={() => handleHappLink(key.happ_link)}
                                         >
                                             {t('btn_add_happ')}
                                         </button>
                                     )}
                                     <div style={{ display: 'flex', gap: 8 }}>
-                                        <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
+                                        <Link to={`/plans?extend=${key.id}`} className="btn-secondary" style={{ flex: 1, padding: '12px', fontSize: 'var(--font-body)', fontWeight: 600, textDecoration: 'none' }}>
                                             {t('btn_extend')}
                                         </Link>
                                         <button
                                             className="btn-secondary"
                                             onClick={() => handleCopy(key.subscription_url, key.id)}
                                             aria-label={copiedId === key.id ? t('copied') : t('btn_copy_key')}
-                                            style={{ flex: 1, padding: '12px', fontSize: 14, fontWeight: 500 }}
+                                            style={{ flex: 1, padding: '12px', fontSize: 'var(--font-body)', fontWeight: 500 }}
                                         >
                                             {copiedId === key.id ? t('copied') : t('btn_copy_key')}
                                         </button>
@@ -396,7 +398,7 @@ export function Home() {
                 /* Empty state — first-time user welcome */
                 <div className="glass-card" style={{ padding: 28, textAlign: 'center' }}>
                     <div style={{ fontSize: 48, marginBottom: 12 }} aria-hidden="true">👋</div>
-                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>{t('home_empty_title')}</h2>
+                    <h2 style={{ fontSize: 'var(--font-h1)', fontWeight: 'var(--weight-bold)', margin: '0 0 8px' }}>{t('home_empty_title')}</h2>
                     <p className="text-hint" style={{ fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
                         {t('home_empty_desc')}
                     </p>
@@ -404,7 +406,7 @@ export function Home() {
                     <div className="tip-box tip-box-info" style={{ textAlign: 'left' }}>
                         <span className="tip-icon" aria-hidden="true">ℹ️</span>
                         <div>
-                            <strong style={{ color: 'var(--tg-text)', fontSize: 12 }}>{t('how_it_works')}</strong>
+                            <strong style={{ color: 'var(--tg-text)', fontSize: 'var(--font-caption)' }}>{t('how_it_works')}</strong>
                             <div style={{ marginTop: 4 }}>
                                 {(['step_1', 'step_2', 'step_3', 'step_4'] as const).map((key, i) => (
                                     <div key={key} className="step-row" style={{ padding: '4px 0' }}>
