@@ -21,255 +21,71 @@
   --weight-bold: 700;
   --weight-semibold: 600;
   --weight-regular: 400;
+
+  /* Layout */
+  --layout-padding: 16px;
+  --layout-gap: 24px;
+  --card-padding: 16px;
 }
 
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
-body {
-  background: var(--tg-bg);
-  color: var(--tg-text);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
-  overflow-x: hidden;
-}
+/* ... existing code ... */
 
-/* Full-screen centering — used by loading, error, and empty states */
-.screen-center {
+/* Helper/Info components */
+.tip-box {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: var(--font-caption);
+  line-height: 1.5;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
   gap: 12px;
-  padding: 24px;
-  text-align: center;
-}
-
-/* Glassmorphic card */
-.glass-card {
-  background: rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-}
-
-.glass-card-active {
-  background: linear-gradient(135deg, rgba(94, 187, 255, 0.08), rgba(94, 187, 255, 0.02));
-  border-color: rgba(94, 187, 255, 0.2);
-}
-
-.glass-card-success {
-  background: linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03));
-  border-color: rgba(0, 210, 190, 0.18);
-}
-
-/* Primary button */
-.btn-primary {
-  background: var(--tg-btn);
-  color: var(--tg-btn-text);
-  border: none;
-  border-radius: 14px;
-  /* Softer corners */
-  padding: 14px 24px;
-  font-weight: 700;
-  /* Bolder */
-  font-size: 16px;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-  /* Bounce effect */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  text-decoration: none;
-  box-shadow: 0 8px 20px -6px rgba(0, 210, 190, 0.4), 0 4px 10px rgba(0, 0, 0, 0.1);
+  align-items: flex-start;
+  /* Minimalist update: removed heavy borders/backgrounds preference */
+  background: transparent;
   position: relative;
   overflow: hidden;
 }
 
-.btn-primary::after {
+/* Add a subtle accent line on the left instead of full border */
+.tip-box::before {
   content: '';
   position: absolute;
-  top: 0;
   left: 0;
-  right: 0;
+  top: 0;
   bottom: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 100%);
-  pointer-events: none;
-}
-
-.btn-primary:active {
-  transform: scale(0.96);
-  opacity: 0.9;
-  box-shadow: 0 4px 12px -4px rgba(0, 210, 190, 0.4);
-}
-
-.btn-secondary {
-  background: rgba(255, 255, 255, 0.08);
-  /* Slightly lighter */
-  color: var(--tg-text);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  /* Use transparency instead of hex */
-  border-radius: 14px;
-  padding: 12px 20px;
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  backdrop-filter: blur(10px);
-}
-
-.btn-secondary:active {
-  transform: scale(0.96);
-  background: rgba(255, 255, 255, 0.12);
-}
-
-/* Status badge */
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.badge-active {
-  background: rgba(0, 210, 190, 0.12);
-  color: #00d2be;
-}
-
-.badge-expired {
-  background: rgba(255, 59, 48, 0.15);
-  color: #ff3b30;
-}
-
-/* Animations */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-in {
-  animation: fadeIn 0.3s ease-out forwards;
-}
-
-.animate-slide-up {
-  animation: slideUp 0.4s ease-out forwards;
-}
-
-/* Staggered animations */
-.stagger>* {
-  opacity: 0;
-  animation: slideUp 0.4s ease-out forwards;
-}
-
-.stagger>*:nth-child(1) {
-  animation-delay: 0.05s;
-}
-
-.stagger>*:nth-child(2) {
-  animation-delay: 0.1s;
-}
-
-.stagger>*:nth-child(3) {
-  animation-delay: 0.15s;
-}
-
-.stagger>*:nth-child(4) {
-  animation-delay: 0.2s;
-}
-
-.stagger>*:nth-child(5) {
-  animation-delay: 0.25s;
-}
-
-/* Spinner */
-.spinner {
-  width: 28px;
-  height: 28px;
-  border: 2px solid rgba(255, 255, 255, 0.1);
-  border-top-color: var(--tg-btn);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Hint text */
-.text-hint {
-  color: var(--tg-hint);
-}
-
-.text-link {
-  color: var(--tg-link);
-}
-
-/* Helper/Info components */
-.tip-box {
-  padding: 12px 14px;
-  border-radius: 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
+  width: 3px;
+  border-radius: 3px;
 }
 
 .tip-box-info {
-  background: rgba(94, 187, 255, 0.06);
-  border: 1px solid rgba(94, 187, 255, 0.12);
+  background: rgba(94, 187, 255, 0.04);
   color: var(--tg-hint);
+}
+
+.tip-box-info::before {
+  background: #5ebbff;
 }
 
 .tip-box-warning {
-  background: rgba(255, 59, 48, 0.08);
-  border: 1px solid rgba(255, 59, 48, 0.2);
-  color: #ff3b30;
+  background: rgba(255, 59, 48, 0.04);
+  color: var(--tg-hint);
+  /* Keep text neutral to reduce noise */
+}
+
+.tip-box-warning::before {
+  background: #ff3b30;
 }
 
 .tip-box-success {
-  background: rgba(52, 199, 89, 0.06);
-  border: 1px solid rgba(52, 199, 89, 0.12);
+  background: rgba(52, 199, 89, 0.04);
   color: var(--tg-hint);
+}
+
+.tip-box-success::before {
+  background: #34c759;
 }
 
 .tip-icon {
