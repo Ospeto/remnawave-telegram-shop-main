@@ -26,7 +26,7 @@ export function useTelegram() {
         initData: tg?.initData || '',
         close,
         openLink,
-        colorScheme: tg?.colorScheme || 'light',
+        colorScheme: tg?.colorScheme || 'dark',
         themeParams: tg?.themeParams,
     };
 }
