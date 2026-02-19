@@ -6,6 +6,7 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
@@ -51,6 +52,29 @@ func (r *WalletTransactionRepository) Create(ctx context.Context, tx *WalletTran
 	err = r.pool.QueryRow(ctx, sql, args...).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create wallet transaction: %w", err)
+	}
+
+	return id, nil
+}
+
+// CreateTx inserts a wallet_transaction row inside an existing pgx.Tx.
+// Use this to keep balance updates and transaction log atomic.
+func (r *WalletTransactionRepository) CreateTx(ctx context.Context, pgxTx pgx.Tx, tx *WalletTransaction) (int64, error) {
+	buildInsert := sq.Insert("wallet_transaction").
+		Columns("customer_id", "amount", "type", "purchase_id", "description").
+		Values(tx.CustomerID, tx.Amount, tx.Type, tx.PurchaseID, tx.Description).
+		Suffix("RETURNING id").
+		PlaceholderFormat(sq.Dollar)
+
+	sqlStr, args, err := buildInsert.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build insert query: %w", err)
+	}
+
+	var id int64
+	err = pgxTx.QueryRow(ctx, sqlStr, args...).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create wallet transaction in tx: %w", err)
 	}
 
 	return id, nil

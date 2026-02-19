@@ -138,6 +138,29 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_tip_2_desc': 'Skip the screenshot verification. Wallet payments are approved instantly.',
         'wallet_tip_3_title': 'Save Time',
         'wallet_tip_3_desc': 'Top up once, pay for months. No need to open your banking app every time.',
+
+        // Checkout — wallet payment (previously hardcoded)
+        'pay_with_wallet': 'Pay with Wallet',
+        'your_balance': 'Your Balance:',
+        'or_pay_manually': 'Or pay manually:',
+        'accepted_methods': 'Accepted: KPay · Wave · AYA Pay',
+        'wallet_pay_success': 'Paid with Wallet',
+        'check_home_for_key': 'Check Home screen for your active key.',
+        'funds_added': 'Funds added to your wallet.',
+        'wallet_pay_processing': 'Processing...',
+        'wallet_pay_btn': 'Pay {{amount}} {{currency}}',
+        'wallet_pay_error': 'Wallet payment failed. Please try again.',
+
+        // Checkout — wallet top-up success
+        'success_topup_desc': 'Funds have been added to your wallet.',
+        'back_to_wallet': 'Back to Wallet',
+
+        // Plans — promo code (previously hardcoded)
+        'promo_placeholder': 'Promo Code',
+        'promo_apply': 'Apply',
+        'promo_validating': '...',
+        'promo_valid': '✅ Code applied! {{percent}}% off',
+        'promo_invalid': '❌ Invalid or expired code',
     },
     my: {
         // General
@@ -276,6 +299,29 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_tip_2_desc': 'Screenshot တင်ပြီး စောင့်ဆိုင်းရန် မလိုပါ။ Wallet ဖြင့် ဝယ်ယူပါက Key ချက်ချင်း ရရှိပါမည်။',
         'wallet_tip_3_title': 'အချိန်ကုန် လူပန်း သက်သာစေသည်',
         'wallet_tip_3_desc': 'တစ်ကြိမ်သာ ငွေဖြည့်ထားပြီး လပေါင်းများစွာ အသုံးပြုနိုင်ပါသည်။ မကြာခဏ ငွေလွှဲနေရန် မလိုအပ်တော့ပါ။',
+
+        // Checkout — wallet payment
+        'pay_with_wallet': 'Wallet ဖြင့် ငွေပေးချေမည်',
+        'your_balance': 'သင်၏ လက်ကျန်ငွေ:',
+        'or_pay_manually': 'သို့မဟုတ် ကိုယ်တိုင် ငွေလွှဲပါ:',
+        'accepted_methods': 'လက်ခံသော ငွေပေးချေမှုများ: KPay · Wave · AYA Pay',
+        'wallet_pay_success': 'Wallet ဖြင့် ငွေပေးချေပြီးပါပြီ',
+        'check_home_for_key': 'ပင်မစာမျက်နှာတွင် သင်၏ Key ကို စစ်ဆေးနိုင်ပါသည်။',
+        'funds_added': 'Wallet ထဲသို့ ငွေဖြည့်သွင်းပြီးပါပြီ။',
+        'wallet_pay_processing': 'ဆောင်ရွက်နေပါသည်...',
+        'wallet_pay_btn': '{{amount}} {{currency}} ပေးချေမည်',
+        'wallet_pay_error': 'Wallet ငွေပေးချေမှု မအောင်မြင်ပါ။ ထပ်ကြိုးစားပါ။',
+
+        // Checkout — wallet top-up success
+        'success_topup_desc': 'Wallet ထဲသို့ ငွေဖြည့်သွင်းပြီးပါပြီ။',
+        'back_to_wallet': 'Wallet သို့ ပြန်သွားမည်',
+
+        // Plans — promo code
+        'promo_placeholder': 'ပရိုမိုကုဒ်',
+        'promo_apply': 'သုံးမည်',
+        'promo_validating': '...',
+        'promo_valid': '✅ ကုဒ်သုံးပြီး! {{percent}}% လျှော့ဈေး',
+        'promo_invalid': '❌ ကုဒ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်ဆုံးပြီ',
     }
 };
 

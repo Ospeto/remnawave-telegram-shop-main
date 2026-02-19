@@ -1,7 +1,9 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { LoadingScreen } from '../components/LoadingScreen';
+import { TipBox } from '../components/TipBox';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -21,6 +23,8 @@ export function Checkout() {
 
     const extendKeyId = searchParams.get('extend');
     const promoCode = searchParams.get('promo');
+    const isWalletTopup = searchParams.get('walletTopup') === 'true';
+    const amountParam = searchParams.get('amount');
 
     const [purchase, setPurchase] = useState<PurchaseResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -29,31 +33,31 @@ export function Checkout() {
     const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
     const [phoneCopied, setPhoneCopied] = useState(false);
 
-    const fileInputRef = useRef<HTMLInputElement>(null);
-
+    // Wallet payment state
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
     const [payingWithWallet, setPayingWithWallet] = useState(false);
-    const isWalletTopup = searchParams.get('walletTopup') === 'true';
+    const [walletPayError, setWalletPayError] = useState<string | null>(null);
+
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const purchaseCreated = useRef(false);
+    const idempotencyKey = useRef(crypto.randomUUID());
+
+    const handleBack = useCallback(() => {
+        navigate('/plans' + (isWalletTopup ? '?walletTopup=true' : ''));
+    }, [navigate, isWalletTopup]);
 
     useEffect(() => {
-        if (tg) {
-            tg.BackButton.show();
-            // Preserve flow: if from plans, go back to plans.
-            tg.BackButton.onClick(() => navigate('/plans' + (isWalletTopup ? '?walletTopup=true' : '')));
-        }
-    }, [tg, navigate, isWalletTopup]);
-
-    const purchaseCreated = useRef(false);
-
-    const idempotencyKey = useRef(crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2));
-
-    const amountParam = searchParams.get('amount');
+        if (!tg) return;
+        tg.BackButton.show();
+        tg.BackButton.onClick(handleBack);
+        return () => tg.BackButton.offClick(handleBack);
+    }, [tg, handleBack]);
 
     useEffect(() => {
         if (!planIndex || !initData || purchaseCreated.current) return;
         purchaseCreated.current = true;
 
-        const body: any = {
+        const body: Record<string, unknown> = {
             plan_index: parseInt(planIndex),
             idempotency_key: idempotencyKey.current
         };
@@ -80,22 +84,21 @@ export function Checkout() {
             .catch(err => setError(err.message))
             .finally(() => setLoading(false));
 
-        // Fetch wallet balance if not topup
+        // Fetch wallet balance (silent fail — just hides wallet option)
         if (!isWalletTopup) {
-            fetch('/api/wallet', {
-                headers: { 'Authorization': `twa ${initData}` }
-            })
+            fetch('/api/wallet', { headers: { 'Authorization': `twa ${initData}` } })
                 .then(r => r.json())
                 .then(data => setWalletBalance(data.balance))
-                .catch(() => { }); // Ignore error, simple hide wallet option
+                .catch(() => { });
         }
     }, [planIndex, initData, extendKeyId, promoCode, isWalletTopup, amountParam]);
 
     const handlePayWithWallet = async () => {
         if (!purchase || payingWithWallet) return;
         setPayingWithWallet(true);
+        setWalletPayError(null);
         try {
-            const body: any = {
+            const body: Record<string, unknown> = {
                 plan_index: parseInt(planIndex || '0'),
                 payment_method: 'wallet'
             };
@@ -116,23 +119,11 @@ export function Checkout() {
                 throw new Error(text);
             }
 
-            // Success!
             await res.json();
-            setVerificationResult({ status: 'success', message: 'Paid with Wallet' }); // No hash link? Actually backend creates purchase and processes it. ProcessPurchase might NOT return happ link directly in CreateResponse? 
-            // Wait, CreatePurchaseResponse has Instructions.
-            // If successfully processed, we should show Success screen.
-            // But we might need the "happ_link" if it's a new key.
-            // Backend CreatePurchase calls ProcessPurchase. 
-            // For wallet, it returns success. But does it return the key info?
-            // The frontend "Success" screen logic below assumes verificationResult has happ_link. 
-            // Standard CreatePurchase response doesn't have happ_link.
-            // However, after "Pay with Wallet", the purchase is DONE.
-            // We should validly show success. If it's a new key, user can find it in Home.
-            // Or we can fetch the key info?
-            // "verificationResult" structure expects { status, message, happ_link? }.
-            // Let's assume user goes to Home to get key.
-        } catch (err: any) {
-            alert(t('error_prefix') + (err.message || 'Payment failed'));
+            setVerificationResult({ status: 'success', message: t('wallet_pay_success') });
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : t('wallet_pay_error');
+            setWalletPayError(msg || t('wallet_pay_error'));
         } finally {
             setPayingWithWallet(false);
         }
@@ -159,8 +150,9 @@ export function Checkout() {
             }
             const data = await res.json();
             setVerificationResult(data);
-        } catch (err: any) {
-            setVerificationResult({ status: 'failed', message: err?.message || 'Upload failed. Please try again.' });
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : 'Upload failed. Please try again.';
+            setVerificationResult({ status: 'failed', message: msg });
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -174,16 +166,22 @@ export function Checkout() {
         });
     };
 
-    if (loading) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
-            <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>{t('creating_purchase')}</span>
-        </div>
-    );
+    const handleHappLink = (happUrl: string) => {
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = happUrl;
+        document.body.appendChild(iframe);
+        setTimeout(() => iframe.remove(), 3000);
+        const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
+        if (tg?.openLink) tg.openLink(redirectUrl);
+        else window.open(redirectUrl, '_blank');
+    };
+
+    if (loading) return <LoadingScreen message={t('creating_purchase')} />;
 
     if (error) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
-            <div style={{ fontSize: 48 }}>❌</div>
+        <div className="screen-center">
+            <div style={{ fontSize: 48 }} aria-hidden="true">❌</div>
             <p style={{ color: '#ff3b30', textAlign: 'center', fontSize: 14 }}>{error}</p>
             <button className="btn-secondary" onClick={() => navigate('/plans')}>{t('back_to_plans')}</button>
         </div>
@@ -191,30 +189,17 @@ export function Checkout() {
 
     if (verificationResult?.status === 'success') {
         return (
-            <div className="animate-slide-up" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24, textAlign: 'center' }}>
-                <div style={{ fontSize: 64, marginBottom: 8 }}>✅</div>
+            <div className="animate-slide-up screen-center">
+                <div style={{ fontSize: 64, marginBottom: 8 }} aria-hidden="true">✅</div>
                 <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{t('success_title')}</h1>
                 <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
                     {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
                 </p>
 
-                {/* Open in Happ - Only if we have a link (manual approval flow returns it, wallet payment might not have it here immediately but key is active) */}
                 {verificationResult?.happ_link && (
                     <button
                         className="btn-primary"
-                        onClick={() => {
-                            if (verificationResult?.happ_link) {
-                                const happUrl = verificationResult.happ_link;
-                                const iframe = document.createElement('iframe');
-                                iframe.style.display = 'none';
-                                iframe.src = happUrl;
-                                document.body.appendChild(iframe);
-                                setTimeout(() => iframe.remove(), 3000);
-                                const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
-                                if (tg?.openLink) tg.openLink(redirectUrl);
-                                else window.open(redirectUrl, '_blank');
-                            }
-                        }}
+                        onClick={() => handleHappLink(verificationResult.happ_link!)}
                         style={{ marginTop: 12, width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
                     >
                         {t('btn_open_happ')}
@@ -228,18 +213,14 @@ export function Checkout() {
                 )}
 
                 {!verificationResult?.happ_link && !isWalletTopup && (
-                    <div className="tip-box tip-box-success" style={{ marginTop: 4 }}>
-                        <span className="tip-icon">✨</span>
-                        <span>Check Home screen for your active key.</span>
-                    </div>
+                    <TipBox variant="success" icon="✨">
+                        {t('check_home_for_key')}
+                    </TipBox>
                 )}
 
-                <div className="tip-box tip-box-success" style={{ marginTop: 4 }}>
-                    <span className="tip-icon">💡</span>
-                    <span>
-                        {isWalletTopup ? "Funds added to your wallet." : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
-                    </span>
-                </div>
+                <TipBox variant="success" icon="💡">
+                    {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
+                </TipBox>
 
                 <button className="btn-secondary" onClick={() => navigate(isWalletTopup ? '/wallet' : '/')} style={{ width: '100%', opacity: 0.7 }}>
                     {isWalletTopup ? t('back_to_wallet') : t('go_home')}
@@ -248,7 +229,6 @@ export function Checkout() {
         );
     }
 
-    // Check if wallet can pay
     const canPayWithWallet = purchase && walletBalance !== null && walletBalance >= purchase.amount && !isWalletTopup;
 
     return (
@@ -257,9 +237,9 @@ export function Checkout() {
             {!isWalletTopup && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>
                     <span style={{ color: '#34c759' }}>✓ {t('nav_plan')}</span>
-                    <span className="text-hint">→</span>
+                    <span className="text-hint" aria-hidden="true">→</span>
                     <span className="text-link" style={{ fontWeight: 700 }}>{t('nav_payment')}</span>
-                    <span className="text-hint">→</span>
+                    <span className="text-hint" aria-hidden="true">→</span>
                     <span className="text-hint">{t('nav_verify')}</span>
                 </div>
             )}
@@ -272,18 +252,29 @@ export function Checkout() {
             {/* Wallet Payment Option */}
             {canPayWithWallet && (
                 <div className="glass-card" style={{ padding: 20, border: '1px solid #34c759' }}>
-                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 8px' }}>Pay with Wallet</h2>
+                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 8px' }}>{t('pay_with_wallet')}</h2>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
-                        <span className="text-hint">Your Balance:</span>
+                        <span className="text-hint">{t('your_balance')}</span>
                         <span>{walletBalance?.toLocaleString()} {purchase?.currency}</span>
                     </div>
+                    {walletPayError && (
+                        <div role="alert" style={{
+                            padding: 10, borderRadius: 8, marginBottom: 10,
+                            background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
+                            color: '#ff3b30', fontSize: 13
+                        }}>
+                            {walletPayError}
+                        </div>
+                    )}
                     <button
                         className="btn-primary"
                         onClick={handlePayWithWallet}
                         disabled={payingWithWallet}
-                        style={{ width: '100%', background: '#34c759' }}
+                        style={{ width: '100%', background: '#34c759', opacity: payingWithWallet ? 0.7 : 1 }}
                     >
-                        {payingWithWallet ? 'Processing...' : `Pay ${(purchase?.amount || 0).toLocaleString()} ${purchase?.currency || ''}`}
+                        {payingWithWallet
+                            ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('wallet_pay_processing')}</>
+                            : t('wallet_pay_btn', { amount: (purchase?.amount || 0).toLocaleString(), currency: purchase?.currency || '' })}
                     </button>
                 </div>
             )}
@@ -291,21 +282,19 @@ export function Checkout() {
             {/* Manual Payment Guide */}
             <div className="glass-card" style={{ padding: 20 }}>
                 <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 12px' }}>
-                    {canPayWithWallet ? "Or pay manually:" : t('guide_title')}
+                    {canPayWithWallet ? t('or_pay_manually') : t('guide_title')}
                 </h2>
 
-                {/* Step 1 — Open banking app */}
                 <div className="step-row">
-                    <span className="step-number">1</span>
+                    <span className="step-number" aria-label="Step 1">1</span>
                     <div className="step-text">
                         <strong>{t('guide_step_1')}</strong>
                         <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
                     </div>
                 </div>
 
-                {/* Step 2 — Send exact amount */}
                 <div className="step-row">
-                    <span className="step-number">2</span>
+                    <span className="step-number" aria-label="Step 2">2</span>
                     <div className="step-text" style={{ flex: 1 }}>
                         <strong>{t('guide_step_2')}</strong>
                         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
@@ -322,9 +311,8 @@ export function Checkout() {
                     </div>
                 </div>
 
-                {/* Step 3 — To this number */}
                 <div className="step-row">
-                    <span className="step-number">3</span>
+                    <span className="step-number" aria-label="Step 3">3</span>
                     <div className="step-text" style={{ flex: 1 }}>
                         <strong>{t('guide_step_3')}</strong>
                         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
@@ -340,6 +328,7 @@ export function Checkout() {
                             <button
                                 onClick={() => copyToClipboard(purchase?.payment_phone || '')}
                                 className="btn-secondary"
+                                aria-label={phoneCopied ? t('copied') : t('tap_to_copy')}
                                 style={{
                                     width: 'auto', padding: '0 16px', borderRadius: 12,
                                     fontSize: 18,
@@ -354,43 +343,36 @@ export function Checkout() {
                     </div>
                 </div>
 
-                {/* Step 4 — No notes */}
                 <div className="step-row">
-                    <span className="step-number">4</span>
+                    <span className="step-number" aria-label="Step 4">4</span>
                     <div className="step-text">
                         <strong>{t('guide_step_4')}</strong>
                         <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
                     </div>
                 </div>
 
-                {/* Accepted methods guidance text instead of buttons */}
                 <div style={{ marginTop: 12, textAlign: 'center', fontSize: 13, color: 'rgba(255, 255, 255, 0.5)' }}>
-                    Accepted: KPay · Wave · AYA Pay
+                    {t('accepted_methods')}
                 </div>
             </div>
 
-            {/* Important warnings */}
-            <div className="tip-box tip-box-warning">
-                <span className="tip-icon">⚠️</span>
-                <span>{t('important_warning')}</span>
-            </div>
+            <TipBox variant="warning" icon="⚠️">{t('important_warning')}</TipBox>
 
             <div style={{ flex: 1 }} />
 
-            {/* Error */}
+            {/* Upload verification error */}
             {verificationResult?.status === 'failed' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{
+                    <div role="alert" style={{
                         padding: 12, borderRadius: 10, textAlign: 'center', fontSize: 13,
                         background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
                         color: '#ff3b30'
                     }}>
                         ❌ {verificationResult.message}
                     </div>
-                    <div className="tip-box tip-box-info" style={{ fontSize: 11 }}>
-                        <span className="tip-icon">💡</span>
-                        <span>{t('verify_error_tip')}</span>
-                    </div>
+                    <TipBox variant="info" icon="💡" style={{ fontSize: 11 }}>
+                        {t('verify_error_tip')}
+                    </TipBox>
                 </div>
             )}
 
@@ -409,7 +391,9 @@ export function Checkout() {
                         cursor: uploading ? 'not-allowed' : 'pointer'
                     }}
                 >
-                    {uploading ? t('uploading_btn') : t('upload_btn')}
+                    {uploading
+                        ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />{t('uploading_btn')}</>
+                        : t('upload_btn')}
                 </button>
                 <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: 0 }}>
                     {t('upload_hint')}

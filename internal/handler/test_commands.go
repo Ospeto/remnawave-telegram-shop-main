@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"remnawave-tg-shop-bot/internal/payment"
 	"strconv"
 	"strings"
 
@@ -31,7 +30,7 @@ func (h *Handler) TestCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		h.paymentService.SetTestMode(true)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("✅ Test Mode ENABLED.\n\nMagic Transaction ID: %s\nScreenshots with this ID will be auto-approved.", payment.TestTransactionID),
+			Text:   fmt.Sprintf("✅ Test Mode ENABLED.\n\nMagic Transaction ID: %s\nScreenshots with this ID will be auto-approved.", h.paymentService.GetTestTransactionID()),
 		})
 	} else if arg == "disable" {
 		h.paymentService.SetTestMode(false)

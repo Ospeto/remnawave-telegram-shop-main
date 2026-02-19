@@ -17,8 +17,8 @@ type CustomerRepository struct {
 	pool *pgxpool.Pool
 }
 
-func NewCustomerRepository(poll *pgxpool.Pool) *CustomerRepository {
-	return &CustomerRepository{pool: poll}
+func NewCustomerRepository(pool *pgxpool.Pool) *CustomerRepository {
+	return &CustomerRepository{pool: pool}
 }
 
 type Customer struct {
@@ -325,22 +325,25 @@ func (cr *CustomerRepository) UpdateBatch(ctx context.Context, customers []Custo
 		return fmt.Errorf("failed to execute batch update: %w", err)
 	}
 
+	// If Commit fails, pgx automatically rolls back — calling Rollback after
+	// a failed Commit would operate on an already-terminated transaction.
 	if err := tx.Commit(ctx); err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return nil
 }
 
 func (cr *CustomerRepository) DeleteByNotInTelegramIds(ctx context.Context, telegramIDs []int64) error {
-	var buildDelete sq.DeleteBuilder
+	// Safety guard: refuse to delete ALL customers if the caller passes an empty slice.
+	// An empty slice most likely indicates a failed upstream fetch, not a genuine
+	// "no users exist" scenario. A full-table delete would be catastrophic.
 	if len(telegramIDs) == 0 {
-		buildDelete = sq.Delete("customer")
-	} else {
-		buildDelete = sq.Delete("customer").
-			PlaceholderFormat(sq.Dollar).
-			Where(sq.NotEq{"telegram_id": telegramIDs})
+		return fmt.Errorf("DeleteByNotInTelegramIds: refusing to delete all customers — empty ID list provided (possible upstream fetch failure)")
 	}
+
+	buildDelete := sq.Delete("customer").
+		PlaceholderFormat(sq.Dollar).
+		Where(sq.NotEq{"telegram_id": telegramIDs})
 
 	sqlStr, args, err := buildDelete.ToSql()
 	if err != nil {
@@ -353,7 +356,6 @@ func (cr *CustomerRepository) DeleteByNotInTelegramIds(ctx context.Context, tele
 	}
 
 	return nil
-
 }
 
 func (cr *CustomerRepository) AddBalance(ctx context.Context, id int64, amount float64) error {
@@ -361,6 +363,17 @@ func (cr *CustomerRepository) AddBalance(ctx context.Context, id int64, amount f
 	_, err := cr.pool.Exec(ctx, query, amount, id)
 	if err != nil {
 		return fmt.Errorf("failed to add balance: %w", err)
+	}
+	return nil
+}
+
+// AddBalanceTx increments a customer's balance inside an existing transaction.
+// Use this whenever the balance update must be atomic with a wallet_transaction insert.
+func (cr *CustomerRepository) AddBalanceTx(ctx context.Context, tx pgx.Tx, id int64, amount float64) error {
+	query := `UPDATE customer SET balance = balance + $1 WHERE id = $2`
+	_, err := tx.Exec(ctx, query, amount, id)
+	if err != nil {
+		return fmt.Errorf("failed to add balance in tx: %w", err)
 	}
 	return nil
 }
@@ -375,6 +388,26 @@ func (cr *CustomerRepository) DeductBalance(ctx context.Context, id int64, amoun
 		return fmt.Errorf("insufficient balance or customer not found")
 	}
 	return nil
+}
+
+// DeductBalanceTx decrements a customer's balance inside an existing transaction.
+// Use this whenever the balance update must be atomic with a wallet_transaction insert.
+func (cr *CustomerRepository) DeductBalanceTx(ctx context.Context, tx pgx.Tx, id int64, amount float64) error {
+	query := `UPDATE customer SET balance = balance - $1 WHERE id = $2 AND balance >= $1`
+	tag, err := tx.Exec(ctx, query, amount, id)
+	if err != nil {
+		return fmt.Errorf("failed to deduct balance in tx: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("insufficient balance or customer not found")
+	}
+	return nil
+}
+
+// BeginTx begins a new database transaction scoped to the pool.
+// Use this to wrap multi-step financial operations (e.g. balance + wallet_transaction log).
+func (cr *CustomerRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	return cr.pool.Begin(ctx)
 }
 
 func (cr *CustomerRepository) SetAutoRenew(ctx context.Context, id int64, enabled bool, duration int) error {

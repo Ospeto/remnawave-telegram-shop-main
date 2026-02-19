@@ -135,18 +135,18 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
-	if err != nil {
-		http.Error(w, "Invalid code", http.StatusNotFound)
+	// Return the same 404 for all invalid/exhausted/expired cases to prevent
+	// oracle attacks that distinguish between "code never existed" vs "code exhausted".
+	if err != nil || promo == nil {
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
-
 	if promo.UsedCount >= promo.MaxUses {
-		http.Error(w, "Code usage limit reached", http.StatusForbidden)
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
-
 	if time.Now().After(promo.ValidUntil) {
-		http.Error(w, "Code expired", http.StatusForbidden)
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
 
@@ -225,7 +225,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctxWithUsername := context.WithValue(r.Context(), "username", username)
+	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, username)
 
 	// Delegate to PaymentService with Promo Code
 	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
@@ -235,13 +235,12 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the actual purchase to get the final amount (which might be discounted)
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), purchaseID)
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), purchaseID)
 	finalAmount := int(price)
 	if err == nil && purchase != nil {
 		finalAmount = int(purchase.Amount)
 	}
 
-	// Store plan label and payment phone for revenue tracking
 	updateFields := map[string]interface{}{
 		"plan_label":    label,
 		"payment_phone": config.MobileBankingPhone(),
@@ -249,8 +248,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if req.ExtendKeyID != nil {
 		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
-	purchaseRepo := h.paymentService.GetPurchaseRepository()
-	_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, updateFields)
+	_ = h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields)
 
 	instructions := fmt.Sprintf(
 		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
@@ -440,7 +438,7 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctxWithUsername := context.WithValue(r.Context(), "username", fmt.Sprintf("%d", telegramID))
+	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, fmt.Sprintf("%d", telegramID))
 	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
 	if err != nil {
 		http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
@@ -486,12 +484,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
-		return
-	}
-
 	purchaseIDStr := r.URL.Query().Get("id")
 	if purchaseIDStr == "" {
 		http.Error(w, "Missing purchase id", http.StatusBadRequest)
@@ -500,6 +492,26 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
 	if err != nil {
 		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		return
+	}
+
+	// === OWNERSHIP CHECK BEFORE READING FILE BODY ===
+	// Do this first to avoid loading up to 10MB into RAM for unauthorized requests.
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
+	if err != nil || purchase == nil {
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
+		http.Error(w, "Purchase not allowed", http.StatusForbidden)
+		return
+	}
+
+	// Now safe to read the file. Limit body to 10 MB.
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
 		return
 	}
 
@@ -521,17 +533,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		mimeType = http.DetectContentType(fileBytes)
 	}
 
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), int64(purchaseID))
-	if err != nil || purchase == nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
-		return
-	}
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
-	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
-		http.Error(w, "Purchase not allowed", http.StatusForbidden)
-		return
-	}
-
 	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
 	if err != nil {
 		http.Error(w, "Verification error: "+err.Error(), http.StatusInternalServerError)
@@ -546,7 +547,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		if h.subKeyRepo != nil {
 			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 			if kErr == nil && len(keys) > 0 {
-				// Return the most recently added key's happ link (keys are sorted DESC by default)
 				latestKey := keys[0]
 				resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
 			}
@@ -583,7 +583,7 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), int64(purchaseID))
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
 	if err != nil || purchase == nil {
 		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
@@ -617,8 +617,7 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	purchaseRepo := h.paymentService.GetPurchaseRepository()
-	summary, err := purchaseRepo.GetRevenueSummary(r.Context(), days)
+	summary, err := h.paymentService.GetRevenueSummary(r.Context(), days)
 	if err != nil {
 		http.Error(w, "Failed to fetch revenue: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { LoadingScreen } from '../components/LoadingScreen';
+import { TipBox } from '../components/TipBox';
 
 interface Plan {
     label: string;
@@ -35,17 +37,19 @@ export function Plans() {
     const isExtend = !!extendKeyId;
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
 
-    // Find the key being extended
     const extendingKey = userData?.keys?.find(k => k.id === Number(extendKeyId));
     const currentExpiry = extendingKey?.expire_at ? new Date(extendingKey.expire_at) : null;
 
+    const handleBack = useCallback(() => {
+        navigate(isWalletTopup ? '/wallet' : '/');
+    }, [navigate, isWalletTopup]);
+
     useEffect(() => {
-        if (tg) {
-            tg.BackButton.show();
-            // If topup, back to Wallet. Else Home.
-            tg.BackButton.onClick(() => navigate(isWalletTopup ? '/wallet' : '/'));
-        }
-    }, [tg, navigate, isWalletTopup]);
+        if (!tg) return;
+        tg.BackButton.show();
+        tg.BackButton.onClick(handleBack);
+        return () => tg.BackButton.offClick(handleBack);
+    }, [tg, handleBack]);
 
     useEffect(() => {
         if (!initData) return;
@@ -55,7 +59,7 @@ export function Plans() {
             fetch('/api/me', { headers }).then(r => r.json()),
         ])
             .then(([p, m]) => { setPlans(p || []); setUserData(m); })
-            .catch(console.error)
+            .catch(err => console.warn('Plans load error:', err))
             .finally(() => setLoading(false));
     }, [initData]);
 
@@ -90,12 +94,7 @@ export function Plans() {
             });
     };
 
-    if (loading) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
-            <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>{t('loading_plans')}</span>
-        </div>
-    );
+    if (loading) return <LoadingScreen message={t('loading_plans')} />;
 
     const calcNewExpiry = (days: number) => {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
@@ -104,13 +103,11 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // Fixed top-up amounts
     const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
 
-    // Determine what to display: either plans or top-up amounts
     const itemsToDisplay = isWalletTopup
         ? TOPUP_AMOUNTS.map(amount => ({
-            label: `${amount.toLocaleString()} ${plans[0]?.currency || 'MMK'}`, // Use currency from first plan or default
+            label: `${amount.toLocaleString()} ${plans[0]?.currency || 'MMK'}`,
             days: 0,
             price: amount,
             traffic_limit_gb: 0,
@@ -119,23 +116,19 @@ export function Plans() {
         }))
         : plans;
 
-    // Apply discount if valid promo (only for plans, not top-ups typically, but let's keep logic general if needed)
-    // For top-ups, we usually don't discount the top-up amount itself in this UI logic unless promo applies.
-    const displayItems = itemsToDisplay.map((item: any) => {
+    const displayItems = itemsToDisplay.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }) => {
         if (!isWalletTopup && discountPercent > 0) {
             return { ...item, discountedPrice: Math.round(item.price * (1 - discountPercent / 100)) };
         }
         return item;
     });
 
-    // Best value logic only applies to Plans
     const bestIdx = !isWalletTopup && displayItems.length > 0
         ? displayItems.reduce((b, p, i) => {
-            const priceP = (p as any).discountedPrice || p.price;
-            const priceB = (displayItems[b] as any).discountedPrice || displayItems[b].price;
-            // Avoid division by zero if days is 0 (shouldn't happen for plans)
+            const priceP = (p as Plan & { discountedPrice?: number }).discountedPrice || p.price;
+            const priceB = (displayItems[b] as Plan & { discountedPrice?: number }).discountedPrice || displayItems[b].price;
             const daysP = p.days || 1;
-            const daysB = (displayItems[b] as any).days || 1;
+            const daysB = displayItems[b].days || 1;
             return (priceP / daysP) < (priceB / daysB) ? i : b;
         }, 0)
         : -1;
@@ -160,7 +153,7 @@ export function Plans() {
                 )}
             </div>
 
-            {/* Promo Code Input - Hide for TopUp? Based on previous thought, allow it for consistency but maybe disable for TopUp if not supported. Let's hide for topup for now to simplify. */}
+            {/* Promo Code Input */}
             {!isWalletTopup && (
                 <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
                     <input
@@ -170,7 +163,8 @@ export function Plans() {
                             setPromoCode(e.target.value);
                             if (promoStatus !== 'idle') setPromoStatus('idle');
                         }}
-                        placeholder="Promo Code"
+                        placeholder={t('promo_placeholder')}
+                        aria-label={t('promo_placeholder')}
                         style={{
                             flex: 1,
                             background: 'rgba(255,255,255,0.05)',
@@ -179,8 +173,12 @@ export function Plans() {
                             padding: '10px 12px',
                             color: 'white',
                             fontSize: 14,
-                            outline: 'none'
+                            outline: 'none',
+                            // Replace outline:none with a custom focus ring
+                            boxShadow: 'none',
                         }}
+                        onFocus={e => (e.target.style.border = '1px solid rgba(94, 187, 255, 0.5)')}
+                        onBlur={e => (e.target.style.border = '1px solid rgba(255,255,255,0.1)')}
                     />
                     <button
                         onClick={handleApplyPromo}
@@ -192,44 +190,37 @@ export function Plans() {
                             opacity: !promoCode.trim() ? 0.5 : 1
                         }}
                     >
-                        {promoStatus === 'validating' ? '...' : 'Apply'}
+                        {promoStatus === 'validating' ? t('promo_validating') : t('promo_apply')}
                     </button>
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'valid' && (
-                <div style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ✅ Code applied! {discountPercent}% off
+                <div role="status" style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    {t('promo_valid', { percent: String(discountPercent) })}
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'invalid' && (
-                <div style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ❌ Invalid or expired code
+                <div role="alert" style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    {t('promo_invalid')}
                 </div>
             )}
 
-            {/* Extend explanation */}
+            {/* Extend info */}
             {isExtend && !isWalletTopup && (
-                <div className="tip-box tip-box-info">
-                    <span className="tip-icon">ℹ️</span>
-                    <span>{t('help_extend_info')}</span>
-                </div>
+                <TipBox variant="info" icon="ℹ️">{t('help_extend_info')}</TipBox>
             )}
 
-            {/* New key explanation */}
+            {/* New key info */}
             {!isExtend && !isWalletTopup && (
-                <div className="tip-box tip-box-info">
-                    <span className="tip-icon">ℹ️</span>
-                    <span>{t('help_new_key_info')}</span>
-                </div>
+                <TipBox variant="info" icon="ℹ️">{t('help_new_key_info')}</TipBox>
             )}
 
-            {/* Plan/Top-up cards */}
+            {/* Plan / Top-up cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {displayItems.map((item: any, idx: number) => {
-                    // For Plans: find original index. For TopUp: use dummy index -1.
+                {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
                     const originalIdx = isWalletTopup ? -1 : plans.findIndex(p => p.label === item.label && p.days === item.days);
                     const price = item.discountedPrice || item.price;
-                    const hasDiscount = item.discountedPrice && item.discountedPrice < item.price;
+                    const hasDiscount = item.discountedPrice !== undefined && item.discountedPrice < item.price;
 
                     let checkoutUrl = `/checkout/${originalIdx}?`;
                     if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
@@ -246,11 +237,7 @@ export function Plans() {
                         >
                             <div
                                 className={`glass-card ${idx === bestIdx && !isWalletTopup ? 'glass-card-active' : ''}`}
-                                style={{
-                                    padding: 16,
-                                    position: 'relative',
-                                    transition: 'transform 0.15s ease',
-                                }}
+                                style={{ padding: 16, position: 'relative', transition: 'transform 0.15s ease' }}
                             >
                                 {idx === bestIdx && !isWalletTopup && (
                                     <div style={{
@@ -281,7 +268,6 @@ export function Plans() {
                                                 {t('new_expiry', { date: calcNewExpiry(item.days) })}
                                             </div>
                                         )}
-                                        {/* For Top-up, label is just the amount, maybe add hint? */}
                                         {isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 12, marginTop: 3 }}>
                                                 {t('top_up_amount', { amount: item.price.toLocaleString(), currency: item.currency })}
@@ -311,10 +297,7 @@ export function Plans() {
                 })}
             </div>
 
-            <div className="tip-box tip-box-success">
-                <span className="tip-icon">✅</span>
-                <span>{t('help_payments')}</span>
-            </div>
+            <TipBox variant="success" icon="✅">{t('help_payments')}</TipBox>
         </div>
     );
 }

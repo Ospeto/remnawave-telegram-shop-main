@@ -200,31 +200,42 @@ func (s *WalletService) HasSufficientBalance(ctx context.Context, customerID int
 }
 
 func (s *WalletService) DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error {
-	// 1. Deduct logic
-	err := s.customerRepo.DeductBalance(ctx, customerID, amount)
+	// Begin a transaction so the balance deduction and the wallet_transaction log are atomic.
+	dbTx, err := s.customerRepo.BeginTx(ctx)
 	if err != nil {
+		return fmt.Errorf("failed to begin deduct-balance transaction: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = dbTx.Rollback(ctx)
+			panic(p)
+		}
+	}()
+
+	if err := s.customerRepo.DeductBalanceTx(ctx, dbTx, customerID, amount); err != nil {
+		_ = dbTx.Rollback(ctx)
 		return err
 	}
 
-	// 2. Log transaction
-	// Note: purchaseID is int64, but DB expects *int64.
 	pid := &purchaseID
 	if purchaseID == 0 {
 		pid = nil
 	}
 
-	_, err = s.walletTxRepo.Create(ctx, &database.WalletTransaction{
-		CustomerID: customerID,
-		Amount:     -amount, // Deduct is negative flow, but Amount stored signed?
-		// Usually transactions are: +500 (topup), -200 (purchase).
-		// DeductBalance took positive amount. So we record negative.
+	if _, err := s.walletTxRepo.CreateTx(ctx, dbTx, &database.WalletTransaction{
+		CustomerID:  customerID,
+		Amount:      -amount, // negative = outflow
 		Type:        database.WalletTransactionTypePurchase,
 		PurchaseID:  pid,
 		Description: description,
-	})
-	if err != nil {
-		slog.Error("Failed to log wallet transaction", "error", err)
-		// Non-fatal, balance was deducted.
+	}); err != nil {
+		_ = dbTx.Rollback(ctx)
+		return fmt.Errorf("failed to log wallet deduction: %w", err)
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		_ = dbTx.Rollback(ctx)
+		return fmt.Errorf("failed to commit wallet deduction: %w", err)
 	}
 	return nil
 }

@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { LoadingScreen } from '../components/LoadingScreen';
+import { ErrorScreen } from '../components/ErrorScreen';
 
 interface WalletData {
   balance: number;
@@ -27,13 +29,16 @@ export function Wallet() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingAutoRenew, setUpdatingAutoRenew] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+
+  const handleBack = useCallback(() => navigate('/'), [navigate]);
 
   useEffect(() => {
-    if (tg) {
-      tg.BackButton.show();
-      tg.BackButton.onClick(() => navigate('/'));
-    }
-  }, [tg, navigate]);
+    if (!tg) return;
+    tg.BackButton.show();
+    tg.BackButton.onClick(handleBack);
+    return () => tg.BackButton.offClick(handleBack);
+  }, [tg, handleBack]);
 
   useEffect(() => {
     if (!initData) return;
@@ -47,7 +52,10 @@ export function Wallet() {
         setWallet(walletData);
         setTransactions(historyData || []);
       })
-      .catch(console.error)
+      .catch(err => {
+        console.warn('Wallet load error:', err);
+        setLoadError(true);
+      })
       .finally(() => setLoading(false));
   }, [initData]);
 
@@ -72,7 +80,7 @@ export function Wallet() {
         setWallet({ ...wallet, auto_renew: !wallet.auto_renew });
       }
     } catch (err) {
-      console.error('Failed to update auto-renew:', err);
+      console.warn('Failed to update auto-renew:', err);
     } finally {
       setUpdatingAutoRenew(false);
     }
@@ -96,20 +104,17 @@ export function Wallet() {
     }
   };
 
-  if (loading) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
-      <div className="spinner" />
-      <span className="text-hint" style={{ fontSize: 13 }}>{t('loading_wallet')}</span>
-    </div>
-  );
+  if (loading) return <LoadingScreen message={t('loading_wallet')} />;
 
-  if (!wallet) return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
-      <div style={{ fontSize: 48 }}>❌</div>
-      <p style={{ color: '#ff3b30', textAlign: 'center', fontSize: 14 }}>{t('wallet_error')}</p>
-      <button className="btn-secondary" onClick={() => navigate('/')}>{t('go_home')}</button>
-    </div>
-  );
+  if (loadError || !wallet) {
+    return (
+      <ErrorScreen
+        message={t('wallet_error')}
+        onRetry={() => navigate('/')}
+        retryLabel={t('go_home')}
+      />
+    );
+  }
 
   return (
     <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
@@ -152,7 +157,11 @@ export function Wallet() {
               }
             </div>
           </div>
+          {/* Accessible iOS-style toggle */}
           <button
+            role="switch"
+            aria-checked={wallet.auto_renew}
+            aria-label={t('auto_renew_title')}
             onClick={toggleAutoRenew}
             disabled={updatingAutoRenew}
             style={{
@@ -160,11 +169,12 @@ export function Wallet() {
               height: 32,
               borderRadius: 16,
               border: 'none',
-              background: wallet.auto_renew ? '#34c759' : '#ccc',
+              background: wallet.auto_renew ? '#34c759' : 'rgba(255,255,255,0.15)',
               position: 'relative',
               cursor: updatingAutoRenew ? 'not-allowed' : 'pointer',
               transition: 'background 0.2s',
               opacity: updatingAutoRenew ? 0.7 : 1,
+              flexShrink: 0,
             }}
           >
             <div style={{
@@ -190,14 +200,14 @@ export function Wallet() {
 
         {transactions.length === 0 ? (
           <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }}>📭</div>
+            <div style={{ fontSize: 32, marginBottom: 8 }} aria-hidden="true">📭</div>
             <div className="text-hint">{t('no_transactions')}</div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {transactions.map((tx) => (
               <div key={tx.id} className="glass-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ fontSize: 24 }}>{getTransactionIcon(tx.type)}</div>
+                <div style={{ fontSize: 24 }} aria-hidden="true">{getTransactionIcon(tx.type)}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 14, fontWeight: 500 }}>
                     {tx.description || t(`transaction_${tx.type}`)}
@@ -219,20 +229,21 @@ export function Wallet() {
         )}
       </div>
 
-      {/* Business Value Tips Section */}
+      {/* Wallet Tips */}
       <div style={{ marginTop: 16 }}>
         <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 12px' }}>
           {t('wallet_tips_title')}
         </h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {[1, 2, 3].map(num => (
+          {([1, 2, 3] as const).map(num => (
             <div key={num} className="glass-card" style={{ padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 16,
                 background: 'rgba(52, 199, 89, 0.1)', color: '#34c759',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 16, fontWeight: 'bold'
-              }}>
+                fontSize: 16, fontWeight: 'bold',
+                flexShrink: 0,
+              }} aria-hidden="true">
                 {num === 1 ? '⚡' : num === 2 ? '🚀' : '⏳'}
               </div>
               <div>
