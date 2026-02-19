@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -96,35 +97,22 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 		}
 	}
 
-	// ── Find the renewal plan ─────────────────────────────────────────────────
-	// Determine traffic type from the key's label to pick the right plan category.
-	// We don't store traffic_gb on the key itself, so we derive it from its
-	// last purchase via the extend-key purchase history, or fall back to duration only.
-	plan := j.findPlanForKey(ctx, key)
+	// ── Find the best affordable plan ─────────────────────────────────────────
+	// findAffordablePlan prefers the most expensive plan the user can afford
+	// (best value), falling back to cheaper options of the same traffic type.
+	// Returns nil if no plan at all is affordable.
+	plan, isFallback := findAffordablePlan(key, customer.Balance)
 	if plan == nil {
-		log.Warn("Auto-renew: no matching plan found for key",
-			"key_label", key.Label,
-			"want_duration", customer.AutoRenewDuration)
-		j.sendMessage(ctx, customer.TelegramID, customer.Language,
-			fmt.Sprintf(j.tm.GetText(customer.Language, "auto_renew_plan_not_found")))
+		log.Warn("Auto-renew: insufficient balance for any plan",
+			"balance", customer.Balance, "key_traffic_gb", key.TrafficLimitGB)
+		j.handleInsufficientFunds(ctx, customer, &key, nil)
 		return
 	}
 
-	log.Info("Auto-renew: matched plan",
+	log.Info("Auto-renew: selected plan",
 		"plan_label", plan.Label, "plan_days", plan.Days,
-		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB)
-
-	// ── Check balance ─────────────────────────────────────────────────────────
-	hasBalance, err := j.walletService.HasSufficientBalance(ctx, customer.ID, float64(plan.Price))
-	if err != nil {
-		log.Error("Auto-renew: error checking balance", "error", err)
-		return
-	}
-
-	if !hasBalance {
-		j.handleInsufficientFunds(ctx, customer, &key, plan)
-		return
-	}
+		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB,
+		"is_fallback", isFallback)
 
 	// ── Extend the specific key ───────────────────────────────────────────────
 	err = j.walletService.ExtendKeyWithBalance(ctx, key.ID, customer.ID, float64(plan.Price), plan.Days, plan.TrafficLimitGB)
@@ -140,15 +128,25 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 		log.Error("Auto-renew: failed to stamp last_auto_renewed_at (non-fatal)", "error", err)
 	}
 
-	log.Info("Auto-renew: key extended successfully")
-	msg := fmt.Sprintf(
-		j.tm.GetText(customer.Language, "auto_renew_success_detail"),
-		plan.Label, plan.Days, plan.Price,
-	)
-	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
+	log.Info("Auto-renew: key extended successfully", "is_fallback", isFallback)
+
+	if isFallback {
+		msg := fmt.Sprintf(
+			j.tm.GetText(customer.Language, "auto_renew_fallback_detail"),
+			plan.Label, plan.Days, plan.Price,
+		)
+		j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
+	} else {
+		msg := fmt.Sprintf(
+			j.tm.GetText(customer.Language, "auto_renew_success_detail"),
+			plan.Label, plan.Days, plan.Price,
+		)
+		j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
+	}
 }
 
 // handleInsufficientFunds sends a low-balance notification at most once per 24h.
+// plan may be nil when no plan of any price is affordable.
 func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, plan *config.Plan) {
 	log := slog.With("key_id", key.ID, "customer_id", customer.ID)
 
@@ -157,11 +155,15 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 		return
 	}
 
-	log.Info("Auto-renew: insufficient funds — notifying", "balance", customer.Balance, "needed", plan.Price)
+	var neededPrice int
+	if plan != nil {
+		neededPrice = plan.Price
+	}
+	log.Info("Auto-renew: insufficient funds — notifying", "balance", customer.Balance, "needed", neededPrice)
 
 	msg := fmt.Sprintf(
 		j.tm.GetText(customer.Language, "auto_renew_insufficient_balance_detail"),
-		plan.Price, customer.Balance,
+		neededPrice, customer.Balance,
 	)
 	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
 
@@ -170,35 +172,65 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 	}
 }
 
-// findPlanForKey returns the best-matching plan for a key.
-// Uses the customer's auto_renew_duration (days) and auto_renew_traffic_gb (traffic).
-// Falls back to the matching duration with any traffic type if exact match not found.
-func (j *Job) findPlanForKey(_ context.Context, key database.SubscriptionKey) *config.Plan {
-	// Load the owning customer to get their preferred auto-renew settings.
-	// NOTE: We load customer separately in processKey; here we use the key's
-	// customer_id to derive renewal parameters from config.
-	// The simplest fallback: first plan with any duration.
-	// If the customer has set auto_renew_duration, we use that; otherwise
-	// we use 30 days as a safe default.
-	//
-	// Since subscription_key does not store traffic_gb directly, we try all
-	// plans for the configured duration: unlimited first (traffic=0), then
-	// any limited plan. Admin should configure auto_renew_traffic_gb on the
-	// customer record if they want precise matching.
+// findAffordablePlan picks the best plan for renewal given the customer's balance.
+//
+// Strategy:
+//  1. Gather all plans with the same traffic type as the key
+//     (unlimited = traffic_limit_gb 0, limited = traffic_limit_gb > 0).
+//  2. Try to find the plan whose duration best matches the key's last purchase
+//     (longest duration the balance can afford that is >= remaining days, or
+//     simply the longest duration available if balance covers it).
+//  3. If balance cannot cover *any* same-type plan, return nil (caller notifies user).
+//  4. On tie, always prefer longer duration (better value for user).
+//
+// Returns:  (planToUse, isFallback)
+// isFallback=true means the original/preferred plan was too expensive and we
+// fell back to the cheapest affordable option.
+func findAffordablePlan(key database.SubscriptionKey, balance float64) (plan *config.Plan, isFallback bool) {
 	allPlans := config.Plans()
 	if len(allPlans) == 0 {
-		return nil
+		return nil, false
 	}
 
-	// Return the cheapest plan by default if no better signal is available.
-	best := allPlans[0]
+	isUnlimited := key.TrafficLimitGB == 0
+
+	// Filter to same traffic type.
+	var sametype []config.Plan
 	for _, p := range allPlans {
-		plan := p
-		if plan.Price < best.Price {
-			best = plan
+		if isUnlimited && p.TrafficLimitGB == 0 {
+			sametype = append(sametype, p)
+		} else if !isUnlimited && p.TrafficLimitGB > 0 {
+			sametype = append(sametype, p)
 		}
 	}
-	return &best
+	if len(sametype) == 0 {
+		// Fallback: if no matching traffic type plans exist, try any plan.
+		sametype = allPlans
+	}
+
+	// Sort by price descending so we try the most expensive affordable plan first.
+	// (Gives the user the best value — longest duration they can afford.)
+	sort.Slice(sametype, func(i, j int) bool { return sametype[i].Price > sametype[j].Price })
+
+	// Find the cheapest plan (for the hard fallback).
+	cheapest := sametype[len(sametype)-1]
+	for _, p := range sametype {
+		if p.Price < cheapest.Price {
+			cheapest = p
+		}
+	}
+
+	// Walk from most expensive to cheapest and return the first one the user can afford.
+	for i, p := range sametype {
+		plan := p
+		if float64(plan.Price) <= balance {
+			isFallback = i == len(sametype)-1 && plan.Price == cheapest.Price && len(sametype) > 1
+			return &plan, isFallback
+		}
+	}
+
+	// Balance doesn't even cover the cheapest same-type plan.
+	return nil, false
 }
 
 // sendMessage is a best-effort Telegram notification helper.

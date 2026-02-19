@@ -353,6 +353,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				ExpireAt:        &remnawaveUser.ExpireAt,
 				Status:          "active",
 				Label:           label,
+				TrafficLimitGB:  purchase.TrafficLimitGB,
 			})
 			if err != nil {
 				slog.Error("CRITICAL: Failed to save subscription key to DB. Key EXISTS on Remnawave but NOT in local DB.",

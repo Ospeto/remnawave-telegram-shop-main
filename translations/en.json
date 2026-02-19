@@ -49,5 +49,6 @@
   "auto_renew_failed": "❌ Auto-Renew ပြုလုပ်မရပါ။ Support ကို ဆက်သွယ်ပါ။",
   "auto_renew_insufficient_balance": "⚠️ Wallet ငွေမလုံလောက်သဖြင့် Auto-Renew မပြုလုပ်နိုင်ပါ။ Wallet ငွေဖြည့်ပါ။",
   "auto_renew_insufficient_balance_detail": "⚠️ <b>Auto-Renew Failed</b>\n\nငွေမလုံလောက်ပါ:\n  လိုအပ်သည်: <b>%d MMK</b>\n  လက်ကျန်: <b>%.0f MMK</b>\n\nသက်တမ်းကုန်ဆုံးမပြီးမီ Wallet ငွေဖြည့်ပါ။",
-  "auto_renew_plan_not_found": "⚠️ Auto-Renew – Plan မတွေ့ပါ။ Plan ပြောင်းလဲခဲ့ပုံရသည်။ Support ကို ဆက်သွယ်ပါ သို့မဟုတ် Auto-Renew ပြန်သတ်မှတ်ပါ။"
+  "auto_renew_plan_not_found": "⚠️ Auto-Renew – Plan မတွေ့ပါ။ Plan ပြောင်းလဲခဲ့ပုံရသည်။ Support ကို ဆက်သွယ်ပါ သို့မဟုတ် Auto-Renew ပြန်သတ်မှတ်ပါ။",
+  "auto_renew_fallback_detail": "ℹ️ <b>Auto-Renew (Downgrade)</b>\n\nWallet balance was insufficient for your original plan, so we renewed with the most affordable option:\n\nPlan: <b>%s</b>\nDuration: <b>%d days</b>\nAmount: <b>%d MMK</b> deducted.\n\nPlease top up your wallet to renew with your preferred plan next time."
 }

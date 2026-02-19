@@ -22,6 +22,7 @@ type SubscriptionKey struct {
 	Status              string     `db:"status"`
 	CreatedAt           time.Time  `db:"created_at"`
 	Label               string     `db:"label"`
+	TrafficLimitGB      int        `db:"traffic_limit_gb"`
 	AutoRenew           bool       `db:"auto_renew"`
 	LastAutoRenewedAt   *time.Time `db:"last_auto_renewed_at"`
 	AutoRenewNotifiedAt *time.Time `db:"auto_renew_notified_at"`
@@ -38,7 +39,7 @@ func NewSubscriptionKeyRepository(pool *pgxpool.Pool) *SubscriptionKeyRepository
 var subKeyColumns = []string{
 	"id", "customer_id", "remnawave_uuid", "username",
 	"subscription_url", "expire_at", "status", "created_at", "label",
-	"auto_renew", "last_auto_renewed_at", "auto_renew_notified_at",
+	"traffic_limit_gb", "auto_renew", "last_auto_renewed_at", "auto_renew_notified_at",
 }
 
 func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
@@ -46,7 +47,7 @@ func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
 	err := row.Scan(
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
-		&k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -62,7 +63,7 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 	err := rows.Scan(
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
-		&k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan subscription_key row: %w", err)
@@ -72,8 +73,8 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 
 func (r *SubscriptionKeyRepository) Create(ctx context.Context, key *SubscriptionKey) (int64, error) {
 	query := sq.Insert("subscription_key").
-		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label").
-		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label).
+		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb").
+		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
