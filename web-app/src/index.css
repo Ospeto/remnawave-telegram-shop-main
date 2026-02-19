@@ -69,16 +69,7 @@ body.theme-light {
   --digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
 }
 
-/* Buttons (Light) - Visible Gray/Border */
---btn-sec-bg: rgba(0, 0, 0, 0.05);
---btn-sec-border: rgba(0, 0, 0, 0.1);
---btn-sec-hover: rgba(0, 0, 0, 0.1);
 
-/* Digital Card Light Mode - Darker Green Gradient to pop on White */
---digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.9) 0%, rgba(0, 210, 190, 0.8) 100%);
---digital-card-border: transparent;
---digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
-}
 
 /* Dark Mode Overrides (Explicit) */
 body.theme-dark {
