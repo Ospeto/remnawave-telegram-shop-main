@@ -144,7 +144,13 @@ export function Home() {
     const activeKeys = keys.filter(k => k.status === 'active');
 
     return (
-        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
+        <div className="animate-fade-in" style={{
+            padding: 'var(--layout-padding)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--layout-gap)',
+            minHeight: '100vh'
+        }}>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
                 <img
