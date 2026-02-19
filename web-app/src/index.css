@@ -35,6 +35,11 @@
   --glass-active: linear-gradient(135deg, rgba(94, 187, 255, 0.08), rgba(94, 187, 255, 0.02));
   --glass-active-border: rgba(94, 187, 255, 0.2);
 
+  /* Buttons (Dark) */
+  --btn-sec-bg: rgba(255, 255, 255, 0.08);
+  --btn-sec-border: rgba(255, 255, 255, 0.08);
+  --btn-sec-hover: rgba(255, 255, 255, 0.12);
+
   /* Digital Card Defaults (Dark Mode) */
   --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.15) 0%, rgba(0, 210, 190, 0.15) 100%);
   --digital-card-border: rgba(52, 199, 89, 0.3);
