@@ -736,9 +736,12 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		slog.Info("Test Mode processing", "purchase_id", purchaseID, "is_magic", isMagic)
 
 		// Record verification as "TEST_MODE_BYPASS"
+		// Append random suffix to transaction ID to avoid duplicate key violations on multiple tests
+		storedTxID := fmt.Sprintf("%s_%d", info.TransactionID, time.Now().UnixNano())
+
 		_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
 			PurchaseID:    purchaseID,
-			TransactionID: info.TransactionID,
+			TransactionID: storedTxID,
 			Provider:      info.Provider,
 			PhoneNumber:   info.PhoneNumber,
 			Amount:        info.Amount,
@@ -753,7 +756,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		// Update purchase fields
 		now := time.Now()
 		_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
-			"transaction_id": info.TransactionID,
+			"transaction_id": storedTxID,
 			"payment_method": info.Provider + " [TEST]",
 			"payment_phone":  info.PhoneNumber,
 			"verified_at":    now,
