@@ -232,9 +232,7 @@ export function Home() {
                 <h3 style={{ fontSize: 'var(--font-body)', fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {t('download_title')}
                 </h3>
-                <p style={{ fontSize: 'var(--font-caption)', margin: '0 0 12px', opacity: 0.9 }}>
-                    {t('download_text')}
-                </p>
+
                 <div style={{ display: 'flex', gap: 8 }}>
                     <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         Android
@@ -491,43 +489,7 @@ export function Home() {
                 {keys.length > 0 ? t('btn_buy_new') : t('btn_get_started')}
             </Link>
 
-            {keys.length > 0 && (
-                <TipBox variant="info" icon="💡">{t('tip_multi_key')}</TipBox>
-            )}
 
-            {/* Info Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div className="glass-card" style={{
-                    padding: '16px 12px', textAlign: 'center',
-                    background: 'var(--stats-card-bg-1)',
-                    border: '1px solid var(--stats-card-border-1)',
-                    display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center'
-                }}>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-accent)', lineHeight: 1, letterSpacing: '-0.5px' }}>
-                        {t('info_device_count')}
-                    </div>
-                    <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px', lineHeight: 1.2 }}>
-                        {t('info_device_limit')}
-                    </div>
-                </div>
-                <div className="glass-card" style={{
-                    padding: '16px 12px', textAlign: 'center',
-                    background: 'var(--stats-card-bg-2)',
-                    border: '1px solid var(--stats-card-border-2)',
-                    display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center'
-                }}>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-accent-alt)', lineHeight: 1, letterSpacing: '-0.5px' }}>
-                        5
-                    </div>
-                    <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px' }}>
-                        {t('info_servers')}
-                    </div>
-                </div>
-            </div>
-
-            <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--footer-color)', letterSpacing: '0.8px', margin: '-2px 0 0', fontWeight: 500 }}>
-                {t('info_server_list')}
-            </div>
 
             {/* Contact Support */}
             <a

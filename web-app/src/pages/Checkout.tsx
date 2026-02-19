@@ -311,18 +311,18 @@ export function Checkout() {
                     }}>2</div>
                     <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{t('guide_step_2')}</div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_amount')}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 16 }}>{(purchase?.amount || 0).toLocaleString()}</div>
-                                    <button onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8 }}>📋</button>
-                                </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            {/* Amount — plain, no card */}
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                <span className="text-hint" style={{ fontSize: 12 }}>{t('label_amount')}:</span>
+                                <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-0.5px' }}>{(purchase?.amount || 0).toLocaleString()}</span>
+                                <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
                             </div>
+                            {/* Phone — card with big font + copy */}
                             <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
                                 <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 13, fontFamily: 'monospace' }}>{purchase?.payment_phone}</div>
+                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{purchase?.payment_phone}</div>
                                     <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied ? 'var(--color-success)' : undefined }}>{phoneCopied ? '✓' : '📋'}</button>
                                 </div>
                             </div>

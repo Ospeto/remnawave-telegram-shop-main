@@ -102,22 +102,38 @@ export function Wallet() {
         </p>
       </div>
 
-      {/* Balance Card - Premium Digital Card */}
-      <div className="digital-card animate-slide-up" style={{ padding: '24px', textAlign: 'center', position: 'relative' }}>
-        {/* Decorative card chip icon */}
-        <div style={{
-          position: 'absolute', top: 20, left: 24,
-          width: 40, height: 28, borderRadius: 6,
-          background: 'var(--digital-card-chip-bg)',
-          border: '1px solid var(--digital-card-chip-border)'
-        }} aria-hidden="true" />
+      {/* Balance Card - Premium */}
+      <div style={{
+        position: 'relative',
+        borderRadius: 20,
+        padding: '28px 24px 24px',
+        background: 'linear-gradient(135deg, #1a2a3a 0%, #0f1f2e 40%, #1a2e22 100%)',
+        boxShadow: '0 8px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.07) inset',
+        overflow: 'hidden',
+      }} className="animate-slide-up">
 
-        {/* Visa-style contactless icon */}
+        {/* Shimmer overlay */}
         <div style={{
-          position: 'absolute', top: 20, right: 24,
-          fontSize: 24, opacity: 0.8
-        }} aria-hidden="true">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.04) 50%, transparent 70%)',
+          pointerEvents: 'none',
+        }} />
+
+        {/* Top row: chip + contactless */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
+          {/* EMV Chip */}
+          <div style={{
+            width: 42, height: 32, borderRadius: 6,
+            background: 'linear-gradient(135deg, #c9a84c 0%, #f5d07a 40%, #b8902a 100%)',
+            boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+            position: 'relative', overflow: 'hidden',
+          }} aria-hidden="true">
+            <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, height: 1, background: 'rgba(0,0,0,0.25)', transform: 'translateY(-50%)' }} />
+            <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.25)', transform: 'translateX(-50%)' }} />
+          </div>
+
+          {/* Contactless icon */}
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.8" aria-hidden="true">
             <path d="M5 12.55a11 11 0 0 1 14.08 0" />
             <path d="M1.42 9a16 16 0 0 1 21.16 0" />
             <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
@@ -125,25 +141,51 @@ export function Wallet() {
           </svg>
         </div>
 
-        <div className="text-hint" style={{ fontSize: '13px', marginBottom: 8, color: 'var(--digital-card-hint)', marginTop: 20 }}>
+        {/* Balance label */}
+        <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: '1.2px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.45)', marginBottom: 6 }}>
           {t('current_balance')}
         </div>
-        <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: 24, textShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
-          {(wallet?.balance || 0).toLocaleString()} {wallet?.currency || ''}
+
+        {/* Balance amount */}
+        <div style={{
+          fontSize: 38, fontWeight: 800, letterSpacing: '-1px',
+          color: '#fff',
+          textShadow: '0 2px 12px rgba(0,0,0,0.35)',
+          marginBottom: 28,
+          lineHeight: 1,
+        }}>
+          {(wallet?.balance || 0).toLocaleString()}
+          <span style={{ fontSize: 18, fontWeight: 600, marginLeft: 8, opacity: 0.65 }}>{wallet?.currency || ''}</span>
         </div>
+
+        {/* Divider */}
+        <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', marginBottom: 20 }} />
+
+        {/* Top-up button */}
         <button
-          className="btn-primary"
-          style={{
-            marginTop: 0, width: '100%',
-            background: 'var(--digital-card-inner-bg)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid var(--digital-card-inner-border)',
-            boxShadow: 'none'
-          }}
           onClick={() => navigate('/plans?walletTopup=true')}
+          style={{
+            width: '100%', padding: '12px',
+            borderRadius: 12,
+            background: 'rgba(255,255,255,0.1)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255,255,255,0.15)',
+            color: '#fff', fontWeight: 700, fontSize: 15,
+            cursor: 'pointer', letterSpacing: '0.2px',
+            transition: 'background 0.2s',
+          }}
+          onMouseOver={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.16)')}
+          onMouseOut={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.10)')}
         >
           {t('top_up_wallet')}
         </button>
+
+        {/* Card brand label bottom-right */}
+        <div style={{
+          position: 'absolute', bottom: 22, right: 24,
+          fontSize: 12, fontWeight: 800, letterSpacing: '2px',
+          color: 'rgba(255,255,255,0.2)', textTransform: 'uppercase',
+        }}>WAVY</div>
       </div>
 
 
