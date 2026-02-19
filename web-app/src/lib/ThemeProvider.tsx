@@ -9,10 +9,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const theme = colorScheme || 'dark';
 
     useEffect(() => {
-        // Remove previous theme classes
-        document.body.classList.remove('theme-light', 'theme-dark');
-        // Add current theme class
-        document.body.classList.add(`theme-${theme}`);
+        // Apply to both html and body for complete CSS variable coverage
+        const els = [document.documentElement, document.body];
+        els.forEach(el => {
+            el.classList.remove('theme-light', 'theme-dark');
+            el.classList.add(`theme-${theme}`);
+        });
+        // Also set data-theme attribute for any CSS selectors using it
+        document.documentElement.setAttribute('data-theme', theme);
     }, [theme]);
 
     return (
@@ -23,3 +27,4 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export const useTheme = () => useContext(ThemeContext);
+

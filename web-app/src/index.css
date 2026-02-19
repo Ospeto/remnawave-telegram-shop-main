@@ -157,10 +157,17 @@ body.theme-light {
   --footer-color: rgba(0, 180, 160, 0.5);
 }
 
-/* Dark Mode explicit (mirrors defaults, for clarity) */
+/* Dark Mode — explicit all overrides */
 body.theme-dark {
+  background-color: var(--tg-bg);
+  color: var(--tg-text);
   --card-bg: rgba(255, 255, 255, 0.04);
   --card-border: rgba(255, 255, 255, 0.08);
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.1);
+  --divider: rgba(255, 255, 255, 0.06);
+  --toggle-off-bg: rgba(255, 255, 255, 0.15);
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -168,6 +175,25 @@ body.theme-dark {
    ═══════════════════════════════════════════════════════════════ */
 * {
   -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+/* Base body — always inherits from theme class */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, sans-serif;
+  background-color: var(--tg-bg);
+  color: var(--tg-text);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Light Mode — full body color fix */
+body.theme-light {
+  background-color: #f2f2f7;
+  color: #1c1c1e;
 }
 
 /* ═══════════════════════════════════════════════════════════════
