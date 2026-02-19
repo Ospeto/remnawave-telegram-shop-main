@@ -8,8 +8,6 @@ import { ErrorScreen } from '../components/ErrorScreen';
 interface WalletData {
   balance: number;
   currency: string;
-  auto_renew: boolean;
-  auto_renew_duration: number;
 }
 
 interface Transaction {
@@ -28,7 +26,6 @@ export function Wallet() {
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [updatingAutoRenew, setUpdatingAutoRenew] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
@@ -58,33 +55,6 @@ export function Wallet() {
       })
       .finally(() => setLoading(false));
   }, [initData]);
-
-  const toggleAutoRenew = async () => {
-    if (!wallet || updatingAutoRenew) return;
-
-    setUpdatingAutoRenew(true);
-    try {
-      const res = await fetch('/api/wallet/autorenew', {
-        method: 'POST',
-        headers: {
-          'Authorization': `twa ${initData}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          enabled: !wallet.auto_renew,
-          duration: wallet.auto_renew_duration,
-        }),
-      });
-
-      if (res.ok) {
-        setWallet({ ...wallet, auto_renew: !wallet.auto_renew });
-      }
-    } catch (err) {
-      console.warn('Failed to update auto-renew:', err);
-    } finally {
-      setUpdatingAutoRenew(false);
-    }
-  };
 
   const getTransactionIcon = (type: string) => {
     switch (type) {
@@ -143,54 +113,6 @@ export function Wallet() {
         </button>
       </div>
 
-      {/* Auto-Renew Toggle */}
-      <div className="glass-card" style={{ padding: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
-              {t('auto_renew_title')}
-            </div>
-            <div className="text-hint" style={{ fontSize: 12 }}>
-              {wallet.auto_renew
-                ? t('auto_renew_enabled', { days: wallet.auto_renew_duration })
-                : t('auto_renew_disabled')
-              }
-            </div>
-          </div>
-          {/* Accessible iOS-style toggle */}
-          <button
-            role="switch"
-            aria-checked={wallet.auto_renew}
-            aria-label={t('auto_renew_title')}
-            onClick={toggleAutoRenew}
-            disabled={updatingAutoRenew}
-            style={{
-              width: 52,
-              height: 32,
-              borderRadius: 16,
-              border: 'none',
-              background: wallet.auto_renew ? '#34c759' : 'rgba(255,255,255,0.15)',
-              position: 'relative',
-              cursor: updatingAutoRenew ? 'not-allowed' : 'pointer',
-              transition: 'background 0.2s',
-              opacity: updatingAutoRenew ? 0.7 : 1,
-              flexShrink: 0,
-            }}
-          >
-            <div style={{
-              width: 26,
-              height: 26,
-              borderRadius: 13,
-              background: '#fff',
-              position: 'absolute',
-              top: 3,
-              left: wallet.auto_renew ? 23 : 3,
-              transition: 'left 0.2s',
-              boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-            }} />
-          </button>
-        </div>
-      </div>
 
       {/* Transaction History */}
       <div>
