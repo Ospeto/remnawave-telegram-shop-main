@@ -154,10 +154,18 @@ export function Wallet() {
         </h2>
 
         {transactions.length === 0 ? (
-          <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, marginBottom: 8 }} aria-hidden="true">📭</div>
-            <div style={{ fontWeight: 600, fontSize: 'var(--font-h2)', marginBottom: 4 }}>{t('wallet_empty_title')}</div>
-            <div className="text-hint">{t('wallet_empty_desc')}</div>
+          <div className="glass-card" style={{ padding: '32px 24px', textAlign: 'center', background: 'var(--card-bg)' }}>
+            <div style={{
+              fontSize: 40, marginBottom: 16,
+              background: 'var(--btn-sec-bg)', width: 80, height: 80, borderRadius: 40,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
+            }} aria-hidden="true">
+              📜
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>{t('wallet_empty_title')}</div>
+            <div className="text-hint" style={{ fontSize: 13, maxWidth: 280, margin: '0 auto', lineHeight: 1.5 }}>
+              {t('wallet_empty_desc')}
+            </div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -54,7 +54,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'trial_success': '🎉 Trial activated! Your free key is ready to use.',
 
         // ── Welcome (no keys yet) ──
-        'welcome_title': 'Welcome to Wavy!',
+        'welcome_title': 'Welcome to Wavy!', // Deprecated but kept safe
+        'home_empty_title': 'Ready to Connect?',
+        'home_empty_desc': 'You don\'t have any VPN keys yet. Get your private key and start browsing freely.',
+        'home_empty_action': '🚀 Get My Key',
         'welcome_text': 'You don\'t have any VPN keys yet. Pick a plan below to get started — setup only takes a minute.',
         'download_title': '📥 Download Happ Proxy First',
         'download_text': 'Before activating your key, download the Happ Proxy app. It\'s free and takes under 30 seconds to set up.',
@@ -230,6 +233,9 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // ── Welcome (no keys yet) ──
         'welcome_title': 'Wavy မှ ကြိုဆိုပါတယ်!',
+        'home_empty_title': 'ချိတ်ဆက်ရန် အဆင်သင့်ဖြစ်ပြီလား?',
+        'home_empty_desc': 'VPN Key ရယူပြီး လွတ်လပ်လုံခြုံစွာ အင်တာနက်သုံးစွဲလိုက်ပါ။',
+        'home_empty_action': '🚀 Key ရယူမည်',
         'welcome_text': 'သင့်တွင် VPN Key မရှိသေးပါ။ အောက်ပါ Plan တစ်ခုကို ရွေးချယ်ပြီး ၁ မိနစ်အတွင်း စတင်နိုင်ပါသည်။',
         'download_title': '📥 ဦးစွာ Happ Proxy ကို Download ရယူပါ',
         'download_text': 'Key ကို အသက်သွင်းမတိုင်မီ Happ Proxy App ကို Download လုပ်ပါ။ အခမဲ့ဖြစ်ပြီး ၃၀ စက္ကန့်ခန့်သာ ကြာပါသည်။',
