@@ -87,7 +87,13 @@ export function Wallet() {
   }
 
   return (
-    <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
+    <div className="animate-fade-in" style={{
+      padding: 'var(--layout-padding)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 'var(--layout-gap)',
+      minHeight: '100vh'
+    }}>
       {/* Header */}
       <div style={{ textAlign: 'center', padding: '8px 0' }}>
         <h1 style={{ fontSize: 'var(--font-h1)', fontWeight: 'var(--weight-bold)', margin: 0 }}>{t('wallet_title')}</h1>
