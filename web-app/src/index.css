@@ -48,13 +48,13 @@
 
 /* Light Mode Overrides */
 body.theme-light {
-  --tg-bg: #ffffff;
-  /* Ensure white background if not set by TG */
+  --tg-bg: #f2f2f7;
+  /* iOS System Gray - Better contrast */
   --tg-text: #000000;
 
-  /* Use dark washes for glass on light background */
-  --card-bg: rgba(0, 0, 0, 0.03);
-  --card-border: rgba(0, 0, 0, 0.06);
+  /* Solid White Cards for Light Mode */
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.05);
   --glass-active: linear-gradient(135deg, rgba(0, 122, 255, 0.08), rgba(0, 122, 255, 0.02));
   --glass-active-border: rgba(0, 122, 255, 0.2);
 
@@ -67,6 +67,17 @@ body.theme-light {
   --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.9) 0%, rgba(0, 210, 190, 0.8) 100%);
   --digital-card-border: transparent;
   --digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
+}
+
+/* Buttons (Light) - Visible Gray/Border */
+--btn-sec-bg: rgba(0, 0, 0, 0.05);
+--btn-sec-border: rgba(0, 0, 0, 0.1);
+--btn-sec-hover: rgba(0, 0, 0, 0.1);
+
+/* Digital Card Light Mode - Darker Green Gradient to pop on White */
+--digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.9) 0%, rgba(0, 210, 190, 0.8) 100%);
+--digital-card-border: transparent;
+--digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
 }
 
 /* Dark Mode Overrides (Explicit) */
