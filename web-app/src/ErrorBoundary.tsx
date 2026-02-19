@@ -26,23 +26,40 @@ export class ErrorBoundary extends React.Component<Props, State> {
     public render() {
         if (this.state.hasError) {
             return (
-                { this.state.error }
-                    </pre >
-                <button
-                    onClick={() => window.location.reload()}
-                    style={{
-                        marginTop: '20px',
-                        padding: '10px 20px',
-                        backgroundColor: '#3b82f6',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer'
-                    }}
-                >
-                    Reload
-                </button>
-                </div >
+                <div style={{
+                    padding: '20px',
+                    color: 'white',
+                    backgroundColor: '#1f2937',
+                    minHeight: '100vh',
+                    fontFamily: 'monospace',
+                    textAlign: 'center'
+                }}>
+                    <h1 style={{ color: '#ef4444' }}>Something went wrong</h1>
+                    <pre style={{
+                        whiteSpace: 'pre-wrap',
+                        marginTop: '10px',
+                        textAlign: 'left',
+                        backgroundColor: 'rgba(0,0,0,0.3)',
+                        padding: '10px',
+                        borderRadius: '4px'
+                    }}>
+                        {this.state.error}
+                    </pre>
+                    <button
+                        onClick={() => window.location.reload()}
+                        style={{
+                            marginTop: '20px',
+                            padding: '10px 20px',
+                            backgroundColor: '#3b82f6',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '8px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Reload
+                    </button>
+                </div>
             );
         }
 
