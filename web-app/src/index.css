@@ -61,26 +61,18 @@ body.theme-dark {
 
 /* ... existing code ... */
 
-/* Premium Digital Card (Wallet) */
-.digital-card {
-  background: linear-gradient(135deg, rgba(52, 199, 89, 0.15) 0%, rgba(0, 210, 190, 0.15) 100%);
-  border: 1px solid rgba(52, 199, 89, 0.3);
-  border-radius: 20px;
-  position: relative;
-  overflow: hidden;
-  box-shadow: 0 8px 32px -8px rgba(0, 210, 190, 0.2);
+/* Glassmorphic card */
+.glass-card {
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
 }
 
-.digital-card::before {
-  content: '';
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, transparent 60%);
-  transform: rotate(30deg);
-  pointer-events: none;
+.glass-card-active {
+  background: var(--glass-active);
+  border-color: var(--glass-active-border);
 }
 
 /* Helper/Info components */
