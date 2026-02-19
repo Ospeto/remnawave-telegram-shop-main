@@ -277,8 +277,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'verify_error_tip': 'လွှဲထားသော ပမာဏနှင့် ဖုန်းနံပါတ် တူညီမှု ရှိမရှိ ပြန်လည်စစ်ဆေးပါ။ Screenshot တွင် Transaction အချက်အလက်များ ထင်ရှားမှု ရှိမရှိ စစ်ဆေးပါ။',
 
         // Wallet
-        'wallet_title': 'My Wallet',
-        'wallet_subtitle': 'အလိုအလျောက်ဝန်ဆောင်မှုစနစ်',
+        'wallet_title': 'Wavy Wallet',
+        'wallet_subtitle': 'အလိုအလျောက်ဝန်ဆောင်မှုအတွက်ငွေဖြည့်သွင်းရန်',
         'current_balance': 'လက်ကျန်ငွေ',
         'top_up_wallet': 'ငွေဖြည့်သွင်းမည် (Top Up)',
         'auto_renew_title': 'အလိုအလျောက် သက်တမ်းတိုးစနစ်',

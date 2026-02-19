@@ -182,6 +182,15 @@ export function Wallet() {
         </div>
       </div>
 
+      <div style={{ marginTop: 24, textAlign: 'center', opacity: 0.5 }}>
+        <p style={{ fontSize: 11, margin: 0 }}>
+          {t('no_refund_policy') || 'No Refund Policy'}
+        </p>
+        <p style={{ fontSize: 10, margin: '4px 0 0' }}>
+          All purchases are final. Funds in wallet do not expire.
+        </p>
+      </div>
+
       <div style={{ height: 20 }} />
     </div>
   );
