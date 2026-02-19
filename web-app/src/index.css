@@ -28,6 +28,33 @@
   --card-padding: 16px;
 }
 
+/* Theme Defaults (Dark) */
+:root {
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --glass-active: linear-gradient(135deg, rgba(94, 187, 255, 0.08), rgba(94, 187, 255, 0.02));
+  --glass-active-border: rgba(94, 187, 255, 0.2);
+}
+
+/* Light Mode Overrides */
+body.theme-light {
+  --tg-bg: #ffffff;
+  /* Ensure white background if not set by TG */
+  --tg-text: #000000;
+
+  /* Use dark washes for glass on light background */
+  --card-bg: rgba(0, 0, 0, 0.03);
+  --card-border: rgba(0, 0, 0, 0.06);
+  --glass-active: linear-gradient(135deg, rgba(0, 122, 255, 0.08), rgba(0, 122, 255, 0.02));
+  --glass-active-border: rgba(0, 122, 255, 0.2);
+}
+
+/* Dark Mode Overrides (Explicit) */
+body.theme-dark {
+  --card-bg: rgba(255, 255, 255, 0.04);
+  --card-border: rgba(255, 255, 255, 0.08);
+}
+
 * {
   -webkit-tap-highlight-color: transparent;
 }
