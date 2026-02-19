@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
@@ -42,7 +42,6 @@ const fetcher = (url: string, headers: HeadersInit) =>
 export function Home() {
     const { initData, tg } = useTelegram();
     const { t, language, setLanguage } = useLanguage();
-    const navigate = useNavigate();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
