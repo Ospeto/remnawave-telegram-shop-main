@@ -34,6 +34,11 @@
   --card-border: rgba(255, 255, 255, 0.08);
   --glass-active: linear-gradient(135deg, rgba(94, 187, 255, 0.08), rgba(94, 187, 255, 0.02));
   --glass-active-border: rgba(94, 187, 255, 0.2);
+
+  /* Digital Card Defaults (Dark Mode) */
+  --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.15) 0%, rgba(0, 210, 190, 0.15) 100%);
+  --digital-card-border: rgba(52, 199, 89, 0.3);
+  --digital-card-shadow: 0 8px 32px -8px rgba(0, 210, 190, 0.2);
 }
 
 /* Light Mode Overrides */
@@ -47,6 +52,11 @@ body.theme-light {
   --card-border: rgba(0, 0, 0, 0.06);
   --glass-active: linear-gradient(135deg, rgba(0, 122, 255, 0.08), rgba(0, 122, 255, 0.02));
   --glass-active-border: rgba(0, 122, 255, 0.2);
+
+  /* Digital Card Light Mode - Darker Green Gradient to pop on White */
+  --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.9) 0%, rgba(0, 210, 190, 0.8) 100%);
+  --digital-card-border: transparent;
+  --digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
 }
 
 /* Dark Mode Overrides (Explicit) */
