@@ -97,14 +97,21 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // ── Checkout Guide Steps ──
         'guide_title': 'How to pay',
-        'guide_step_1': 'Open your mobile banking app',
+        'guide_step_1': 'Open your banking app',
         'guide_step_1_hint': 'KPay, Wave Money, or AYA Pay',
-        'guide_step_2': 'Transfer this exact amount',
-        'guide_step_3': 'Send to this phone number',
+
+        'guide_step_2': 'Transfer exact amount to this number',
+        'label_amount': 'Amount (MMK)',
+        'label_phone': 'Phone',
+
+        'guide_step_3': 'In the note/remark, write only "Payment"',
+        'guide_step_3_hint': 'Do NOT write VPN, Wavy, or anything else',
+
+        'guide_step_4': 'Screenshot the confirmation & upload below',
+        'guide_step_4_hint': 'Verified automatically in seconds',
+
         'tap_to_copy': 'Tap to copy',
         'copied': 'Copied ✓',
-        'guide_step_4': 'Write only "Payment" in the remark/note',
-        'guide_step_4_hint': '⚠️ Do NOT write "VPN", "Wavy", "Outline", or anything else — only "Payment"',
         'important_warning': '⚠️ Critical: Transfer the exact amount shown. In the remark/note field, write only "Payment". Writing anything else (VPN, Wavy, Outline) will cause verification to fail and your key will not be issued.',
 
         // ── Success / Error ──
@@ -267,12 +274,19 @@ export const translations: Record<Language, Record<string, string>> = {
         'guide_title': 'ငွေပေးချေနည်း',
         'guide_step_1': 'Mobile Banking App ဖွင့်ပါ',
         'guide_step_1_hint': 'KPay, Wave Money, သို့မဟုတ် AYA Pay',
-        'guide_step_2': 'ဤပမာဏ အတိအကျကို လွှဲပါ',
-        'guide_step_3': 'ဤဖုန်းနံပါတ်သို့ ငွေလွှဲပါ',
+
+        'guide_step_2': 'ဤဖုန်းနံပါတ်သို့ ငွေပမာဏအတိအကျ လွှဲပါ',
+        'label_amount': 'ပမာဏ (ကျပ်)',
+        'label_phone': 'ဖုန်းနံပါတ်',
+
+        'guide_step_3': 'Remark/Note တွင် "Payment" ဟုသာ ရေးပါ',
+        'guide_step_3_hint': 'VPN, Wavy, Outline — ဘာမှ လုံးဝ မရေးပါနှင့်',
+
+        'guide_step_4': 'ငွေလွှဲပြေစာ Screenshot ရိုက်ပြီး အောက်တွင်တင်ပါ',
+        'guide_step_4_hint': 'စက္ကန့်ပိုင်းအတွင်း အလိုအလျောက် အတည်ပြုပေးသည်',
+
         'tap_to_copy': 'နှိပ်ပြီး ကူးယူပါ',
         'copied': 'ကူးယူပြီး ✓',
-        'guide_step_4': 'Remark/Note တွင် "Payment" ဟုသာ ရေးပါ',
-        'guide_step_4_hint': '⚠️ "VPN", "Wavy", "Outline" — ဘာမှ မရေးပါနှင့်၊ "Payment" ဟုသာ ရေးပါ',
         'important_warning': '⚠️ အထူးသတိပြုရန်: ပြထားသော ပမာဏ အတိအကျကိုသာ လွှဲပါ။ Remark/Note တွင် "Payment" ဟုသာ ရေးပါ။ အခြားစာသား (VPN, Wavy, Outline) ရေးမိပါက စစ်ဆေးမှု မအောင်မြင်ဘဲ Key ရရှိမည် မဟုတ်ပါ။',
 
         // ── Success / Error ──
@@ -327,7 +341,7 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // ── Wallet Empty States ──
         'wallet_empty_title': 'မှတ်တမ်း မရှိသေးပါ',
-        'wallet_empty_desc': 'ပထမဆုံး ငွေဖြည့်မှု သို့မဟုတ် ဝယ်ယူမှုပြီးနောက် ဤနေရာတွင် မှတ်တမ်းများ ပေါ်လာပါမည်။',
+        'wallet_empty_desc': 'ပထမဆုံး ငွေဖြည့်မှု သို့မဟုတ် ဝယ်ယူမှုပြီးနောက် မှတ်တမ်းများ ဤနေရာတွင် ပေါ်လာပါမည်။',
 
         // ── Promo Code ──
         'promo_placeholder': 'Promo code ထည့်ပါ',

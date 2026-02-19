@@ -310,20 +310,20 @@ export function Checkout() {
                         fontSize: 13, fontWeight: 700, flexShrink: 0
                     }}>2</div>
                     <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Transfer exact amount to this number</div>
+                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{t('guide_step_2')}</div>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                             <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>Amount (MMK)</div>
+                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_amount')}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
                                     <div style={{ fontWeight: 700, fontSize: 16 }}>{(purchase?.amount || 0).toLocaleString()}</div>
-                                    <button onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }} className="btn-secondary" style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8 }}>📋</button>
+                                    <button onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8 }}>📋</button>
                                 </div>
                             </div>
                             <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>Phone</div>
+                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
                                     <div style={{ fontWeight: 700, fontSize: 13, fontFamily: 'monospace' }}>{purchase?.payment_phone}</div>
-                                    <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }} className="btn-secondary" style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied ? 'var(--color-success)' : undefined }}>{phoneCopied ? '✓' : '📋'}</button>
+                                    <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied ? 'var(--color-success)' : undefined }}>{phoneCopied ? '✓' : '📋'}</button>
                                 </div>
                             </div>
                         </div>
@@ -339,8 +339,8 @@ export function Checkout() {
                         fontSize: 13, fontWeight: 700, flexShrink: 0
                     }}>3</div>
                     <div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>In the note/remark, write only <span style={{ color: 'var(--tg-btn)' }}>&quot;Payment&quot;</span></div>
-                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>Do NOT write VPN, Wavy, or anything else</div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_3')}</div>
+                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_3_hint')}</div>
                     </div>
                 </div>
 
@@ -353,8 +353,8 @@ export function Checkout() {
                         fontSize: 13, fontWeight: 700, flexShrink: 0
                     }}>4</div>
                     <div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>Screenshot the confirmation &amp; upload below</div>
-                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>Verified automatically in seconds</div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_4')}</div>
+                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
                     </div>
                 </div>
             </div>
