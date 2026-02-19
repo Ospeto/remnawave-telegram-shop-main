@@ -281,98 +281,110 @@ export function Checkout() {
                 </div>
             )}
 
-            {/* Manual Payment Guide */}
+            {/* Manual Payment Guide — numbered steps */}
             <div className="glass-card" style={{ padding: 20 }}>
-                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 12px' }}>
+                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 20px' }}>
                     {canPayWithWallet ? t('or_pay_manually') : t('guide_title')}
                 </h2>
 
-                <TipBox variant="info" icon="ℹ️" allowHtml style={{ marginBottom: 16 }}>
-                    {purchase?.instructions || ''}
-                </TipBox>
-
-                {/* Quick Copy Helpers */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {/* Step 1 */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
                     <div style={{
-                        padding: 12, borderRadius: 12,
-                        background: 'var(--input-bg)', border: '1px solid var(--input-border)',
-                        display: 'flex', flexDirection: 'column', gap: 4
-                    }}>
-                        <div className="text-hint" style={{ fontSize: 11 }}>Amount</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ fontWeight: 700 }}>{(purchase?.amount || 0).toLocaleString()}</div>
-                            <button
-                                onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }}
-                                className="btn-secondary"
-                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32 }}
-                            >
-                                📋
-                            </button>
-                        </div>
+                        minWidth: 28, height: 28, borderRadius: '50%',
+                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700, flexShrink: 0
+                    }}>1</div>
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_1')}</div>
+                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
                     </div>
+                </div>
+
+                {/* Step 2 — amount + phone cards */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
                     <div style={{
-                        padding: 12, borderRadius: 12,
-                        background: 'var(--input-bg)', border: '1px solid var(--input-border)',
-                        display: 'flex', flexDirection: 'column', gap: 4
-                    }}>
-                        <div className="text-hint" style={{ fontSize: 11 }}>Phone</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>{purchase?.payment_phone}</div>
-                            <button
-                                onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }}
-                                className="btn-secondary"
-                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32, color: phoneCopied ? 'var(--color-success)' : undefined }}
-                            >
-                                {phoneCopied ? '✓' : '📋'}
-                            </button>
+                        minWidth: 28, height: 28, borderRadius: '50%',
+                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700, flexShrink: 0
+                    }}>2</div>
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>Transfer exact amount to this number</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>Amount (MMK)</div>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 16 }}>{(purchase?.amount || 0).toLocaleString()}</div>
+                                    <button onClick={() => { playClick(); copyToClipboard(String(purchase?.amount)); }} className="btn-secondary" style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8 }}>📋</button>
+                                </div>
+                            </div>
+                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>Phone</div>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 13, fontFamily: 'monospace' }}>{purchase?.payment_phone}</div>
+                                    <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }} className="btn-secondary" style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied ? 'var(--color-success)' : undefined }}>{phoneCopied ? '✓' : '📋'}</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <TipBox variant="warning" icon="⚠️">{t('important_warning')}</TipBox>
+                {/* Step 3 — remark */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+                    <div style={{
+                        minWidth: 28, height: 28, borderRadius: '50%',
+                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700, flexShrink: 0
+                    }}>3</div>
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>In the note/remark, write only <span style={{ color: 'var(--tg-btn)' }}>&quot;Payment&quot;</span></div>
+                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>Do NOT write VPN, Wavy, or anything else</div>
+                    </div>
+                </div>
+
+                {/* Step 4 — screenshot */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                    <div style={{
+                        minWidth: 28, height: 28, borderRadius: '50%',
+                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700, flexShrink: 0
+                    }}>4</div>
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: 14 }}>Screenshot the confirmation &amp; upload below</div>
+                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>Verified automatically in seconds</div>
+                    </div>
+                </div>
+            </div>
 
             <div style={{ flex: 1 }} />
 
             {/* Upload verification error */}
             {verificationResult?.status === 'failed' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div role="alert" style={{
-                        padding: 12, borderRadius: 10, textAlign: 'center', fontSize: 13,
-                        background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
-                        color: 'var(--color-danger)'
-                    }}>
-                        ❌ {verificationResult.message}
-                    </div>
-                    <TipBox variant="info" icon="💡" style={{ fontSize: 11 }}>
-                        {t('verify_error_tip')}
-                    </TipBox>
+                <div role="alert" style={{
+                    padding: 12, borderRadius: 12, fontSize: 13, textAlign: 'center',
+                    background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.18)',
+                    color: 'var(--color-danger)'
+                }}>
+                    ❌ {verificationResult.message}
+                    <div className="text-hint" style={{ fontSize: 11, marginTop: 6 }}>{t('verify_error_tip')}</div>
                 </div>
             )}
 
             {/* Upload */}
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*" />
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <button
-                    disabled={uploading}
-                    onClick={() => { playClick(); fileInputRef.current?.click(); }}
-                    className="btn-primary"
-                    style={{
-                        fontSize: 17,
-                        padding: '16px 24px',
-                        opacity: uploading ? 0.6 : 1,
-                        cursor: uploading ? 'not-allowed' : 'pointer'
-                    }}
-                >
-                    {uploading
-                        ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />{t('uploading_btn')}</>
-                        : t('upload_btn')}
-                </button>
-                <p className="text-hint" style={{ textAlign: 'center', fontSize: 11, margin: 0 }}>
-                    {t('upload_hint')}
-                </p>
-            </div>
+            <button
+                disabled={uploading}
+                onClick={() => { playClick(); fileInputRef.current?.click(); }}
+                className="btn-primary"
+                style={{ fontSize: 16, padding: '16px 24px', opacity: uploading ? 0.6 : 1, cursor: uploading ? 'not-allowed' : 'pointer' }}
+            >
+                {uploading
+                    ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />{t('uploading_btn')}</>
+                    : t('upload_btn')}
+            </button>
         </div>
     );
 }
