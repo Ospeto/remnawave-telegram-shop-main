@@ -3,16 +3,12 @@ package wallet
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/translation"
-	"time"
 
 	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 )
 
 type WalletService struct {
@@ -88,90 +84,6 @@ func (s *WalletService) PurchaseWithBalance(ctx context.Context, customerID int6
 	}
 
 	return nil
-}
-
-// RunAutoRenewCheck is the Cron Job function.
-// Checks users with auto_renew=true expiring in < 3 days.
-func (s *WalletService) RunAutoRenewCheck(ctx context.Context) {
-	slog.Info("Running Auto-Renew Cron Job")
-
-	// 1. Find candidates (Active Auto-Renew, Expiring Soon, Has Balance)
-	// We need a custom query for this logic.
-	// Logic: expire_at BETWEEN now AND now+3days AND auto_renew=true
-	now := time.Now()
-	threeDaysLater := now.Add(72 * time.Hour)
-
-	candidates, err := s.customerRepo.FindByExpirationRange(ctx, now, threeDaysLater)
-	if err != nil {
-		slog.Error("AutoRenew: Failed to fetch candidates", "error", err)
-		return
-	}
-
-	if candidates == nil {
-		return
-	}
-
-	for _, user := range *candidates {
-		// Verify AutoRenew flag explicitly (FindByExpirationRange might not filter by it)
-		if !user.AutoRenew {
-			continue
-		}
-
-		// Verify Balance vs 'AutoRenewPlanPrice'
-		// PROBLEM: We need to know HOW MUCH to deduct.
-		// Solution: We look at their *last paid purchase* to determine the renewal price/plan.
-		lastPurchase, err := s.purchaseRepo.FindSuccessfulPaidPurchaseByCustomer(ctx, user.ID)
-		if err != nil || lastPurchase == nil {
-			slog.Warn("AutoRenew: No previous purchase found for pricing", "user_id", user.ID)
-			continue
-		}
-
-		// Price to renew = Last Purchase Amount (assuming price stability)
-		// Or utilize `auto_renew_duration` (e.g., 30 days) and fetch current config price.
-		// For MVP, let's use the Last Purchase Amount.
-		renewPrice := lastPurchase.Amount
-		renewDays := lastPurchase.Days
-		renewTraffic := lastPurchase.TrafficLimitGB
-
-		if user.Balance >= renewPrice {
-			// === RENEW ===
-			slog.Info("AutoRenew: Renewing user", "user_id", user.ID, "amount", renewPrice)
-			err := s.PurchaseWithBalance(ctx, user.ID, renewPrice, renewDays, renewTraffic, "")
-			if err != nil {
-				slog.Error("AutoRenew: Failed to renew", "user_id", user.ID, "error", err)
-				// Notify User of Failure?
-				s.notifyUser(ctx, &user, "auto_renew_failed_generic")
-			} else {
-				// Allow notification to be handled by CreateWalletPayment -> ProcessPurchase -> Notify
-				// But we might want a specific "Auto-Renewed" message.
-				s.notifyUser(ctx, &user, "auto_renew_success")
-			}
-		} else {
-			// === INSUFFICIENT FUNDS ===
-			// Notify ONLY if we haven't nagged them recently?
-			// For now, notify every run (daily) if in window.
-			slog.Info("AutoRenew: Insufficient funds", "user_id", user.ID, "balance", user.Balance, "needed", renewPrice)
-			s.notifyUser(ctx, &user, "auto_renew_insufficient_funds")
-		}
-	}
-}
-
-func (s *WalletService) notifyUser(ctx context.Context, customer *database.Customer, messageKey string) {
-	msg := s.translationManager.GetText(customer.Language, messageKey)
-	_, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: customer.TelegramID,
-		Text:   msg,
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{
-				{
-					{Text: s.translationManager.GetText(customer.Language, "open_wallet_button"), WebApp: &models.WebAppInfo{URL: config.GetMiniAppURL() + "/wallet"}},
-				},
-			},
-		},
-	})
-	if err != nil {
-		slog.Error("AutoRenew: Detailed notification failed", "user_id", customer.ID, "error", err)
-	}
 }
 
 // === Interface Implementation for API ===

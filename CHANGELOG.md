@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [3.5.0] - 2026-02-19
+
+### Added
+-   **Backup & Restore**: Added full system backup and restore functionality to `setup.sh` (Options 9 & 10).
+-   **Documentation**: Added comprehensive `README.md`, `STRUCTURE.md`, and `HOWTOUSE.md`.
+-   **Migration 17**: Added new migration to fix purchase status constraints.
+
+### Fixed
+-   **Critical Crash Loop**: Resolved database migration failures in `000015` (conflicting updates) and `000016` (concurrent index creation).
+-   **Frontend**: Fixed blank screen issue caused by syntax errors in `ErrorBoundary.tsx`.
+-   **Test Mode**: Fixed "duplicate key" error when reusing the Magic Transaction ID for mobile payment testing.
+-   **Docker Build**: Fixed TypeScript errors preventing the frontend from building in Docker.
+
+### Changed
+-   **Setup Wizard**: Improved `setup.sh` with interactive prompts for new configuration options.
 
 ## [3.4.1] - 2025-11-08
 

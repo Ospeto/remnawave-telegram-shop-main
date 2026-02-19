@@ -22,19 +22,22 @@ func NewCustomerRepository(pool *pgxpool.Pool) *CustomerRepository {
 }
 
 type Customer struct {
-	ID                int64      `db:"id"`
-	TelegramID        int64      `db:"telegram_id"`
-	ExpireAt          *time.Time `db:"expire_at"`
-	CreatedAt         time.Time  `db:"created_at"`
-	SubscriptionLink  *string    `db:"subscription_link"`
-	Language          string     `db:"language"`
-	Balance           float64    `db:"balance"`
-	AutoRenew         bool       `db:"auto_renew"`
-	AutoRenewDuration int        `db:"auto_renew_duration"`
+	ID                  int64      `db:"id"`
+	TelegramID          int64      `db:"telegram_id"`
+	ExpireAt            *time.Time `db:"expire_at"`
+	CreatedAt           time.Time  `db:"created_at"`
+	SubscriptionLink    *string    `db:"subscription_link"`
+	Language            string     `db:"language"`
+	Balance             float64    `db:"balance"`
+	AutoRenew           bool       `db:"auto_renew"`
+	AutoRenewDuration   int        `db:"auto_renew_duration"`
+	AutoRenewTrafficGB  int        `db:"auto_renew_traffic_gb"`
+	LastAutoRenewedAt   *time.Time `db:"last_auto_renewed_at"`
+	AutoRenewNotifiedAt *time.Time `db:"auto_renew_notified_at"`
 }
 
 func (cr *CustomerRepository) FindByExpirationRange(ctx context.Context, startDate, endDate time.Time) (*[]Customer, error) {
-	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration").
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at").
 		From("customer").
 		Where(
 			sq.And{
@@ -69,6 +72,9 @@ func (cr *CustomerRepository) FindByExpirationRange(ctx context.Context, startDa
 			&customer.Balance,
 			&customer.AutoRenew,
 			&customer.AutoRenewDuration,
+			&customer.AutoRenewTrafficGB,
+			&customer.LastAutoRenewedAt,
+			&customer.AutoRenewNotifiedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan customer row: %w", err)
@@ -84,7 +90,7 @@ func (cr *CustomerRepository) FindByExpirationRange(ctx context.Context, startDa
 }
 
 func (cr *CustomerRepository) FindById(ctx context.Context, id int64) (*Customer, error) {
-	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration").
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at").
 		From("customer").
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
@@ -106,6 +112,9 @@ func (cr *CustomerRepository) FindById(ctx context.Context, id int64) (*Customer
 		&customer.Balance,
 		&customer.AutoRenew,
 		&customer.AutoRenewDuration,
+		&customer.AutoRenewTrafficGB,
+		&customer.LastAutoRenewedAt,
+		&customer.AutoRenewNotifiedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -117,7 +126,7 @@ func (cr *CustomerRepository) FindById(ctx context.Context, id int64) (*Customer
 }
 
 func (cr *CustomerRepository) FindByTelegramId(ctx context.Context, telegramId int64) (*Customer, error) {
-	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration").
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at").
 		From("customer").
 		Where(sq.Eq{"telegram_id": telegramId}).
 		PlaceholderFormat(sq.Dollar)
@@ -139,6 +148,9 @@ func (cr *CustomerRepository) FindByTelegramId(ctx context.Context, telegramId i
 		&customer.Balance,
 		&customer.AutoRenew,
 		&customer.AutoRenewDuration,
+		&customer.AutoRenewTrafficGB,
+		&customer.LastAutoRenewedAt,
+		&customer.AutoRenewNotifiedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -158,7 +170,7 @@ func (cr *CustomerRepository) FindOrCreate(ctx context.Context, customer *Custom
 		INSERT INTO customer (telegram_id, expire_at, language, balance, auto_renew, auto_renew_duration)
 		VALUES ($1, $2, $3, COALESCE($4, 0), COALESCE($5, false), COALESCE($6, 30))
 		ON CONFLICT (telegram_id) DO UPDATE SET telegram_id = customer.telegram_id
-		RETURNING id, telegram_id, expire_at, created_at, subscription_link, language, balance, auto_renew, auto_renew_duration
+		RETURNING id, telegram_id, expire_at, created_at, subscription_link, language, balance, auto_renew, auto_renew_duration, auto_renew_traffic_gb, last_auto_renewed_at, auto_renew_notified_at
 	`
 
 	row := cr.pool.QueryRow(ctx, query, customer.TelegramID, customer.ExpireAt, customer.Language, customer.Balance, customer.AutoRenew, customer.AutoRenewDuration)
@@ -173,6 +185,9 @@ func (cr *CustomerRepository) FindOrCreate(ctx context.Context, customer *Custom
 		&result.Balance,
 		&result.AutoRenew,
 		&result.AutoRenewDuration,
+		&result.AutoRenewTrafficGB,
+		&result.LastAutoRenewedAt,
+		&result.AutoRenewNotifiedAt,
 	); err != nil {
 		return nil, fmt.Errorf("failed to find or create customer: %w", err)
 	}
@@ -183,12 +198,15 @@ func (cr *CustomerRepository) FindOrCreate(ctx context.Context, customer *Custom
 
 // allowedCustomerFields is a whitelist of columns that can be updated via UpdateFields.
 var allowedCustomerFields = map[string]bool{
-	"subscription_link":   true,
-	"expire_at":           true,
-	"language":            true,
-	"balance":             true,
-	"auto_renew":          true,
-	"auto_renew_duration": true,
+	"subscription_link":      true,
+	"expire_at":              true,
+	"language":               true,
+	"balance":                true,
+	"auto_renew":             true,
+	"auto_renew_duration":    true,
+	"auto_renew_traffic_gb":  true,
+	"last_auto_renewed_at":   true,
+	"auto_renew_notified_at": true,
 }
 
 func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, updates map[string]interface{}) error {
@@ -226,7 +244,7 @@ func (cr *CustomerRepository) UpdateFields(ctx context.Context, id int64, update
 }
 
 func (cr *CustomerRepository) FindByTelegramIds(ctx context.Context, telegramIDs []int64) ([]Customer, error) {
-	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration").
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at").
 		From("customer").
 		Where(sq.Eq{"telegram_id": telegramIDs}).
 		PlaceholderFormat(sq.Dollar)
@@ -255,6 +273,9 @@ func (cr *CustomerRepository) FindByTelegramIds(ctx context.Context, telegramIDs
 			&customer.Balance,
 			&customer.AutoRenew,
 			&customer.AutoRenewDuration,
+			&customer.AutoRenewTrafficGB,
+			&customer.LastAutoRenewedAt,
+			&customer.AutoRenewNotifiedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan customer row: %w", err)
@@ -419,9 +440,9 @@ func (cr *CustomerRepository) SetAutoRenew(ctx context.Context, id int64, enable
 	return nil
 }
 
-// FindByAutoRenewExpiring finds customers with auto_renew=true and expire_at before the given date
+// FindByAutoRenewExpiring finds customers with auto_renew=true and expire_at between now and 'before'.
 func (cr *CustomerRepository) FindByAutoRenewExpiring(ctx context.Context, before time.Time) ([]Customer, error) {
-	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration").
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at").
 		From("customer").
 		Where(
 			sq.And{
@@ -457,6 +478,9 @@ func (cr *CustomerRepository) FindByAutoRenewExpiring(ctx context.Context, befor
 			&customer.Balance,
 			&customer.AutoRenew,
 			&customer.AutoRenewDuration,
+			&customer.AutoRenewTrafficGB,
+			&customer.LastAutoRenewedAt,
+			&customer.AutoRenewNotifiedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan customer row: %w", err)
@@ -468,4 +492,28 @@ func (cr *CustomerRepository) FindByAutoRenewExpiring(ctx context.Context, befor
 	}
 
 	return customers, nil
+}
+
+// MarkAutoRenewed stamps last_auto_renewed_at = now so the same expiry cycle
+// cannot trigger a second charge even if the cron fires twice.
+func (cr *CustomerRepository) MarkAutoRenewed(ctx context.Context, customerID int64) error {
+	now := time.Now()
+	query := `UPDATE customer SET last_auto_renewed_at = $1 WHERE id = $2`
+	_, err := cr.pool.Exec(ctx, query, now, customerID)
+	if err != nil {
+		return fmt.Errorf("failed to mark auto renewed: %w", err)
+	}
+	return nil
+}
+
+// MarkAutoRenewNotified stamps auto_renew_notified_at = now so we don't re-spam
+// the user about low balance more than once per day.
+func (cr *CustomerRepository) MarkAutoRenewNotified(ctx context.Context, customerID int64) error {
+	now := time.Now()
+	query := `UPDATE customer SET auto_renew_notified_at = $1 WHERE id = $2`
+	_, err := cr.pool.Exec(ctx, query, now, customerID)
+	if err != nil {
+		return fmt.Errorf("failed to mark auto renew notified: %w", err)
+	}
+	return nil
 }

@@ -336,6 +336,8 @@ show_menu() {
     echo -e "    ${GREEN}6${NC})  📋  View Logs"
     echo -e "    ${GREEN}7${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
     echo -e "    ${GREEN}8${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
+    echo -e "    ${GREEN}9${NC})  💾  Backup ${DIM}(db + config + certs)${NC}"
+    echo -e "    ${GREEN}10${NC}) ♻️   Restore ${DIM}(from backup)${NC}"
     echo ""
     echo -e "    ${RED}0${NC})  🚪  Exit"
     echo ""
@@ -779,6 +781,182 @@ do_uninstall() {
     fi
 }
 
+# ──── Backup ────────────────────────────────────────────────
+do_backup() {
+    print_arrow "Creating backup..."
+    echo ""
+
+    # Ensure .env exists to read DB credentials
+    if [[ ! -f "$ENV_FILE" ]]; then
+        print_error ".env file not found. Cannot proceed."
+        return
+    fi
+
+    # Create backup directory
+    local backup_dir="${SCRIPT_DIR}/backups"
+    mkdir -p "$backup_dir"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="${backup_dir}/backup_${timestamp}.tar.gz"
+    local temp_dir="${backup_dir}/temp_${timestamp}"
+    mkdir -p "$temp_dir"
+
+    # Source .env to get DB creds
+    export $(grep -v '^#' "$ENV_FILE" | xargs)
+
+    # 1. Backup Database
+    print_info "Backing up database..."
+    if docker ps | grep -q "remnawave-telegram-shop-db"; then
+        if ! docker exec remnawave-telegram-shop-db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "${temp_dir}/db_dump.sql"; then
+            print_error "Database dump failed. Is the database running?"
+            rm -rf "$temp_dir"
+            return
+        fi
+    else
+        print_error "Database container not running. Start services first (option 4)."
+        rm -rf "$temp_dir"
+        return
+    fi
+
+    # 2. Backup Caddy Data (Volume)
+    print_info "Backing up Caddy certificates..."
+    # Run a temporary container to mount the volume and tar it
+    docker run --rm -v caddy_data:/data -v "${temp_dir}:/backup" alpine tar czf /backup/caddy_data.tar.gz -C /data . || true
+
+    # 3. Copy files
+    cp "$ENV_FILE" "${temp_dir}/.env"
+    if [[ -d "${SCRIPT_DIR}/translations" ]]; then
+        cp -r "${SCRIPT_DIR}/translations" "${temp_dir}/translations"
+    fi
+
+    # 4. Create final archive
+    print_info "Compressing archive..."
+    tar -czf "$backup_file" -C "$temp_dir" .
+
+    # Cleanup
+    rm -rf "$temp_dir"
+
+    print_success "Backup created: ${backup_file}"
+    echo ""
+}
+
+# ──── Restore ───────────────────────────────────────────────
+do_restore() {
+    print_arrow "Restoring from backup..."
+    echo ""
+
+    local backup_dir="${SCRIPT_DIR}/backups"
+    if [[ ! -d "$backup_dir" ]]; then
+        print_error "No backups directory found."
+        return
+    fi
+
+    # List backups
+    echo "Available backups:"
+    local backups=("$backup_dir"/*.tar.gz)
+    if [[ ${#backups[@]} -eq 0 ]] || [[ ! -e "${backups[0]}" ]]; then
+        print_info "No backup files found in ./backups"
+        return
+    fi
+
+    local i=1
+    for b in "${backups[@]}"; do
+        echo "  [$i] $(basename "$b")"
+        ((i++))
+    done
+    echo ""
+    echo -ne "  ${ARROW}  Select backup to restore (number): "
+    local choice
+    read -r choice
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#backups[@]} ]]; then
+        print_error "Invalid selection."
+        return
+    fi
+
+    local selected_backup="${backups[$((choice-1))]}"
+    print_info "Selected: $selected_backup"
+    echo ""
+    echo -ne "  ${ARROW}  ${RED}WARNING: This will overwite current data. Continue? ${DIM}(yes/no)${NC}: "
+    local confirm
+    read -r confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "Restore cancelled."
+        return
+    fi
+
+    # Stop services
+    print_info "Stopping services..."
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD down)
+
+    local temp_restore_dir="${backup_dir}/restore_temp"
+    mkdir -p "$temp_restore_dir"
+    tar -xzf "$selected_backup" -C "$temp_restore_dir"
+
+    # Restore .env
+    if [[ -f "${temp_restore_dir}/.env" ]]; then
+        cp "${temp_restore_dir}/.env" "$ENV_FILE"
+        print_success ".env restored"
+    fi
+
+    # Restore translations
+    if [[ -d "${temp_restore_dir}/translations" ]]; then
+        rm -rf "${SCRIPT_DIR}/translations"
+        cp -r "${temp_restore_dir}/translations" "${SCRIPT_DIR}/translations"
+        print_success "translations restored"
+    fi
+
+    # Restore Caddy Data
+    if [[ -f "${temp_restore_dir}/caddy_data.tar.gz" ]]; then
+        print_info "Restoring Caddy data (certs)..."
+        # Create volume if not exists
+        docker volume create caddy_data >/dev/null 2>&1 || true
+        # Populate
+        docker run --rm -v caddy_data:/data -v "${temp_restore_dir}:/backup" alpine sh -c "cd /data && rm -rn * && tar xzf /backup/caddy_data.tar.gz"
+        print_success "Caddy data restored"
+    fi
+
+    # Restore Database
+    if [[ -f "${temp_restore_dir}/db_dump.sql" ]]; then
+        print_info "Restoring Database (this may take a moment)..."
+        # Start DB only
+        $COMPOSE_CMD up -d db
+        
+        # Wait for DB
+        print_info "Waiting for database to be ready..."
+        local retries=0
+        while ! docker exec remnawave-telegram-shop-db pg_isready -U postgres >/dev/null 2>&1; do
+            sleep 2
+            ((retries++))
+            if [[ $retries -gt 30 ]]; then
+                print_error "Database failed to start."
+                return
+            fi
+        done
+
+        # Drop schema/data? pg_dump usually includes drop if requested, but standard > dump.sql might not.
+        # Safest is to drop and recreate DB or schema public.
+        # But for portability, let's just run psql. If dump has IF NOT EXISTS, it might skip.
+        # Usually full restore requires clean DB.
+        
+        # Source env for vars
+        export $(grep -v '^#' "$ENV_FILE" | xargs)
+        
+        # Force clean public schema
+        docker exec remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+        # Import
+        cat "${temp_restore_dir}/db_dump.sql" | docker exec -i remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+        print_success "Database restored"
+    fi
+
+    rm -rf "$temp_restore_dir"
+
+    echo ""
+    print_info "Starting all services..."
+    $COMPOSE_CMD up -d --build
+    print_success "Restore complete!"
+}
+
 # ──── Edit Pricing Only ─────────────────────────────────────
 do_edit_pricing() {
     if [[ ! -f "$ENV_FILE" ]]; then
@@ -1043,12 +1221,9 @@ main() {
             6) do_logs ;;
             7) do_update ;;
             8) do_uninstall ;;
-            0)
-                echo ""
-                print_success "Goodbye! 👋"
-                echo ""
-                exit 0
-                ;;
+            9) do_backup ;;
+            10) do_restore ;;
+            0) exit 0 ;;
             *)
                 print_error "Invalid choice. Please try again."
                 ;;

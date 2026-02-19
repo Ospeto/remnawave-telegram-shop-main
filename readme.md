@@ -1,150 +1,136 @@
-# Remnawave Telegram Shop
+# Remnawave Telegram Shop Bot
 
-[![Stars](https://img.shields.io/github/stars/Jolymmiels/remnawave-telegram-shop.svg?style=social)](https://github.com/Jolymmiels/remnawave-telegram-shop/stargazers)
-[![Forks](https://img.shields.io/github/forks/Jolymmiels/remnawave-telegram-shop.svg?style=social)](https://github.com/Jolymmiels/remnawave-telegram-shop/network/members)
-[![Issues](https://img.shields.io/github/issues/Jolymmiels/remnawave-telegram-shop.svg)](https://github.com/Jolymmiels/remnawave-telegram-shop/issues)
+A complete, self-hosted Telegram Shop Bot for selling digital goods (subscription keys) with automated delivery, multi-currency support, and a modern React-based Mini App UI.
 
-A powerful, production-ready Telegram bot for selling VPN subscriptions with automated fulfillment via [Remnawave](https://remna.st/). Features a Modern Mini App shop (Wavy VPN), multi-language support (English/Russian/Burmese), and AI-powered mobile payment verification.
+## Key Features
 
-## 🚀 Key Features
+-   **Automated Sales**: Instant delivery of subscription keys (e.g., VPN keys, software licenses) via Remnawave API integration.
+-   **Telegram Mini App**: A beautiful, responsive React frontend for browsing plans and managing subscriptions directly within Telegram.
+-   **Multi-Payment Support**:
+    -   **CryptoPay**: Accept cryptocurrency payments automatically.
+    -   **Mobile Banking**: Semi-automated workflow for manual bank transfers (KPay, WavePay, etc.) with screenshot verification (AI-powered options available).
+    -   **Wallet System**: Built-in user wallet for top-ups and quick purchases.
+-   **Referral System**: Built-in referral tracking and rewards.
+-   **Admin Tools**: Manage plans, users, and broadcasts directly from Telegram or the database.
+-   **Dockerized**: Easy deployment with `docker-compose`.
 
--   **Full Purchase Flow**: Users buy keys directly in Telegram via a Mini App.
--   **Automated Fulfillment**: Instantly creates/extends users in your Remnawave panel.
--   **Payment Flexibility**:
-    -   **CryptoPay**: Automatic crypto payments.
-    -   **Mobile Banking (KPay/Wave)**: AI-verified screenshot uploads (powered by Gemini).
-    -   **Telegram Stars**: Native Telegram currency support.
-    -   **YooKassa**: Ruble payments.
--   **Smart Notifications**: Expiry alerts sent 3 days before termination.
--   **Localization**: Complete support for English 🇺🇸, Russian 🇷🇺, and Burmese 🇲🇲.
--   **Analytics**: Tracks revenue, daily sales, and user growth.
+## Tech Stack
 
----
+-   **Backend**: Go (Golang) 1.21+
+-   **Frontend**: React 18, TypeScript, Vite, TailwindCSS (Telegram Mini App)
+-   **Database**: PostgreSQL 16
+-   **Infrastructure**: Docker & Docker Compose
+-   **Reverse Proxy**: Caddy (Automatic HTTPS)
 
-## 🛠 Usage & Setup
+## Prerequisites
 
-The easiest way to install, configure, and manage the bot is via the interactive **Setup Wizard**.
+-   **Docker** and **Docker Compose** installed on your server or local machine.
+-   A **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather)).
+-   A **Remnawave Panel** URL and API Token (for key generation).
+-   *(Optional)* **CryptoPay** API Token for crypto payments.
+-   *(Optional)* **Gemini API Key** for AI verification of payment screenshots.
 
-### 1. Quick Start (Recommended)
+## Getting Started
 
-Run the wizard to handle everything from Docker installation to SSL certificates.
+The project includes an interactive setup wizard to get you running in minutes.
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/Ospeto/remnawave-telegram-shop-main.git
+cd remnawave-telegram-shop-main
+```
+
+### 2. Run the Setup Wizard
+
+This script will guide you through configuration, environment setup, and deployment.
 
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-**What the wizard does:**
-1.  Checks/Installs Docker & Docker Compose.
-2.  Helps you configure `.env` interactively.
-3.  Sets up SSL (Caddy) automatically.
-4.  Builds and starts the services.
+Select **Option 1 (Fresh Install)** and answer the prompts.
 
-### 2. Manual Commands
+### 3. Manual Configuration (Alternative)
 
-If you prefer managing Docker manually:
+If you prefer determining settings manually:
 
-**Start/Restart:**
-```bash
-docker compose up -d
+1.  Copy `.env.example` to `.env`.
+2.  Edit `.env` with your credentials (`TELEGRAM_TOKEN`, `DATABASE_URL`, etc.).
+3.  Start services:
+    ```bash
+    docker-compose up -d --build
+    ```
+
+### 4. Setup the Mini App
+
+1.  Go to [@BotFather](https://t.me/BotFather) in Telegram.
+2.  Select your bot.
+3.  Go to **Bot Settings** -> **Menu Button** -> **Configure Menu Button**.
+4.  Send the URL of your deployed Mini App (e.g., `https://your-domain.com`).
+5.  Give the button a title (e.g., "Open Shop").
+
+## Architecture Overview
+
+### Directory Structure
+
+```
+├── cmd/                # Application entry points
+│   └── app/            # Main bot executable
+├── internal/           # Private application code
+│   ├── config/         # Configuration loading
+│   ├── database/       # Database access layer (Repositories)
+│   ├── handler/        # Telegram command & callback handlers
+│   ├── payment/        # Payment processing logic
+│   ├── remnawave/      # Remnawave API client
+│   └── service/        # Business logic services
+├── web-app/            # Frontend (React + Vite)
+│   ├── src/            # Source code
+│   └── dist/           # Built assets (served by Go backend)
+├── db/                 # Database migrations
+├── setup.sh            # Interactive deployment script
+├── docker-compose.yaml # Container orchestration
+└── Dockerfile          # Multi-stage build definition
 ```
 
-**View Logs:**
-```bash
-docker compose logs -f --tail 100
+### Data Flow
+
+```
+User → Telegram Bot (Command/Mini App)
+↓
+Go Backend (Webhook/Polling)
+↓
+PostgreSQL (State/Transactions) ←→ Remnawave API (Key Management)
 ```
 
-**🛑 Update (CRITICAL)**
-Because the frontend (Mini App) is compiled *inside* the Docker image, you **MUST** rebuild when updating:
+## Environment Variables
 
-```bash
-git pull
-docker compose build --no-cache
-docker compose up -d
-```
-> **Note**: If you use `./setup.sh`, simply choose **Option 7: Update**.
+Key variables used in `.env`:
 
----
-
-## 🏗 Architecture
-
-The project consists of a Go backend and a React/Vite frontend.
-
--   **Backend**: Go (Golang) service that handles Telegram updates, payment logic, and database operations.
--   **Frontend**: React Mini App (`web-app/`) that runs inside Telegram for a smooth shopping experience.
--   **Database**: PostgreSQL for storing purchases, customers, and verification logs.
-
-👉 **[Read full Architecture Documentation](docs/STRUCTURE.md)** for directory layout and data flow.
-
----
-
-## ⚙️ Environment Variables
-
-The `./setup.sh` wizard will generate this for you, but here is the reference.
-
-### Required
 | Variable | Description |
 | :--- | :--- |
-| `TELEGRAM_TOKEN` | Your Bot Token from @BotFather. |
-| `ADMIN_TELEGRAM_ID` | Your Telegram User ID (for admin commands). |
-| `REMNAWAVE_URL` | URL of your Remnawave Panel. |
-| `REMNAWAVE_TOKEN` | API Token from Remnawave. |
-| `DOMAIN_NAME` | Domain for the bot (e.g., `shop.example.com`). Required for SSL and Mini App. |
+| `TELEGRAM_TOKEN` | Bot API token from BotFather |
+| `ADMIN_TELEGRAM_ID` | Your Telegram numeric ID for admin commands |
+| `REMNAWAVE_URL` | URL of your Remnawave panel |
+| `REMNAWAVE_TOKEN` | Admin API token for Remnawave |
+| `DATABASE_URL` | Connection string `postgres://user:pass@host:5432/db` |
+| `PLANS` | Config string for subscription plans |
+| `DOMAIN_NAME` | Your domain for Caddy (SSL) |
 
-### Payments
-| Variable | Description |
-| :--- | :--- |
-| `MOBILE_BANKING_ENABLED` | `true`. Enables AI screenshot verification. |
-| `MOBILE_BANKING_PHONE` | The phone number users should send money to. |
-| `GEMINI_API_KEY` | Google Gemini API key for analyzing screenshots. |
-| `CRYPTO_PAY_TOKEN` | Token for @CryptoBot (if enabled). |
+## Backup & Restore
 
-### Optional
-| Variable | Description |
-| :--- | :--- |
-| `DEFAULT_LANGUAGE` | `en`, `ru`, or `my` (Burmese). |
-| `SQUAD_UUIDS` | Specific Remnawave Squad UUIDs to assign users to. |
-| `MINI_APP_URL` | Direct link to the Mini App (optional, for menu button). |
+The `setup.sh` script includes built-in tools for migration:
 
-*See `.env.sample` for all available options.*
+-   **Backup**: `./setup.sh` -> Option 9. Creates a tarball of DB, Config, and Certs.
+-   **Restore**: `./setup.sh` -> Option 10. Restores a system from a backup tarball.
 
----
+## Troubleshooting
 
-## 📱 Mini App (Wavy VPN)
+-   **Bot not responding?** Check logs: `docker-compose logs -f bot`
+-   **Database crashed?** Use `fix_db_crash.sh` or reset via setup wizard.
+-   **Mini App Blank Screen?** Ensure `MINI_APP_URL` is set correctly and HTTPS is working.
 
-The frontend is a React app located in `web-app/`.
-It handles:
--   **Plan Selection**: Displays available plans.
--   **Checkout**: Copy-pasteable amounts and phone numbers.
--   **Verification**: Users upload screenshots directly in the UI.
--   **Key Management**: Users can see their active keys (`WV-123-1`) and "Copy Link".
+## License
 
-**Development**:
-To work on the frontend locally:
-```bash
-cd web-app
-npm install
-npm run dev
-```
-
----
-
-## 🤝 Version Support
-
-| Remnawave Version | Bot Version |
-| :--- | :--- |
-| 1.6 | 2.3.6 |
-| 2.0.0 - 2.1.9 | 3.2.4 |
-| 2.2.* | 3.2.5 |
-| 2.3.* | 3.5.* (Current) |
-
----
-
-## 💸 Donations
-
-If this project helps your business, consider supporting development!
-
--   **Bep20 USDT**: `0x4D1ee2445fdC88fA49B9d02FB8ee3633f45Bef48`
--   **SOL (Solana)**: `HNQhe6SCoU5UDZicFKMbYjQNv9Muh39WaEWbZayQ9Nn8`
--   **TRC20 USDT**: `TBJrguLia8tvydsQ2CotUDTYtCiLDA4nPW`
--   **TON**: `UQAdAhVxOr9LS07DDQh0vNzX2575Eu0eOByjImY1yheatXgr`
+MIT License.

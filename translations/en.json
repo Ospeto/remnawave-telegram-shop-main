@@ -43,5 +43,11 @@
   "mobile_pay_failed_generic": "❌ Could not verify this screenshot. Please try again or contact support.",
   "mobile_pay_no_pending": "No pending mobile banking payment found. Please start a purchase first.",
   "happ_proxy_instructions": "\n\n<b>How to use with Happ Proxy:</b>\n1. Copy the subscription link below.\n2. Open <b>Happ Proxy</b> app.\n3. The app should automatically detect the link. If not, look for 'Import from Clipboard'.\n4. Connect and enjoy!",
-  "happ_proxy_button": "Import to Happ Proxy"
+  "happ_proxy_button": "Import to Happ Proxy",
+  "auto_renew_success": "✅ သင်၏ Plan ကို Auto-Renew ပြုလုပ်ပြီးပါပြီ!",
+  "auto_renew_success_detail": "✅ Auto-Renew ပြုလုပ်ပြီးပါပြီ!\n\nPlan: <b>%s</b>\nDuration: <b>%d days</b>\nAmount: <b>%d MMK</b> deducted from your wallet.",
+  "auto_renew_failed": "❌ Auto-Renew ပြုလုပ်မရပါ။ Support ကို ဆက်သွယ်ပါ။",
+  "auto_renew_insufficient_balance": "⚠️ Wallet ငွေမလုံလောက်သဖြင့် Auto-Renew မပြုလုပ်နိုင်ပါ။ Wallet ငွေဖြည့်ပါ။",
+  "auto_renew_insufficient_balance_detail": "⚠️ <b>Auto-Renew Failed</b>\n\nငွေမလုံလောက်ပါ:\n  လိုအပ်သည်: <b>%d MMK</b>\n  လက်ကျန်: <b>%.0f MMK</b>\n\nသက်တမ်းကုန်ဆုံးမပြီးမီ Wallet ငွေဖြည့်ပါ။",
+  "auto_renew_plan_not_found": "⚠️ Auto-Renew – Plan မတွေ့ပါ။ Plan ပြောင်းလဲခဲ့ပုံရသည်။ Support ကို ဆက်သွယ်ပါ သို့မဟုတ် Auto-Renew ပြန်သတ်မှတ်ပါ။"
 }
