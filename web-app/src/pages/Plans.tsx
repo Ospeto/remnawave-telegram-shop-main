@@ -105,16 +105,17 @@ export function Plans() {
 
     const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
 
-    // When extending, lock to the same traffic type as the current key.
-    // Unlimited key (traffic_limit_gb === 0) → only unlimited plans.
-    // Limited key (traffic_limit_gb > 0)     → only limited plans.
-    // New purchase (no extend param)          → all plans.
+    // Extend plan filtering rules:
+    //   Key is ACTIVE  → lock to same traffic type (unlimited↔limited, no switching)
+    //   Key is EXPIRED → all plans available (starting fresh)
+    //   New purchase   → all plans available
+    const extendingKeyIsActive = extendingKey?.status === 'active';
     const extendingKeyIsUnlimited = extendingKey?.traffic_limit_gb === 0;
-    const filteredPlans = isExtend && extendingKey
+    const filteredPlans = isExtend && extendingKey && extendingKeyIsActive
         ? plans.filter(p =>
             extendingKeyIsUnlimited
-                ? p.traffic_limit_gb === 0        // Unlimited → Unlimited only
-                : p.traffic_limit_gb > 0          // Limited   → Limited only
+                ? p.traffic_limit_gb === 0   // Unlimited → Unlimited only
+                : p.traffic_limit_gb > 0     // Limited   → Limited only
         )
         : plans;
 
