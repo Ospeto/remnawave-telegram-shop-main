@@ -79,7 +79,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'subtitle_new_key_hint': 'A new VPN key will be created for you',
         'best_value': '✦ Best Value',
         'unlimited': 'Unlimited Data',
-        'per_day': '{{currency}}/day',
+        'per_day': '{{currency}} MMK/day',
         'new_expiry': '✓ New expiry: {{date}}',
 
         // ── Plans Help ──
@@ -257,7 +257,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'subtitle_new_key_hint': 'VPN Key အသစ်တစ်ခု ရရှိပါမည်',
         'best_value': '✦ အသင့်တော်ဆုံး',
         'unlimited': 'Data ကန့်သတ်မှု မရှိ',
-        'per_day': 'တစ်ရက်လျှင် {{currency}}',
+        'per_day': 'တစ်ရက်လျင် {{currency}} ကျပ်',
         'new_expiry': '✓ သက်တမ်းကုန်မည့် ရက်: {{date}}',
 
         // ── Plans Help ──
@@ -327,7 +327,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_tip_2_title': 'Key ချက်ချင်း ရရှိမည်',
         'wallet_tip_2_desc': 'Screenshot တင်ပြီး စောင့်ဆိုင်းရန် မလိုပါ — Wallet ငွေဖြင့် ဝယ်ယူပါက Key ကို စက္ကန့်ပိုင်းအတွင်း ရရှိမည်။',
         'wallet_tip_3_title': 'တစ်ကြိမ်ငွေဖြည့်ပြီး စိတ်ချလက်ချ သုံးနိုင်သည်',
-        'wallet_tip_3_desc': 'Wallet တွင် ငွေဖြည့်ထားပြီး လများစွာ ပြန်ပြန်ဆင်ဆင် ငွေမလွှဲဘဲ ရိုးရိုးရှင်းရှင်း အသုံးပြုနိုင်ပါသည်။',
+        'wallet_tip_3_desc': 'ငွေခဏခဏလွှဲစရာမလိုဘဲ အလိုအလျောက်သက်တမ်းတိုးစနစ်ဖြင့် အချိန်အကြာကြီး အသုံးပြုနိုင်ပါမည်။',
 
         // ── Wallet Payment ──
         'pay_with_wallet': '⚡ Wallet ဖြင့် ငွေပေးချေမည်',

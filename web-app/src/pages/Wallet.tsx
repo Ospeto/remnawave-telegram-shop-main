@@ -119,7 +119,7 @@ export function Wallet() {
           pointerEvents: 'none',
         }} />
 
-        {/* Top row: chip + contactless */}
+        {/* Top row: chip + WAVY brand */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 28 }}>
           {/* EMV Chip */}
           <div style={{
@@ -132,13 +132,13 @@ export function Wallet() {
             <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.25)', transform: 'translateX(-50%)' }} />
           </div>
 
-          {/* Contactless icon */}
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="1.8" aria-hidden="true">
-            <path d="M5 12.55a11 11 0 0 1 14.08 0" />
-            <path d="M1.42 9a16 16 0 0 1 21.16 0" />
-            <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
-            <line x1="12" y1="20" x2="12.01" y2="20" />
-          </svg>
+          {/* WAVY brand — top-right watermark */}
+          <div style={{
+            fontSize: 22, fontWeight: 900, letterSpacing: '4px',
+            textTransform: 'uppercase',
+            color: 'rgba(255,255,255,0.12)',
+            userSelect: 'none',
+          }}>WAVY</div>
         </div>
 
         {/* Balance label */}
@@ -180,12 +180,7 @@ export function Wallet() {
           {t('top_up_wallet')}
         </button>
 
-        {/* Card brand label bottom-right */}
-        <div style={{
-          position: 'absolute', bottom: 22, right: 24,
-          fontSize: 12, fontWeight: 800, letterSpacing: '2px',
-          color: 'rgba(255,255,255,0.2)', textTransform: 'uppercase',
-        }}>WAVY</div>
+
       </div>
 
 
