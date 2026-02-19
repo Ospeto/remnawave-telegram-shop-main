@@ -2,8 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ═══════════════════════════════════════════════════════════════
+   DESIGN SYSTEM — Adaptive Theme Variables
+   All colors MUST reference these variables for Light/Dark support.
+   ═══════════════════════════════════════════════════════════════ */
+
 :root {
-  /* Telegram theme variables with fallbacks */
+  /* Telegram theme variables with fallbacks (Dark defaults) */
   --tg-bg: var(--tg-theme-bg-color, #0f0f1a);
   --tg-text: var(--tg-theme-text-color, #ffffff);
   --tg-hint: var(--tg-theme-hint-color, #7c7c8a);
@@ -17,7 +22,6 @@
   --font-h2: 16px;
   --font-body: 14px;
   --font-caption: 12px;
-
   --weight-bold: 700;
   --weight-semibold: 600;
   --weight-regular: 400;
@@ -26,62 +30,151 @@
   --layout-padding: 16px;
   --layout-gap: 24px;
   --card-padding: 16px;
-}
 
-/* Theme Defaults (Dark) */
-:root {
+  /* ── Card System (Dark defaults) ── */
   --card-bg: rgba(255, 255, 255, 0.04);
   --card-border: rgba(255, 255, 255, 0.08);
   --glass-active: linear-gradient(135deg, rgba(94, 187, 255, 0.08), rgba(94, 187, 255, 0.02));
   --glass-active-border: rgba(94, 187, 255, 0.2);
 
-  /* Buttons (Dark) */
+  /* ── Button System ── */
   --btn-sec-bg: rgba(255, 255, 255, 0.08);
   --btn-sec-border: rgba(255, 255, 255, 0.08);
   --btn-sec-hover: rgba(255, 255, 255, 0.12);
 
-  /* Digital Card Defaults (Dark Mode) */
+  /* ── Digital Card (Wallet) ── */
   --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.15) 0%, rgba(0, 210, 190, 0.15) 100%);
   --digital-card-border: rgba(52, 199, 89, 0.3);
   --digital-card-shadow: 0 8px 32px -8px rgba(0, 210, 190, 0.2);
+  --digital-card-text: #ffffff;
+  --digital-card-hint: rgba(255, 255, 255, 0.8);
+  --digital-card-inner-bg: rgba(255, 255, 255, 0.2);
+  --digital-card-inner-border: rgba(255, 255, 255, 0.2);
+  --digital-card-chip-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.1));
+  --digital-card-chip-border: rgba(255, 255, 255, 0.2);
+
+  /* ── Semantic Colors ── */
+  --color-success: #34c759;
+  --color-danger: #ff3b30;
+  --color-accent: #00d2be;
+  --color-accent-alt: #00b4dc;
+  --color-telegram: #0088cc;
+
+  /* ── Progress Bars ── */
+  --progress-bg: rgba(255, 255, 255, 0.08);
+  --progress-glow: rgba(0, 210, 190, 0.5);
+  --progress-glow-alt: rgba(0, 180, 220, 0.4);
+
+  /* ── Dividers / Borders ── */
+  --divider: rgba(255, 255, 255, 0.06);
+
+  /* ── Input Fields ── */
+  --input-bg: rgba(255, 255, 255, 0.05);
+  --input-border: rgba(255, 255, 255, 0.1);
+  --input-focus-border: rgba(94, 187, 255, 0.5);
+
+  /* ── Toggle Switch ── */
+  --toggle-off-bg: rgba(255, 255, 255, 0.15);
+  --toggle-knob-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+
+  /* ── Info Card (Download Happ) ── */
+  --info-card-bg: linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03));
+  --info-card-border: rgba(0, 210, 190, 0.15);
+
+  /* ── Stats Card ── */
+  --stats-card-bg-1: linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.06));
+  --stats-card-border-1: rgba(0, 210, 190, 0.15);
+  --stats-card-bg-2: linear-gradient(135deg, rgba(0, 180, 220, 0.06), rgba(0, 150, 255, 0.06));
+  --stats-card-border-2: rgba(0, 180, 220, 0.15);
+
+  /* ── Footer ── */
+  --footer-color: rgba(0, 210, 190, 0.45);
+
+  /* ── Plan Badge ── */
+  --badge-popular-bg: var(--tg-btn);
+  --badge-popular-text: #fff;
 }
 
-/* Light Mode Overrides */
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT MODE — All overrides for white/gray backgrounds
+   ═══════════════════════════════════════════════════════════════ */
 body.theme-light {
   --tg-bg: #f2f2f7;
-  /* iOS System Gray - Better contrast */
-  --tg-text: #000000;
+  --tg-text: #1c1c1e;
+  --tg-hint: #8e8e93;
+  --tg-secondary: #e5e5ea;
 
-  /* Solid White Cards for Light Mode */
+  /* Cards */
   --card-bg: #ffffff;
-  --card-border: rgba(0, 0, 0, 0.05);
-  --glass-active: linear-gradient(135deg, rgba(0, 122, 255, 0.08), rgba(0, 122, 255, 0.02));
+  --card-border: rgba(0, 0, 0, 0.06);
+  --glass-active: linear-gradient(135deg, rgba(0, 122, 255, 0.06), rgba(0, 122, 255, 0.02));
   --glass-active-border: rgba(0, 122, 255, 0.2);
 
-  /* Buttons (Light) - Visible Gray/Border */
-  --btn-sec-bg: rgba(0, 0, 0, 0.05);
-  --btn-sec-border: rgba(0, 0, 0, 0.1);
-  --btn-sec-hover: rgba(0, 0, 0, 0.1);
+  /* Buttons */
+  --btn-sec-bg: rgba(0, 0, 0, 0.04);
+  --btn-sec-border: rgba(0, 0, 0, 0.08);
+  --btn-sec-hover: rgba(0, 0, 0, 0.08);
 
-  /* Digital Card Light Mode - Darker Green Gradient to pop on White */
-  --digital-card-bg: linear-gradient(135deg, rgba(52, 199, 89, 0.9) 0%, rgba(0, 210, 190, 0.8) 100%);
+  /* Digital Card — bold gradient for contrast on white */
+  --digital-card-bg: linear-gradient(135deg, #34c759 0%, #00d2be 100%);
   --digital-card-border: transparent;
-  --digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
+  --digital-card-shadow: 0 8px 24px -4px rgba(0, 210, 190, 0.35);
+  --digital-card-text: #ffffff;
+  --digital-card-hint: rgba(255, 255, 255, 0.85);
+  --digital-card-inner-bg: rgba(255, 255, 255, 0.25);
+  --digital-card-inner-border: rgba(255, 255, 255, 0.3);
+  --digital-card-chip-bg: linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.2));
+  --digital-card-chip-border: rgba(255, 255, 255, 0.3);
+
+  /* Progress Bars */
+  --progress-bg: rgba(0, 0, 0, 0.06);
+  --progress-glow: rgba(0, 210, 190, 0.4);
+  --progress-glow-alt: rgba(0, 180, 220, 0.3);
+
+  /* Dividers */
+  --divider: rgba(0, 0, 0, 0.06);
+
+  /* Input Fields */
+  --input-bg: rgba(0, 0, 0, 0.03);
+  --input-border: rgba(0, 0, 0, 0.08);
+  --input-focus-border: rgba(0, 122, 255, 0.5);
+
+  /* Toggle */
+  --toggle-off-bg: rgba(0, 0, 0, 0.12);
+  --toggle-knob-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+
+  /* Info Card */
+  --info-card-bg: linear-gradient(135deg, rgba(0, 210, 190, 0.08), rgba(0, 180, 220, 0.04));
+  --info-card-border: rgba(0, 210, 190, 0.2);
+
+  /* Stats */
+  --stats-card-bg-1: linear-gradient(135deg, rgba(0, 210, 190, 0.08), rgba(0, 180, 220, 0.08));
+  --stats-card-border-1: rgba(0, 210, 190, 0.2);
+  --stats-card-bg-2: linear-gradient(135deg, rgba(0, 180, 220, 0.08), rgba(0, 150, 255, 0.08));
+  --stats-card-border-2: rgba(0, 180, 220, 0.2);
+
+  /* Footer */
+  --footer-color: rgba(0, 180, 160, 0.5);
 }
 
-/* Dark Mode Overrides (Explicit) */
+/* Dark Mode explicit (mirrors defaults, for clarity) */
 body.theme-dark {
   --card-bg: rgba(255, 255, 255, 0.04);
   --card-border: rgba(255, 255, 255, 0.08);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   BASE RESET
+   ═══════════════════════════════════════════════════════════════ */
 * {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* ... existing code ... */
+/* ═══════════════════════════════════════════════════════════════
+   COMPONENT STYLES
+   ═══════════════════════════════════════════════════════════════ */
 
-/* Premium Digital Card (Wallet) */
+/* Digital Card (Wallet) */
 .digital-card {
   background: var(--digital-card-bg);
   border: 1px solid var(--digital-card-border);
@@ -103,7 +196,7 @@ body.theme-dark {
   pointer-events: none;
 }
 
-/* Glassmorphic card */
+/* Glassmorphic Card */
 .glass-card {
   background: var(--card-bg);
   backdrop-filter: blur(20px);
@@ -117,7 +210,7 @@ body.theme-dark {
   border-color: var(--glass-active-border);
 }
 
-/* Adaptive Button Styles */
+/* Buttons */
 .btn-primary {
   background: var(--tg-btn);
   color: var(--tg-btn-text);
@@ -163,7 +256,28 @@ body.theme-dark {
   background: var(--btn-sec-hover);
 }
 
-/* Helper/Info components */
+/* Utility classes */
+.text-hint {
+  color: var(--tg-hint);
+}
+
+.text-link {
+  color: var(--tg-link);
+}
+
+.text-success {
+  color: var(--color-success);
+}
+
+.text-danger {
+  color: var(--color-danger);
+}
+
+.text-accent {
+  color: var(--color-accent);
+}
+
+/* Tip Box */
 .tip-box {
   padding: 12px 16px;
   border-radius: 12px;
@@ -172,13 +286,11 @@ body.theme-dark {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  /* Minimalist update: removed heavy borders/backgrounds preference */
   background: transparent;
   position: relative;
   overflow: hidden;
 }
 
-/* Add a subtle accent line on the left instead of full border */
 .tip-box::before {
   content: '';
   position: absolute;
@@ -201,7 +313,6 @@ body.theme-dark {
 .tip-box-warning {
   background: rgba(255, 59, 48, 0.04);
   color: var(--tg-hint);
-  /* Keep text neutral to reduce noise */
 }
 
 .tip-box-warning::before {
@@ -223,6 +334,7 @@ body.theme-dark {
   line-height: 1.3;
 }
 
+/* Steps */
 .step-number {
   width: 24px;
   height: 24px;
@@ -255,4 +367,21 @@ body.theme-dark {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
+}
+
+/* Animation */
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

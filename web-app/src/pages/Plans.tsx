@@ -170,18 +170,18 @@ export function Plans() {
                         aria-label={t('promo_placeholder')}
                         style={{
                             flex: 1,
-                            background: 'rgba(255,255,255,0.05)',
-                            border: '1px solid rgba(255,255,255,0.1)',
+                            background: 'var(--input-bg)',
+                            border: '1px solid var(--input-border)',
                             borderRadius: 8,
                             padding: '10px 12px',
-                            color: 'white',
+                            color: 'var(--tg-text)',
                             fontSize: 14,
                             outline: 'none',
                             // Replace outline:none with a custom focus ring
                             boxShadow: 'none',
                         }}
-                        onFocus={e => (e.target.style.border = '1px solid rgba(94, 187, 255, 0.5)')}
-                        onBlur={e => (e.target.style.border = '1px solid rgba(255,255,255,0.1)')}
+                        onFocus={e => (e.target.style.border = '1px solid var(--input-focus-border)')}
+                        onBlur={e => (e.target.style.border = '1px solid var(--input-border)')}
                     />
                     <button
                         onClick={handleApplyPromo}
@@ -198,12 +198,12 @@ export function Plans() {
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'valid' && (
-                <div role="status" style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                <div role="status" style={{ color: 'var(--color-success)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_valid', { percent: String(discountPercent) })}
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'invalid' && (
-                <div role="alert" style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                <div role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_invalid')}
                 </div>
             )}
@@ -261,13 +261,13 @@ export function Plans() {
                                             <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
                                                 <span>📅 {item.days} {t('days_left').replace(' left', '')}</span>
                                                 <span style={{ opacity: 0.3 }}>·</span>
-                                                <span style={item.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
+                                                <span style={item.traffic_limit_gb === 0 ? { color: 'var(--color-success)' } : {}}>
                                                     {item.traffic_limit_gb > 0 ? `📊 ${item.traffic_limit_gb} GB` : t('unlimited')}
                                                 </span>
                                             </div>
                                         )}
                                         {isExtend && !isWalletTopup && (
-                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
+                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: 'var(--color-success)' }}>
                                                 {t('new_expiry', { date: calcNewExpiry(item.days) })}
                                             </div>
                                         )}
@@ -278,7 +278,7 @@ export function Plans() {
                                         )}
                                     </div>
                                     <div style={{ textAlign: 'right' }}>
-                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700, color: hasDiscount ? '#34c759' : undefined }}>
+                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700, color: hasDiscount ? 'var(--color-success)' : undefined }}>
                                             {price.toLocaleString()}
                                         </div>
                                         {hasDiscount && (

@@ -187,7 +187,7 @@ export function Home() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
                 <Link to="/wallet" className="digital-card animate-slide-up" style={{
                     padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
-                    textDecoration: 'none', color: 'var(--tg-text)',
+                    textDecoration: 'none', color: 'var(--digital-card-text)',
                     // Removed manual background to let .digital-card gradient shine
                     transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
                     cursor: 'pointer'
@@ -200,10 +200,10 @@ export function Home() {
                 >
                     <div style={{
                         width: 44, height: 44, borderRadius: 12,
-                        background: 'rgba(255, 255, 255, 0.15)',
+                        background: 'var(--digital-card-inner-bg)',
                         backdropFilter: 'blur(10px)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: '#ffffff',
+                        color: 'var(--digital-card-text)',
                         boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
                     }} aria-hidden="true">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -213,20 +213,20 @@ export function Home() {
                         </svg>
                     </div>
                     <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px', color: '#ffffff', letterSpacing: '0.2px' }}>{t('wallet_title')}</div>
-                        <div style={{ fontSize: '13px', color: 'rgba(255,255,255,0.9)', marginTop: 1 }}>{t('wallet_subtitle')}</div>
+                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px', color: 'var(--digital-card-text)', letterSpacing: '0.2px' }}>{t('wallet_title')}</div>
+                        <div style={{ fontSize: '13px', color: 'var(--digital-card-hint)', marginTop: 1 }}>{t('wallet_subtitle')}</div>
                     </div>
                     <div style={{
                         width: 28, height: 28, borderRadius: 14,
-                        background: 'rgba(255,255,255,0.1)',
+                        background: 'var(--digital-card-inner-bg)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 14, color: '#ffffff'
+                        fontSize: 14, color: 'var(--digital-card-text)'
                     }} aria-hidden="true">→</div>
                 </Link>
             </div>
 
             {/* Download App Prompt */}
-            <div className="glass-card" style={{ background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.03))', border: '1px solid rgba(0, 210, 190, 0.15)', padding: 16 }}>
+            <div className="glass-card" style={{ background: 'var(--info-card-bg)', border: '1px solid var(--info-card-border)', padding: 16 }}>
                 <h3 style={{ fontSize: 'var(--font-body)', fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {t('download_title')}
                 </h3>
@@ -295,14 +295,14 @@ export function Home() {
                                             aria-valuemax={totalDays}
                                             aria-valuenow={key.days_remaining}
                                             aria-label={`${key.days_remaining} days remaining`}
-                                            style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, marginTop: 12 }}
+                                            style={{ height: 4, background: 'var(--progress-bg)', borderRadius: 2, marginTop: 12 }}
                                         >
                                             <div style={{
                                                 height: '100%', borderRadius: 2,
                                                 background: key.days_remaining > 7 ? '#00d2be' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
                                                 width: `${daysPct}%`,
                                                 transition: 'width 0.5s ease',
-                                                boxShadow: '0 0 10px rgba(0, 210, 190, 0.5)' // Added glow per Council
+                                                boxShadow: '0 0 10px var(--progress-glow)' // Added glow per Council
                                             }} />
                                         </div>
 
@@ -321,14 +321,14 @@ export function Home() {
                                                     aria-valuemax={key.traffic_limit_gb}
                                                     aria-valuenow={key.traffic_used_gb}
                                                     aria-label={`${key.traffic_used_gb.toFixed(1)} of ${key.traffic_limit_gb} GB used`}
-                                                    style={{ height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}
+                                                    style={{ height: 4, background: 'var(--progress-bg)', borderRadius: 2 }}
                                                 >
                                                     <div style={{
                                                         height: '100%', borderRadius: 2,
                                                         background: trafficPct > 90 ? '#ff3b30' : trafficPct > 75 ? '#ff9f0a' : '#00b4dc',
                                                         width: `${trafficPct}%`,
                                                         transition: 'width 0.5s ease',
-                                                        boxShadow: '0 0 8px rgba(0, 180, 220, 0.4)' // Added glow per Council
+                                                        boxShadow: '0 0 8px var(--progress-glow-alt)' // Added glow per Council
                                                     }} />
                                                 </div>
                                             </div>
@@ -370,7 +370,7 @@ export function Home() {
 
                                     {/* Per-key auto-renew toggle */}
                                     {key.status === 'active' && (
-                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: 4 }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10, borderTop: '1px solid var(--divider)', marginTop: 4 }}>
                                             <div>
                                                 <div style={{ fontSize: 13, fontWeight: 600 }}>🔄 {t('auto_renew_title')}</div>
                                                 <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>
@@ -386,7 +386,7 @@ export function Home() {
                                                 disabled={togglingAutoRenewId === key.id}
                                                 style={{
                                                     width: 46, height: 28, borderRadius: 14, border: 'none',
-                                                    background: key.auto_renew ? '#34c759' : 'rgba(255,255,255,0.15)',
+                                                    background: key.auto_renew ? 'var(--color-success)' : 'var(--toggle-off-bg)',
                                                     position: 'relative', cursor: togglingAutoRenewId === key.id ? 'not-allowed' : 'pointer',
                                                     transition: 'background 0.2s', opacity: togglingAutoRenewId === key.id ? 0.7 : 1,
                                                     flexShrink: 0,
@@ -397,7 +397,7 @@ export function Home() {
                                                     position: 'absolute', top: 3,
                                                     left: key.auto_renew ? 21 : 3,
                                                     transition: 'left 0.2s',
-                                                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                                                    boxShadow: 'var(--toggle-knob-shadow)',
                                                 }} />
                                             </button>
                                         </div>
@@ -462,7 +462,7 @@ export function Home() {
                             : t('trial_button', { days: String(data.trial_days) })}
                     </button>
                     {trialError && (
-                        <div role="alert" style={{ color: '#ff3b30', fontSize: 12, textAlign: 'center', marginTop: -8 }}>
+                        <div role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, textAlign: 'center', marginTop: -8 }}>
                             {trialError}
                         </div>
                     )}
@@ -475,8 +475,8 @@ export function Home() {
                 transition: 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
                 ...(data?.trial_eligible && keys.length === 0 ? {
                     background: 'transparent',
-                    border: '1px solid rgba(0, 210, 190, 0.3)',
-                    color: '#00d2be',
+                    border: '1px solid var(--info-card-border)',
+                    color: 'var(--color-accent)',
                     boxShadow: 'none'
                 } : {})
             }}
@@ -497,11 +497,11 @@ export function Home() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                 <div className="glass-card" style={{
                     padding: '16px 12px', textAlign: 'center',
-                    background: 'linear-gradient(135deg, rgba(0, 210, 190, 0.06), rgba(0, 180, 220, 0.06))',
-                    border: '1px solid rgba(0, 210, 190, 0.15)',
+                    background: 'var(--stats-card-bg-1)',
+                    border: '1px solid var(--stats-card-border-1)',
                     display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center'
                 }}>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: '#00d2be', lineHeight: 1, letterSpacing: '-0.5px' }}>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-accent)', lineHeight: 1, letterSpacing: '-0.5px' }}>
                         {t('info_device_count')}
                     </div>
                     <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px', lineHeight: 1.2 }}>
@@ -510,11 +510,11 @@ export function Home() {
                 </div>
                 <div className="glass-card" style={{
                     padding: '16px 12px', textAlign: 'center',
-                    background: 'linear-gradient(135deg, rgba(0, 180, 220, 0.06), rgba(0, 150, 255, 0.06))',
-                    border: '1px solid rgba(0, 180, 220, 0.15)',
+                    background: 'var(--stats-card-bg-2)',
+                    border: '1px solid var(--stats-card-border-2)',
                     display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center'
                 }}>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: '#00b4dc', lineHeight: 1, letterSpacing: '-0.5px' }}>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--color-accent-alt)', lineHeight: 1, letterSpacing: '-0.5px' }}>
                         5
                     </div>
                     <div className="text-hint" style={{ fontSize: 11, marginTop: 6, letterSpacing: '0.3px' }}>
@@ -523,7 +523,7 @@ export function Home() {
                 </div>
             </div>
 
-            <div style={{ textAlign: 'center', fontSize: 11, color: 'rgba(0, 210, 190, 0.45)', letterSpacing: '0.8px', margin: '-2px 0 0', fontWeight: 500 }}>
+            <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--footer-color)', letterSpacing: '0.8px', margin: '-2px 0 0', fontWeight: 500 }}>
                 {t('info_server_list')}
             </div>
 
@@ -537,7 +537,7 @@ export function Home() {
                     padding: '10px 24px', borderRadius: 12,
                     background: 'rgba(0, 136, 204, 0.08)',
                     border: '1px solid rgba(0, 136, 204, 0.15)',
-                    color: '#0088cc', fontSize: 13, fontWeight: 600,
+                    color: 'var(--color-telegram)', fontSize: 13, fontWeight: 600,
                     textDecoration: 'none', transition: 'all 0.2s ease',
                     marginBottom: 8, alignSelf: 'center'
                 }}

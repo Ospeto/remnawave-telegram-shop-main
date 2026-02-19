@@ -182,7 +182,7 @@ export function Checkout() {
     if (error) return (
         <div className="screen-center">
             <div style={{ fontSize: 48 }} aria-hidden="true">❌</div>
-            <p style={{ color: '#ff3b30', textAlign: 'center', fontSize: 14 }}>{error}</p>
+            <p style={{ color: 'var(--color-danger)', textAlign: 'center', fontSize: 14 }}>{error}</p>
             <button className="btn-secondary" onClick={() => navigate('/plans')}>{t('back_to_plans')}</button>
         </div>
     );
@@ -236,7 +236,7 @@ export function Checkout() {
             {/* Step indicator */}
             {!isWalletTopup && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>
-                    <span style={{ color: '#34c759' }}>✓ {t('nav_plan')}</span>
+                    <span style={{ color: 'var(--color-success)' }}>✓ {t('nav_plan')}</span>
                     <span className="text-hint" aria-hidden="true">→</span>
                     <span className="text-link" style={{ fontWeight: 700 }}>{t('nav_payment')}</span>
                     <span className="text-hint" aria-hidden="true">→</span>
@@ -251,7 +251,7 @@ export function Checkout() {
 
             {/* Wallet Payment Option */}
             {canPayWithWallet && (
-                <div className="glass-card" style={{ padding: 20, border: '1px solid #34c759' }}>
+                <div className="glass-card" style={{ padding: 20, border: '1px solid var(--color-success)' }}>
                     <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 8px' }}>{t('pay_with_wallet')}</h2>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
                         <span className="text-hint">{t('your_balance')}</span>
@@ -261,7 +261,7 @@ export function Checkout() {
                         <div role="alert" style={{
                             padding: 10, borderRadius: 8, marginBottom: 10,
                             background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
-                            color: '#ff3b30', fontSize: 13
+                            color: 'var(--color-danger)', fontSize: 13
                         }}>
                             {walletPayError}
                         </div>
@@ -270,7 +270,7 @@ export function Checkout() {
                         className="btn-primary"
                         onClick={handlePayWithWallet}
                         disabled={payingWithWallet}
-                        style={{ width: '100%', background: '#34c759', opacity: payingWithWallet ? 0.7 : 1 }}
+                        style={{ width: '100%', background: 'var(--color-success)', opacity: payingWithWallet ? 0.7 : 1 }}
                     >
                         {payingWithWallet
                             ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('wallet_pay_processing')}</>
@@ -293,7 +293,7 @@ export function Checkout() {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div style={{
                         padding: 12, borderRadius: 12,
-                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        background: 'var(--input-bg)', border: '1px solid var(--input-border)',
                         display: 'flex', flexDirection: 'column', gap: 4
                     }}>
                         <div className="text-hint" style={{ fontSize: 11 }}>Amount</div>
@@ -310,7 +310,7 @@ export function Checkout() {
                     </div>
                     <div style={{
                         padding: 12, borderRadius: 12,
-                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        background: 'var(--input-bg)', border: '1px solid var(--input-border)',
                         display: 'flex', flexDirection: 'column', gap: 4
                     }}>
                         <div className="text-hint" style={{ fontSize: 11 }}>Phone</div>
@@ -319,7 +319,7 @@ export function Checkout() {
                             <button
                                 onClick={() => copyToClipboard(purchase?.payment_phone || '')}
                                 className="btn-secondary"
-                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32, color: phoneCopied ? '#34c759' : undefined }}
+                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32, color: phoneCopied ? 'var(--color-success)' : undefined }}
                             >
                                 {phoneCopied ? '✓' : '📋'}
                             </button>
@@ -338,7 +338,7 @@ export function Checkout() {
                     <div role="alert" style={{
                         padding: 12, borderRadius: 10, textAlign: 'center', fontSize: 13,
                         background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
-                        color: '#ff3b30'
+                        color: 'var(--color-danger)'
                     }}>
                         ❌ {verificationResult.message}
                     </div>

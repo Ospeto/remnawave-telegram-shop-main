@@ -108,8 +108,8 @@ export function Wallet() {
         <div style={{
           position: 'absolute', top: 20, left: 24,
           width: 40, height: 28, borderRadius: 6,
-          background: 'linear-gradient(135deg, rgba(255,255,255,0.4), rgba(255,255,255,0.1))',
-          border: '1px solid rgba(255,255,255,0.2)'
+          background: 'var(--digital-card-chip-bg)',
+          border: '1px solid var(--digital-card-chip-border)'
         }} aria-hidden="true" />
 
         {/* Visa-style contactless icon */}
@@ -125,7 +125,7 @@ export function Wallet() {
           </svg>
         </div>
 
-        <div className="text-hint" style={{ fontSize: '13px', marginBottom: 8, color: 'rgba(255,255,255,0.8)', marginTop: 20 }}>
+        <div className="text-hint" style={{ fontSize: '13px', marginBottom: 8, color: 'var(--digital-card-hint)', marginTop: 20 }}>
           {t('current_balance')}
         </div>
         <div style={{ fontSize: '36px', fontWeight: '800', marginBottom: 24, textShadow: '0 2px 10px rgba(0,0,0,0.2)' }}>
@@ -135,9 +135,9 @@ export function Wallet() {
           className="btn-primary"
           style={{
             marginTop: 0, width: '100%',
-            background: 'rgba(255,255,255,0.2)',
+            background: 'var(--digital-card-inner-bg)',
             backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.2)',
+            border: '1px solid var(--digital-card-inner-border)',
             boxShadow: 'none'
           }}
           onClick={() => navigate('/plans?walletTopup=true')}
@@ -195,7 +195,7 @@ export function Wallet() {
             <div key={num} className="glass-card" style={{ padding: 16, display: 'flex', gap: 12, alignItems: 'flex-start' }}>
               <div style={{
                 width: 32, height: 32, borderRadius: 16,
-                background: 'rgba(52, 199, 89, 0.1)', color: '#34c759',
+                background: 'rgba(52, 199, 89, 0.1)', color: 'var(--color-success)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 16, fontWeight: 'bold',
                 flexShrink: 0,
