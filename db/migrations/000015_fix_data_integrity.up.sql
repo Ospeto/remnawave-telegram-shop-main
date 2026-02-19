@@ -17,12 +17,8 @@ ALTER TABLE wallet_transaction
 
 -- ── DB-5: Constrain purchase.status and invoice_type ─────────────────────────────────────────
 -- Existing data should already match these values; if not, the constraint will fail and alert us.
-DO $$
-BEGIN
-    -- Sanitise any case discrepancies before adding constraint
-    UPDATE purchase SET status = LOWER(TRIM(status)) WHERE status IS NOT NULL;
-    UPDATE purchase SET invoice_type = LOWER(TRIM(invoice_type)) WHERE invoice_type IS NOT NULL;
-END $$;
+  -- REMOVED: UPDATE statements caused 'pending trigger events' conflict with ALTER TABLE.
+  -- The CHECK constraint addition below will fail safely if invalid data exists.
 
 ALTER TABLE purchase
     ADD CONSTRAINT purchase_status_valid
