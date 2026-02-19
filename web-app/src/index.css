@@ -69,8 +69,6 @@ body.theme-light {
   --digital-card-shadow: 0 12px 24px -6px rgba(0, 210, 190, 0.4);
 }
 
-
-
 /* Dark Mode Overrides (Explicit) */
 body.theme-dark {
   --card-bg: rgba(255, 255, 255, 0.04);
@@ -105,11 +103,13 @@ body.theme-dark {
   pointer-events: none;
 }
 
-background: var(--card-bg);
-backdrop-filter: blur(20px);
--webkit-backdrop-filter: blur(20px);
-border: 1px solid var(--card-border);
-border-radius: 16px;
+/* Glassmorphic card */
+.glass-card {
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
 }
 
 .glass-card-active {
