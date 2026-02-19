@@ -242,7 +242,14 @@ export function Home() {
                             : 0;
 
                         return (
-                            <div key={key.id} className={`glass-card ${key.status === 'active' ? 'glass-card-success' : ''}`} style={{ padding: 16 }}>
+                            <div key={key.id}
+                                className={`glass-card ${key.status === 'active' ? 'glass-card-success' : ''}`}
+                                style={{
+                                    padding: 16,
+                                    transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                                    cursor: 'default' // Keys have internal buttons, so the card itself isn't a single link
+                                }}
+                            >
                                 {/* Key header */}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                                     <div>
