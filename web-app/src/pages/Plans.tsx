@@ -105,14 +105,19 @@ export function Plans() {
 
     const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
 
-    // When extending, filter available plans based on current key type:
-    // - Unlimited key (traffic_limit_gb === 0): only show unlimited plans
-    // - Limited key (traffic_limit_gb > 0): show all plans (can upgrade to unlimited)
+    // When extending, lock to the same traffic type as the current key.
+    // Unlimited key (traffic_limit_gb === 0) → only unlimited plans.
+    // Limited key (traffic_limit_gb > 0)     → only limited plans.
+    // New purchase (no extend param)          → all plans.
+    const extendingKeyIsUnlimited = extendingKey?.traffic_limit_gb === 0;
     const filteredPlans = isExtend && extendingKey
-        ? (extendingKey.traffic_limit_gb === 0
-            ? plans.filter(p => p.traffic_limit_gb === 0)  // Unlimited → Unlimited only
-            : plans)                                         // Limited → all plans
-        : plans;                                             // New purchase → all plans
+        ? plans.filter(p =>
+            extendingKeyIsUnlimited
+                ? p.traffic_limit_gb === 0        // Unlimited → Unlimited only
+                : p.traffic_limit_gb > 0          // Limited   → Limited only
+        )
+        : plans;
+
 
     const itemsToDisplay = isWalletTopup
         ? TOPUP_AMOUNTS.map(amount => ({
