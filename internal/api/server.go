@@ -26,7 +26,6 @@ type contextKey string
 
 const (
 	telegramIDKey contextKey = "telegram_id"
-	usernameKey   contextKey = "username"
 )
 
 func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface) {
@@ -252,7 +251,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		ctx := context.WithValue(r.Context(), telegramIDKey, telegramID)
 		if username != "" {
-			ctx = context.WithValue(ctx, usernameKey, username)
+			ctx = context.WithValue(ctx, payment.UsernameCtxKey, username)
 		}
 		next(w, r.WithContext(ctx))
 	}

@@ -123,7 +123,8 @@ export function Wallet() {
         {transactions.length === 0 ? (
           <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
             <div style={{ fontSize: 32, marginBottom: 8 }} aria-hidden="true">📭</div>
-            <div className="text-hint">{t('no_transactions')}</div>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>{t('wallet_empty_title')}</div>
+            <div className="text-hint">{t('wallet_empty_desc')}</div>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

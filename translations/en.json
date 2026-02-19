@@ -1,6 +1,6 @@
 {
-  "greeting": "👋 <b>မင်္ဂလာပါ</b>\n\n🚀 <b>Wavy Private Server</b> မှ ကြိုဆိုပါတယ်။\n\n<b>Happ Proxy</b> အသုံးပြုသူများအတွက် အထူးကောင်းမွန်သော Private Server ဝန်ဆောင်မှု:\n✅ မြန်နှုန်းမြင့်ပြီး လိုင်းငြိမ်ခြင်း\n✅ လုံခြုံစိတ်ချရသော ဆက်သွယ်မှု\n✅ နိုင်ငံစုံ Server ရွေးချယ်ခွင့် (Singapore, Thailand, US, Japan, Germany)\n\n👇 ဝယ်ယူသုံးစွဲရန် အောက်ပါ <b>'ဒီမှာဝယ်ပါ'</b> ခလုတ်ကို နှိပ်ပါ။",
-  "buy_button": "🛍️ ဒီမှာဝယ်ပါ",
+  "greeting": "⚡ <b>Fast. Secure. Unrestricted.</b>\n\nUpgrade to the premium internet you deserve.\n\n🚀 <b>Gaming-Grade Low Ping</b>\n📺 <b>4K Streaming Ready</b>\n🛡️ <b>Total Privacy Protection</b>\n\n<i>Trusted by 5,000+ power users.</i>",
+  "buy_button": "⚡ Get High-Speed Access",
   "connect_button": "🔌 Connect",
   "back_button": "🔙 Back",
   "pricing_info": "Mobile Banking (KPay, WavePay, AyaPay) ဖြင့် ငွေပေးချေနိုင်ပါတယ်",
@@ -33,7 +33,7 @@
   "web_app_button_text": "Connect",
   "access_denied": "⚠️ Access denied. Please update your profile information.",
   "mobile_banking_button": "📱 Mobile Banking",
-  "mobile_pay_instructions": "Send <b>%d MMK</b> to:\n\n📱 <b>Phone:</b> <code>%s</code>\n\nAccepted: KPay, WavePay, AyaPay\n\n⚠️ <b>Write only \"Payment\" in the note/remark. Do NOT write \"VPN\" or \"Outline\".</b>\n\nAfter payment, upload the screenshot here.",
+  "mobile_pay_instructions": "<b>To Activate Your Key:</b>\n\n1️⃣ <b>Transfer %d MMK to:</b> <code>%s</code>\n<i>(We accept KPay, WavePay, AyaPay)</i>\n\n2️⃣ <b>Important Note:</b>\nIn the transfer note/remark, write ONLY: <code>Payment</code>\n<i>(Please do <b>NOT</b> mention VPN/Outline/Wavy)</i>\n\n3️⃣ <b>Upload screenshot below</b> 👇",
   "mobile_pay_verifying": "🔍 Verifying your payment screenshot...",
   "mobile_pay_success": "✅ Payment verified! Your subscription is being activated.",
   "mobile_pay_failed_duplicate": "❌ This transaction has already been used.",
@@ -48,7 +48,11 @@
   "auto_renew_success_detail": "✅ Auto-Renew ပြုလုပ်ပြီးပါပြီ!\n\nPlan: <b>%s</b>\nDuration: <b>%d days</b>\nAmount: <b>%d MMK</b> deducted from your wallet.",
   "auto_renew_failed": "❌ Auto-Renew ပြုလုပ်မရပါ။ Support ကို ဆက်သွယ်ပါ။",
   "auto_renew_insufficient_balance": "⚠️ Wallet ငွေမလုံလောက်သဖြင့် Auto-Renew မပြုလုပ်နိုင်ပါ။ Wallet ငွေဖြည့်ပါ။",
-  "auto_renew_insufficient_balance_detail": "⚠️ <b>Auto-Renew Failed</b>\n\nငွေမလုံလောက်ပါ:\n  လိုအပ်သည်: <b>%d MMK</b>\n  လက်ကျန်: <b>%.0f MMK</b>\n\nသက်တမ်းကုန်ဆုံးမပြီးမီ Wallet ငွေဖြည့်ပါ။",
-  "auto_renew_plan_not_found": "⚠️ Auto-Renew – Plan မတွေ့ပါ။ Plan ပြောင်းလဲခဲ့ပုံရသည်။ Support ကို ဆက်သွယ်ပါ သို့မဟုတ် Auto-Renew ပြန်သတ်မှတ်ပါ။",
-  "auto_renew_fallback_detail": "ℹ️ <b>Auto-Renew (Downgrade)</b>\n\nWallet balance was insufficient for your original plan, so we renewed with the most affordable option:\n\nPlan: <b>%s</b>\nDuration: <b>%d days</b>\nAmount: <b>%d MMK</b> deducted.\n\nPlease top up your wallet to renew with your preferred plan next time."
+  "auto_renew_fallback_detail": "🛡️ <b>Wavy Shield: You are still online!</b>\n\nYour balance was low for the full renewal, so we auto-renewed you on the <b>Saver Plan</b> to prevent disconnection.\n\n✅ Internet: <b>Connected</b>\n📅 New Expiry: <b>%d Days</b>\n💰 Cost: <b>%d MMK</b>\n\n<i>Review your plan settings in the app.</i>",
+  "auto_renew_insufficient_balance_detail": "🛑 <b>Action Required: Service Paused</b>\n\nWe tried to auto-renew your key, but your wallet needs a top-up.\n<b>Missing:</b> %d MMK\n\n👉 <b>Tap here to Top Up & Reconnect</b>\n<i>(Your key is saved for 24 hours)</i>",
+  "wallet_empty_title": "Start Your Journal",
+  "wallet_empty_desc": "Your meaningful transaction history starts here.",
+  "home_empty_title": "Ready to Connect?",
+  "home_empty_desc": "Get your private access key now.",
+  "home_empty_action": "🚀 Get Started"
 }

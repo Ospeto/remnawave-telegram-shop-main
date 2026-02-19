@@ -5,34 +5,9 @@ import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { TipBox } from '../components/TipBox';
+import { UserData } from '../lib/types';
 
-interface SubscriptionKey {
-    id: number;
-    label: string;
-    username: string;
-    subscription_url: string;
-    happ_link: string;
-    expire_at: string | null;
-    days_remaining: number;
-    total_days: number;
-    status: string;
-    traffic_used_gb: number;
-    traffic_limit_gb: number;
-    auto_renew: boolean;
-}
 
-interface UserData {
-    user: {
-        id: number;
-        telegram_id: number;
-    };
-    keys: SubscriptionKey[];
-    is_active: boolean;
-    expire_at: string | null;
-    days_remaining: number;
-    trial_eligible: boolean;
-    trial_days: number;
-}
 
 const fetcher = (url: string, headers: HeadersInit) =>
     fetch(url, { headers }).then(res => {
@@ -395,9 +370,9 @@ export function Home() {
                 /* Empty state — first-time user welcome */
                 <div className="glass-card" style={{ padding: 28, textAlign: 'center' }}>
                     <div style={{ fontSize: 48, marginBottom: 12 }} aria-hidden="true">👋</div>
-                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>{t('welcome_title')}</h2>
+                    <h2 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>{t('home_empty_title')}</h2>
                     <p className="text-hint" style={{ fontSize: 13, margin: '0 0 16px', lineHeight: 1.6 }}>
-                        {t('welcome_text')}
+                        {t('home_empty_desc')}
                     </p>
 
                     <div className="tip-box tip-box-info" style={{ textAlign: 'left' }}>

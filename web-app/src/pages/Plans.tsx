@@ -4,21 +4,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { TipBox } from '../components/TipBox';
+import { Plan, UserData } from '../lib/types';
 
-interface Plan {
-    label: string;
-    days: number;
-    price: number;
-    traffic_limit_gb: number;
-    currency: string;
-}
 
-interface UserData {
-    is_active: boolean;
-    expire_at: string | null;
-    days_remaining: number;
-    keys: { id: number; label: string; expire_at: string | null; status: string; traffic_limit_gb: number }[];
-}
 
 export function Plans() {
     const { tg, initData } = useTelegram();

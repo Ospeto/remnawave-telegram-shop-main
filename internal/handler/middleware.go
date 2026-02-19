@@ -11,6 +11,8 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/utils"
+
+	"golang.org/x/time/rate"
 )
 
 func (h Handler) CreateCustomerIfNotExistMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
@@ -79,6 +81,23 @@ func (h Handler) SuspiciousUserFilterMiddleware(next bot.HandlerFunc) bot.Handle
 		} else {
 			next(ctx, b, update)
 			return
+		}
+
+		// Rate Limit Check
+		if h.limitersMu != nil && h.limiters != nil {
+			h.limitersMu.Lock()
+			limiter, exists := h.limiters[userID]
+			if !exists {
+				// Allow 2 events per second with burst of 5
+				limiter = rate.NewLimiter(2, 5)
+				h.limiters[userID] = limiter
+			}
+			h.limitersMu.Unlock()
+
+			if !limiter.Allow() {
+				slog.Warn("rate limit exceeded", "userId", utils.MaskHalfInt64(userID))
+				return
+			}
 		}
 
 		if config.GetBlockedTelegramIds()[userID] {

@@ -285,74 +285,46 @@ export function Checkout() {
                     {canPayWithWallet ? t('or_pay_manually') : t('guide_title')}
                 </h2>
 
-                <div className="step-row">
-                    <span className="step-number" aria-label="Step 1">1</span>
-                    <div className="step-text">
-                        <strong>{t('guide_step_1')}</strong>
-                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
-                    </div>
-                </div>
+                <TipBox variant="info" icon="ℹ️" allowHtml style={{ marginBottom: 16 }}>
+                    {purchase?.instructions || ''}
+                </TipBox>
 
-                <div className="step-row">
-                    <span className="step-number" aria-label="Step 2">2</span>
-                    <div className="step-text" style={{ flex: 1 }}>
-                        <strong>{t('guide_step_2')}</strong>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                            <div style={{
-                                flex: 1, padding: '12px 14px', borderRadius: 12,
-                                background: 'rgba(94, 187, 255, 0.06)', border: '1px solid rgba(94, 187, 255, 0.15)',
-                                display: 'flex', alignItems: 'center'
-                            }}>
-                                <div className="text-link" style={{ fontSize: 24, fontWeight: 700 }}>
-                                    {(purchase?.amount || 0).toLocaleString()} {purchase?.currency || ''}
-                                </div>
-                            </div>
+                {/* Quick Copy Helpers */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div style={{
+                        padding: 12, borderRadius: 12,
+                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        display: 'flex', flexDirection: 'column', gap: 4
+                    }}>
+                        <div className="text-hint" style={{ fontSize: 11 }}>Amount</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontWeight: 700 }}>{(purchase?.amount || 0).toLocaleString()}</div>
+                            <button
+                                onClick={() => copyToClipboard(String(purchase?.amount))}
+                                className="btn-secondary"
+                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32 }}
+                            >
+                                📋
+                            </button>
                         </div>
                     </div>
-                </div>
-
-                <div className="step-row">
-                    <span className="step-number" aria-label="Step 3">3</span>
-                    <div className="step-text" style={{ flex: 1 }}>
-                        <strong>{t('guide_step_3')}</strong>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                            <div style={{
-                                flex: 1, padding: '12px 14px', borderRadius: 12,
-                                background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)',
-                                display: 'flex', alignItems: 'center'
-                            }}>
-                                <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace' }}>
-                                    {purchase?.payment_phone}
-                                </div>
-                            </div>
+                    <div style={{
+                        padding: 12, borderRadius: 12,
+                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                        display: 'flex', flexDirection: 'column', gap: 4
+                    }}>
+                        <div className="text-hint" style={{ fontSize: 11 }}>Phone</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>{purchase?.payment_phone}</div>
                             <button
                                 onClick={() => copyToClipboard(purchase?.payment_phone || '')}
                                 className="btn-secondary"
-                                aria-label={phoneCopied ? t('copied') : t('tap_to_copy')}
-                                style={{
-                                    width: 'auto', padding: '0 16px', borderRadius: 12,
-                                    fontSize: 18,
-                                    background: phoneCopied ? '#34c759' : undefined,
-                                    color: phoneCopied ? '#fff' : undefined,
-                                    border: phoneCopied ? 'none' : undefined
-                                }}
+                                style={{ padding: '4px 8px', fontSize: 14, minWidth: 32, color: phoneCopied ? '#34c759' : undefined }}
                             >
                                 {phoneCopied ? '✓' : '📋'}
                             </button>
                         </div>
                     </div>
-                </div>
-
-                <div className="step-row">
-                    <span className="step-number" aria-label="Step 4">4</span>
-                    <div className="step-text">
-                        <strong>{t('guide_step_4')}</strong>
-                        <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
-                    </div>
-                </div>
-
-                <div style={{ marginTop: 12, textAlign: 'center', fontSize: 13, color: 'rgba(255, 255, 255, 0.5)' }}>
-                    {t('accepted_methods')}
                 </div>
             </div>
 

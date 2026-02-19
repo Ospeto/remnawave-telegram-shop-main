@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -173,7 +174,6 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	username, _ := r.Context().Value(usernameKey).(string)
 
 	var req CreatePurchaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -227,10 +227,8 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, username)
-
 	// Delegate to PaymentService with Promo Code
-	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
+	_, purchaseID, err := h.paymentService.CreatePurchase(r.Context(), price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -250,7 +248,9 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if req.ExtendKeyID != nil {
 		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
-	_ = h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields)
+	if err := h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields); err != nil {
+		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
+	}
 
 	instructions := fmt.Sprintf(
 		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
@@ -442,7 +442,12 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, fmt.Sprintf("%d", telegramID))
+	// Use actual username if available, otherwise stringified ID. Ideally this logic belongs in service layer.
+	username, _ := r.Context().Value(payment.UsernameCtxKey).(string)
+	if username == "" {
+		username = fmt.Sprintf("%d", telegramID)
+	}
+	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, username)
 	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
 	if err != nil {
 		http.Error(w, "Failed to activate trial", http.StatusInternalServerError)

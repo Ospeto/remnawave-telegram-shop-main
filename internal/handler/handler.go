@@ -6,8 +6,12 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
-	"remnawave-tg-shop-bot/internal/sync"
+	appSync "remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
+	"sync"
+	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Handler struct {
@@ -16,16 +20,20 @@ type Handler struct {
 	cryptoPayClient     *cryptopay.Client
 	translation         *translation.Manager
 	paymentService      *payment.PaymentService
-	syncService         *sync.SyncService
+	syncService         *appSync.SyncService
 	subscriptionService *notification.SubscriptionService
 	referralRepository  *database.ReferralRepository
 	promoCodeRepository *database.PromoCodeRepository
 	cache               *cache.Cache
 	mobilePayCache      *cache.Cache // telegramID → purchaseID for pending mobile screenshots
+
+	// Rate Limiting
+	limitersMu *sync.Mutex
+	limiters   map[int64]*rate.Limiter
 }
 
 func NewHandler(
-	syncService *sync.SyncService,
+	syncService *appSync.SyncService,
 	paymentService *payment.PaymentService,
 	translation *translation.Manager,
 	customerRepository *database.CustomerRepository,
@@ -37,7 +45,7 @@ func NewHandler(
 	cache *cache.Cache,
 	mobilePayCache *cache.Cache,
 ) *Handler {
-	return &Handler{
+	h := &Handler{
 		syncService:         syncService,
 		paymentService:      paymentService,
 		customerRepository:  customerRepository,
@@ -49,5 +57,23 @@ func NewHandler(
 		promoCodeRepository: promoCodeRepository,
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
+		limiters:            make(map[int64]*rate.Limiter),
+		limitersMu:          &sync.Mutex{},
+	}
+
+	// Start cleanup loop for rate limiters
+	go h.cleanupLimiters()
+	return h
+}
+
+// cleanupLimiters periodically clears the map to prevent unbounded growth.
+// Simplified approach: just wipe the map every hour to release memory.
+// Active users will just get a new limiter.
+func (h *Handler) cleanupLimiters() {
+	ticker := time.NewTicker(1 * time.Hour)
+	for range ticker.C {
+		h.limitersMu.Lock()
+		h.limiters = make(map[int64]*rate.Limiter)
+		h.limitersMu.Unlock()
 	}
 }
