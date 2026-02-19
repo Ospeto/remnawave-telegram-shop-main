@@ -214,19 +214,19 @@ export const translations: Record<Language, Record<string, string>> = {
         'btn_get_started': 'စတင်မည်',
 
         // ── Home Help / Tips ──
-        'help_expired': '⏳ ဤ Key သက်တမ်းကုန်ဆုံးသွားပါပြီ။ \"သက်တမ်းတိုးမည်\" ကို နှိပ်ပြီး ချက်ချင်း ပြန်လည်ချိတ်ဆက်နိုင်ပါသည်။',
-        'help_btn_add': '📱 Happ သို့ ထည့်မည် — Happ Proxy App ထဲသို့ Key ကို တစ်ချက်နှိပ်ရုံဖြင့် ထည့်သွင်းပေးပါသည်',
-        'help_btn_extend': '📅 သက်တမ်းတိုးမည် — ရှိနေသော ရက်နှင့် Data ပေါ်တွင် ထပ်ပေါင်းထည့်ပါသည်၊ ဆုံးရှုံးမှု မရှိပါ',
-        'help_btn_copy': '🔗 Key ကူးယူမည် — Outline/Shadowsocks ကို ထောက်ပံ့သော VPN App မည်သည်မဆို သုံးနိုင်ပါသည်',
-        'tip_multi_key': '💡 အကြံ: Device အမျိုးမျိုးအတွက် Key အများအပြား ထားနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း သက်တမ်းတိုးနိုင်ပါသည်။',
+        'help_expired': '⏳ ဤ Key သက်တမ်းကုန်ဆုံးသွားပါပြီ။ "သက်တမ်းတိုးမည်" ကို နှိပ်ပြီး ချက်ချင်း ပြန်လည်ချိတ်ဆက်နိုင်ပါသည်။',
+        'help_btn_add': 'Happ သို့ ထည့်မည် — Happ Proxy App ထဲသို့ Key ကို တစ်ချက်နှိပ်ရုံဖြင့် ထည့်သွင်းပေးပါသည်',
+        'help_btn_extend': 'သက်တမ်းတိုးမည် — ရှိနေသော ရက်နှင့် Data ပေါ်တွင် ထပ်ပေါင်းထည့်ပါသည်၊ ဆုံးရှုံးမှု မရှိပါ',
+        'help_btn_copy': 'Key ကူးယူမည် — Outline/Shadowsocks ကို ထောက်ပံ့သော VPN App မည်သည်မဆို သုံးနိုင်ပါသည်',
+        'tip_multi_key': 'အကြံပြုချက်: Device ၃ ခုထက်ပို၍ သုံးလိုပါက Key အသစ်ဝယ်ယူနိုင်သလို၊ ရှိပြီးသား Key ကိုလည်း သက်တမ်းတိုးနိုင်ပါသည်။',
         'info_device_limit': 'Key တစ်ခုလျှင် Device အရေအတွက်',
         'info_device_count': '၃ ခု',
         'info_servers': 'ဆာဗာ တည်နေရာများ',
         'info_server_list': 'TH · DE · US · SG · JP',
-        'contact_support': 'Support ဆက်သွယ်ရန်',
+        'contact_support': 'အကူအညီ ရယူရန်',
 
         // ── Trial ──
-        'trial_button': '🎁 အခမဲ့ {{days}} ရက် စမ်းသုံးမည်',
+        'trial_button': '🎁 အခမဲ့ {{days}} ရက် စမ်းသုံးခွင့် ရယူမည်',
         'trial_activating': 'Trial ဖွင့်ပေးနေပါသည်...',
         'trial_error': 'Trial ရယူမရနိုင်ပါ။ ထပ်ကြိုးစားပါ သို့မဟုတ် Support သို့ ဆက်သွယ်ပါ။',
         'trial_success': '🎉 Trial အောင်မြင်ပါသည်! သင်၏ အခမဲ့ Key အဆင်သင့်ဖြစ်ပါပြီ။',
@@ -237,7 +237,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'home_empty_desc': 'VPN Key ရယူပြီး လွတ်လပ်လုံခြုံစွာ အင်တာနက်သုံးစွဲလိုက်ပါ။',
         'home_empty_action': '🚀 Key ရယူမည်',
         'welcome_text': 'သင့်တွင် VPN Key မရှိသေးပါ။ အောက်ပါ Plan တစ်ခုကို ရွေးချယ်ပြီး ၁ မိနစ်အတွင်း စတင်နိုင်ပါသည်။',
-        'download_title': '📥 ဦးစွာ Happ Proxy ကို Download ရယူပါ',
+        'download_title': 'Happ Proxy App ကို ဦးစွာ Download ရယူပါ',
         'download_text': 'Key ကို အသက်သွင်းမတိုင်မီ Happ Proxy App ကို Download လုပ်ပါ။ အခမဲ့ဖြစ်ပြီး ၃၀ စက္ကန့်ခန့်သာ ကြာပါသည်။',
         'btn_download': 'App Download ရယူမည်',
         'how_it_works': 'လုပ်ဆောင်ပုံ',
@@ -322,11 +322,11 @@ export const translations: Record<Language, Record<string, string>> = {
 
         // ── Wallet Tips ──
         'wallet_tips_title': 'Wallet ၏ အကျိုးကျေးဇူးများ',
-        'wallet_tip_1_title': '🔒 ၂၄ နာရီ ပြတ်တောက်မှု မရှိ',
+        'wallet_tip_1_title': '၂၄ နာရီ ဝန်ဆောင်မှု မပြတ်တောက်ပါ',
         'wallet_tip_1_desc': 'Auto-renewal ဖွင့်ထားပါ — VPN သည် သက်တမ်းကုန်သည့်အခါ အလိုအလျောက် သက်တမ်းတိုးပေးမည်၊ ပြတ်တောက်ခြင်း မရှိပါ။',
-        'wallet_tip_2_title': '⚡ Key ချက်ချင်း ရရှိမည်',
+        'wallet_tip_2_title': 'Key ချက်ချင်း ရရှိမည်',
         'wallet_tip_2_desc': 'Screenshot တင်ပြီး စောင့်ဆိုင်းရန် မလိုပါ — Wallet ငွေဖြင့် ဝယ်ယူပါက Key ကို စက္ကန့်ပိုင်းအတွင်း ရရှိမည်။',
-        'wallet_tip_3_title': '🕐 တစ်ကြိမ်ငွေဖြည့်ပြီး လပေါင်းများစွာ',
+        'wallet_tip_3_title': 'တစ်ကြိမ်ငွေဖြည့်ပြီး စိတ်ချလက်ချ သုံးနိုင်သည်',
         'wallet_tip_3_desc': 'Wallet တွင် ငွေဖြည့်ထားပြီး လများစွာ ပြန်ပြန်ဆင်ဆင် ငွေမလွှဲဘဲ ရိုးရိုးရှင်းရှင်း အသုံးပြုနိုင်ပါသည်။',
 
         // ── Wallet Payment ──
