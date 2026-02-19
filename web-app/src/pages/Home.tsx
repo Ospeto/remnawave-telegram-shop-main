@@ -358,7 +358,8 @@ export function Home() {
                                             <div>
                                                 <div style={{ fontSize: 13, fontWeight: 600 }}>🔄 {t('auto_renew_title')}</div>
                                                 <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>
-                                                    {key.auto_renew ? t('auto_renew_enabled', { days: 30 }) : t('auto_renew_disabled')}
+                                                    {key.auto_renew ? t('auto_renew_enabled') : t('auto_renew_disabled')}
+
                                                 </div>
                                             </div>
                                             <button
