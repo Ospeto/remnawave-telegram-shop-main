@@ -257,7 +257,7 @@ export function Wallet() {
               botUrlToUse = wallet.bot_url;
             }
             const text = `Hey! Join Wavy Private Server using my link and we both get free VPN balance! 🌊`;
-            const url = `${botUrlToUse}?start=${uid}`;
+            const url = `${botUrlToUse}?start=ref_${uid}`;
             (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
           }}
           style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}

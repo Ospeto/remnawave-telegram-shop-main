@@ -264,7 +264,7 @@ export function Checkout() {
                                 botUrlToUse = purchase.bot_url;
                             }
                             const text = `Hey! Join Wavy Private Server using my link and we both get free VPN balance! 🌊`;
-                            const url = `${botUrlToUse}?start=${uid}`;
+                            const url = `${botUrlToUse}?start=ref_${uid}`;
                             (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
                         }}
                         style={{

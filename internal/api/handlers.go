@@ -263,7 +263,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	var instructions string
 	var mobileNumber string
-	if purchase.PaymentMethod == string(database.InvoiceTypeMobileBanking) {
+	if purchase.InvoiceType == database.InvoiceTypeMobileBanking {
 		instructions = fmt.Sprintf(
 			h.translation.GetText(customer.Language, "mobile_pay_instructions"),
 			int(purchase.Amount),
@@ -278,7 +278,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		Amount:       int(purchase.Amount),
 		Currency:     config.Currency(),
 		Instructions: instructions,
-		InvoiceType:  purchase.PaymentMethod,
+		InvoiceType:  string(purchase.InvoiceType),
 		BotURL:       config.BotURL(),
 	}
 
