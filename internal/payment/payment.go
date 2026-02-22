@@ -424,27 +424,49 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	// safe to run after the purchase flow completes.
 	ctxRef := context.WithoutCancel(ctx)
 
+	slog.Info("[REFERRAL-DEBUG] processReferralBonus called",
+		"customer_id", customer.ID,
+		"telegram_id", customer.TelegramID,
+	)
+
 	referral, err := s.referralRepository.FindByReferee(ctxRef, customer.TelegramID)
 	if err != nil {
-		slog.Error("Referral lookup failed (non-fatal)", "error", err)
+		slog.Error("[REFERRAL-DEBUG] Referral lookup failed (non-fatal)", "error", err)
 		return
 	}
 	if referral == nil {
+		slog.Info("[REFERRAL-DEBUG] No referral record found for this customer — not referred by anyone")
 		return // customer was not referred by anyone
 	}
 
+	slog.Info("[REFERRAL-DEBUG] Referral record found!",
+		"referral_id", referral.ID,
+		"referrer_telegram_id", referral.ReferrerID,
+		"referee_telegram_id", referral.RefereeID,
+		"bonus_granted", referral.BonusGranted,
+		"referee_bonus_granted", referral.RefereeBonusGranted,
+	)
+
 	// --- Credit REFERRER (person who shared the link) ---
 	if !referral.BonusGranted {
+		slog.Info("[REFERRAL-DEBUG] Crediting REFERRER...")
 		referrerCustomer, err := s.customerRepository.FindByTelegramId(ctxRef, referral.ReferrerID)
 		if err != nil || referrerCustomer == nil {
-			slog.Error("Referral: referrer customer lookup failed (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] FAILED: referrer customer lookup failed (non-fatal)", "error", err, "referrer_id", referral.ReferrerID)
 			return
 		}
 
+		slog.Info("[REFERRAL-DEBUG] Referrer found, adding balance",
+			"referrer_customer_id", referrerCustomer.ID,
+			"current_balance", referrerCustomer.Balance,
+			"bonus_amount", ReferralBonusAmount,
+		)
+
 		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, ReferralBonusAmount); err != nil {
-			slog.Error("Referral: failed to credit referrer balance (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referrer balance (non-fatal)", "error", err)
 			return
 		}
+		slog.Info("[REFERRAL-DEBUG] Referrer balance credited successfully")
 
 		if s.walletTxRepo != nil {
 			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
@@ -453,31 +475,40 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 				Type:        database.WalletTransactionTypeReferral,
 				Description: "Referral bonus — friend made their first purchase",
 			}); err != nil {
-				slog.Error("Referral: failed to log referrer wallet transaction (non-fatal)", "error", err)
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referrer wallet transaction (non-fatal)", "error", err)
+			} else {
+				slog.Info("[REFERRAL-DEBUG] Referrer wallet transaction logged")
 			}
 		}
 
 		if err := s.referralRepository.MarkBonusGranted(ctxRef, referral.ID); err != nil {
-			slog.Error("Referral: failed to mark bonus_granted (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to mark bonus_granted (non-fatal)", "error", err)
+		} else {
+			slog.Info("[REFERRAL-DEBUG] bonus_granted flag set to true")
 		}
 
-		slog.Info("Granted referral bonus to referrer", "referrer_id", utils.MaskHalfInt64(referrerCustomer.ID), "amount", ReferralBonusAmount)
+		slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer", "referrer_id", referrerCustomer.ID, "amount", ReferralBonusAmount)
 
 		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 			ChatID:    referrerCustomer.TelegramID,
 			ParseMode: models.ParseModeHTML,
 			Text:      s.translation.GetText(referrerCustomer.Language, "referral_bonus_granted"),
 		}); err != nil {
-			slog.Error("Referral: bonus notification to referrer failed (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] Referrer notification failed (non-fatal)", "error", err)
 		}
+	} else {
+		slog.Info("[REFERRAL-DEBUG] Referrer bonus already granted, skipping")
 	}
 
 	// --- Credit REFEREE (the new buyer who clicked the link) ---
 	if !referral.RefereeBonusGranted {
+		slog.Info("[REFERRAL-DEBUG] Crediting REFEREE...")
+
 		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, ReferralBonusAmount); err != nil {
-			slog.Error("Referral: failed to credit referee balance (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referee balance (non-fatal)", "error", err)
 			return
 		}
+		slog.Info("[REFERRAL-DEBUG] Referee balance credited successfully")
 
 		if s.walletTxRepo != nil {
 			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
@@ -486,24 +517,32 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 				Type:        database.WalletTransactionTypeReferral,
 				Description: "Welcome bonus — joined via referral link",
 			}); err != nil {
-				slog.Error("Referral: failed to log referee wallet transaction (non-fatal)", "error", err)
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referee wallet transaction (non-fatal)", "error", err)
+			} else {
+				slog.Info("[REFERRAL-DEBUG] Referee wallet transaction logged")
 			}
 		}
 
 		if err := s.referralRepository.MarkRefereeBonusGranted(ctxRef, referral.ID); err != nil {
-			slog.Error("Referral: failed to mark referee_bonus_granted (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to mark referee_bonus_granted (non-fatal)", "error", err)
+		} else {
+			slog.Info("[REFERRAL-DEBUG] referee_bonus_granted flag set to true")
 		}
 
-		slog.Info("Granted welcome bonus to referee", "referee_id", utils.MaskHalfInt64(customer.ID), "amount", ReferralBonusAmount)
+		slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee", "referee_id", customer.ID, "amount", ReferralBonusAmount)
 
 		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 			ChatID:    customer.TelegramID,
 			ParseMode: models.ParseModeHTML,
 			Text:      s.translation.GetText(customer.Language, "referee_bonus_granted"),
 		}); err != nil {
-			slog.Error("Referral: welcome bonus notification to referee failed (non-fatal)", "error", err)
+			slog.Error("[REFERRAL-DEBUG] Referee notification failed (non-fatal)", "error", err)
 		}
+	} else {
+		slog.Info("[REFERRAL-DEBUG] Referee bonus already granted, skipping")
 	}
+
+	slog.Info("[REFERRAL-DEBUG] processReferralBonus completed")
 }
 
 func (s *PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {

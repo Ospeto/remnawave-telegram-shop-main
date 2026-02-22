@@ -13,7 +13,6 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
-	"remnawave-tg-shop-bot/utils"
 )
 
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -52,46 +51,90 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	// 1. The message contains a ref_ code
 	// 2. The user has never made a paid purchase
 	// 3. The user doesn't already have a referral record (UNIQUE constraint)
+	slog.Info("[REFERRAL-DEBUG] /start handler entry",
+		"message_text", update.Message.Text,
+		"chat_id", update.Message.Chat.ID,
+		"customer_id", existingCustomer.ID,
+		"telegram_id", existingCustomer.TelegramID,
+		"contains_ref", strings.Contains(update.Message.Text, "ref_"),
+	)
+
 	if strings.Contains(update.Message.Text, "ref_") {
 		parts := strings.Split(update.Message.Text, " ")
+		slog.Info("[REFERRAL-DEBUG] ref_ detected in message", "parts_count", len(parts), "parts", parts)
+
 		if len(parts) > 1 {
 			arg := parts[1]
+			slog.Info("[REFERRAL-DEBUG] parsing argument", "arg", arg, "has_ref_prefix", strings.HasPrefix(arg, "ref_"))
+
 			if strings.HasPrefix(arg, "ref_") {
 				code := strings.TrimPrefix(arg, "ref_")
 				referrerId, err := strconv.ParseInt(code, 10, 64)
 				if err != nil {
-					slog.Error("error parsing referrer id", "error", err)
+					slog.Error("[REFERRAL-DEBUG] FAILED: error parsing referrer id", "code", code, "error", err)
 				} else if referrerId == existingCustomer.TelegramID {
-					slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
+					slog.Warn("[REFERRAL-DEBUG] BLOCKED: self-referral attempt", "telegram_id", referrerId)
 				} else {
+					slog.Info("[REFERRAL-DEBUG] Valid referrer ID parsed", "referrer_telegram_id", referrerId, "referee_telegram_id", existingCustomer.TelegramID)
+
 					// Check if user already has a referral (prevents duplicate attempts)
-					existingRef, _ := h.referralRepository.FindByReferee(ctx, existingCustomer.TelegramID)
+					existingRef, refErr := h.referralRepository.FindByReferee(ctx, existingCustomer.TelegramID)
+					slog.Info("[REFERRAL-DEBUG] FindByReferee result", "existing_ref", existingRef, "error", refErr)
+
 					if existingRef != nil {
-						slog.Info("referral already exists for this user, skipping", "referee_id", utils.MaskHalfInt64(existingCustomer.TelegramID))
+						slog.Info("[REFERRAL-DEBUG] SKIPPED: referral already exists for this user",
+							"referral_id", existingRef.ID,
+							"existing_referrer", existingRef.ReferrerID,
+							"bonus_granted", existingRef.BonusGranted,
+							"referee_bonus_granted", existingRef.RefereeBonusGranted,
+						)
 					} else {
 						// Check if user has ever made a paid purchase
-						paidPurchase, _ := h.purchaseRepository.FindSuccessfulPaidPurchaseByCustomer(ctx, existingCustomer.ID)
+						paidPurchase, purchaseErr := h.purchaseRepository.FindSuccessfulPaidPurchaseByCustomer(ctx, existingCustomer.ID)
+						slog.Info("[REFERRAL-DEBUG] FindSuccessfulPaidPurchaseByCustomer result",
+							"customer_id", existingCustomer.ID,
+							"has_paid_purchase", paidPurchase != nil,
+							"error", purchaseErr,
+						)
+
 						if paidPurchase != nil {
-							slog.Info("user already has paid purchase, referral not eligible", "customer_id", utils.MaskHalfInt64(existingCustomer.ID))
+							slog.Info("[REFERRAL-DEBUG] SKIPPED: user already has paid purchase, referral not eligible",
+								"purchase_id", paidPurchase.ID,
+								"purchase_status", paidPurchase.Status,
+							)
 						} else {
 							// Verify referrer exists
-							referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
-							if err == nil && referrer != nil {
+							referrer, referrerErr := h.customerRepository.FindByTelegramId(ctx, referrerId)
+							slog.Info("[REFERRAL-DEBUG] Referrer lookup result",
+								"referrer_telegram_id", referrerId,
+								"referrer_found", referrer != nil,
+								"error", referrerErr,
+							)
+
+							if referrerErr == nil && referrer != nil {
 								ctxRef := context.WithoutCancel(ctx)
-								_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
-								if err != nil {
-									slog.Error("error creating referral", "error", err)
+								createdRef, createErr := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+								if createErr != nil {
+									slog.Error("[REFERRAL-DEBUG] FAILED: error creating referral", "error", createErr)
 								} else {
-									slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
+									slog.Info("[REFERRAL-DEBUG] SUCCESS: referral created!",
+										"referral_id", createdRef.ID,
+										"referrer_telegram_id", referrerId,
+										"referee_telegram_id", existingCustomer.TelegramID,
+									)
 								}
+							} else {
+								slog.Warn("[REFERRAL-DEBUG] SKIPPED: referrer not found in database", "referrer_telegram_id", referrerId)
 							}
 						}
 					}
 				}
 			}
 		} else {
-			slog.Warn("referral link malformed: no argument", "text", update.Message.Text)
+			slog.Warn("[REFERRAL-DEBUG] SKIPPED: referral link malformed, no space-separated argument", "text", update.Message.Text)
 		}
+	} else {
+		slog.Info("[REFERRAL-DEBUG] No ref_ in message, skipping referral logic")
 	}
 
 	inlineKeyboard := h.buildStartKeyboard(existingCustomer, "my")
