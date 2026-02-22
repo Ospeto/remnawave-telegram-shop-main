@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"remnawave-tg-shop-bot/internal/config"
+	"remnawave-tg-shop-bot/internal/payment"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -38,6 +39,9 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 /help — Show this help message
 /sync — Sync users with Remnawave
 
+<b>Settings</b>
+/setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)
+
 <b>Transactions</b>
 /transactions — Last 10 paid transactions
 /transactions 25 — Last N paid transactions (max 50)
@@ -51,6 +55,50 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      helpText,
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+// SetReferralBonusCommandHandler handles /setreferralbonus <amount>
+func (h Handler) SetReferralBonusCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	args := strings.Fields(update.Message.Text)
+	if len(args) != 2 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /setreferralbonus <amount>\nExample: /setreferralbonus 2000",
+		})
+		return
+	}
+
+	amount, err := strconv.ParseFloat(args[1], 64)
+	if err != nil || amount < 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Invalid amount. Must be a positive number.",
+		})
+		return
+	}
+
+	// Update the database
+	err = h.appConfigRepository.Set(ctx, "referral_bonus_amount", fmt.Sprintf("%.0f", amount))
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
+		})
+		return
+	}
+
+	// Update the in-memory variable
+	payment.ReferralBonusAmount = amount
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      fmt.Sprintf("✅ Referral bonus successfully updated to <b>%.0f MMK</b>.", amount),
 		ParseMode: models.ParseModeHTML,
 	})
 }

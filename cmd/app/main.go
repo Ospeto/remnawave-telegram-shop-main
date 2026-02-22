@@ -22,6 +22,7 @@ import (
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
+	"strconv"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -127,8 +128,20 @@ func main() {
 
 	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
 
+	appConfigRepo := database.NewAppConfigRepository(pool)
+	bonusStr, err := appConfigRepo.Get(ctx, "referral_bonus_amount")
+	if err == nil {
+		amount, errParse := strconv.ParseFloat(bonusStr, 64)
+		if errParse == nil {
+			payment.ReferralBonusAmount = amount
+		}
+	} else {
+		// Just in case it wasn't pre-seeded
+		appConfigRepo.Set(ctx, "referral_bonus_amount", "1000")
+	}
+
 	mobilePayCache := cache.NewCache(1 * time.Hour)
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, referralRepository, promoCodeRepository, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
 
 	me, err := b.GetMe(ctx)
 	if err != nil {
@@ -177,6 +190,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/deletepromo", bot.MatchTypePrefix, h.DeletePromoCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/transactions", bot.MatchTypePrefix, h.TransactionsCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)

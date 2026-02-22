@@ -410,10 +410,10 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	return nil
 }
 
-// referralBonusAmount is the wallet credit (in MMK) granted to each party when a referral converts.
-// The referrer gets this when their referee makes their first purchase.
-// The referee gets this as a welcome bonus on the same purchase.
-const ReferralBonusAmount = 1000.0
+// ReferralBonusAmount is the wallet credit (in MMK) granted to each party when a referral converts.
+// This is now a variable that can be updated via the admin /setreferralbonus command,
+// and it persists in the app_config database table.
+var ReferralBonusAmount float64 = 1000.0
 
 // processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
 // the referee (new buyer) when the referee completes their first purchase.

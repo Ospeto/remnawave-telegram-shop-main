@@ -24,6 +24,7 @@ type Handler struct {
 	subscriptionService *notification.SubscriptionService
 	referralRepository  *database.ReferralRepository
 	promoCodeRepository *database.PromoCodeRepository
+	appConfigRepository *database.AppConfigRepository
 	cache               *cache.Cache
 	mobilePayCache      *cache.Cache // telegramID → purchaseID for pending mobile screenshots
 
@@ -42,6 +43,7 @@ func NewHandler(
 	subscriptionService *notification.SubscriptionService,
 	referralRepository *database.ReferralRepository,
 	promoCodeRepository *database.PromoCodeRepository,
+	appConfigRepository *database.AppConfigRepository,
 	cache *cache.Cache,
 	mobilePayCache *cache.Cache,
 ) *Handler {
@@ -55,6 +57,7 @@ func NewHandler(
 		subscriptionService: subscriptionService,
 		referralRepository:  referralRepository,
 		promoCodeRepository: promoCodeRepository,
+		appConfigRepository: appConfigRepository,
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
 		limiters:            make(map[int64]*rate.Limiter),
