@@ -206,12 +206,22 @@ func (h Handler) resolveConnectButton(lang string) []models.InlineKeyboardButton
 }
 
 func (h Handler) buildStartKeyboard(existingCustomer *database.Customer, langCode string) [][]models.InlineKeyboardButton {
-	return [][]models.InlineKeyboardButton{{
+	shareURL := "https://t.me/share/url?url=" + config.BotURL() + "?start=ref_" + strconv.FormatInt(existingCustomer.TelegramID, 10)
+
+	return [][]models.InlineKeyboardButton{
 		{
-			Text: h.translation.GetText(langCode, "buy_button"),
-			WebApp: &models.WebAppInfo{
-				URL: config.GetMiniAppURL(),
+			{
+				Text: h.translation.GetText(langCode, "buy_button"),
+				WebApp: &models.WebAppInfo{
+					URL: config.GetMiniAppURL(),
+				},
 			},
 		},
-	}}
+		{
+			{
+				Text: h.translation.GetText(langCode, "referral_button"),
+				URL:  shareURL,
+			},
+		},
+	}
 }
