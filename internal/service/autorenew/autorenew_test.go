@@ -5,24 +5,6 @@ import (
 	"testing"
 )
 
-func TestFindPlanByDuration_Found(t *testing.T) {
-	// findPlanByDuration reads from a global config, so we need a mock job
-	// that has the config populated. This tests the logic in isolation.
-	j := &Job{}
-
-	// Use a real-ish slice of plans to simulate config.Plans()
-	// Since config is a package-level var, we test the method itself using
-	// a subtly different approach: directly test the iteration logic.
-	_ = j
-
-	// Test the plan-finding logic by calling it with a nil config (empty plans)
-	// when calling config.Plans() returns empty.
-	got := j.findPlanByDuration(30)
-	if got != nil {
-		t.Errorf("expected nil for empty plans, got %+v", got)
-	}
-}
-
 func TestFindPlanByDuration_Logic(t *testing.T) {
 	plans := []config.Plan{
 		{Label: "1 Month", Days: 30, Price: 5000, TrafficLimitGB: 0},

@@ -37,26 +37,7 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 	callback := update.CallbackQuery.Message.Message
 	langCode := update.CallbackQuery.From.LanguageCode
 
-	plans := config.Plans()
-	var priceButtons []models.InlineKeyboardButton
-
-	for i, plan := range plans {
-		label := fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(plan.Price), config.Currency())
-		priceButtons = append(priceButtons, models.InlineKeyboardButton{
-			Text:         label,
-			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, i),
-		})
-	}
-
-	keyboard := [][]models.InlineKeyboardButton{}
-	// One button per row for better readability
-	for _, btn := range priceButtons {
-		keyboard = append(keyboard, []models.InlineKeyboardButton{btn})
-	}
-
-	keyboard = append(keyboard, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart},
-	})
+	keyboard := h.buildPricingKeyboard(langCode)
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    callback.Chat.ID,
@@ -73,12 +54,47 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 	}
 }
 
+func (h Handler) buildPricingKeyboard(langCode string) [][]models.InlineKeyboardButton {
+	plans := config.Plans()
+	var keyboard [][]models.InlineKeyboardButton
+
+	for i, plan := range plans {
+		label := fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(plan.Price), config.Currency())
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{
+			Text:         label,
+			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, i),
+		}})
+	}
+
+	keyboard = append(keyboard, []models.InlineKeyboardButton{
+		{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart},
+	})
+
+	return keyboard
+}
+
 func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
 	callbackQuery := parseCallbackData(update.CallbackQuery.Data)
 	langCode := update.CallbackQuery.From.LanguageCode
 	planIdx := callbackQuery["plan"]
 
+	keyboard := h.buildPaymentMethodKeyboard(langCode, planIdx)
+
+	_, err := b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{
+		ChatID:    callback.Chat.ID,
+		MessageID: callback.ID,
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: keyboard,
+		},
+	})
+
+	if err != nil {
+		slog.Error("Error sending sell message", "error", err)
+	}
+}
+
+func (h Handler) buildPaymentMethodKeyboard(langCode string, planIdx string) [][]models.InlineKeyboardButton {
 	var keyboard [][]models.InlineKeyboardButton
 
 	if config.IsCryptoPayEnabled() {
@@ -97,17 +113,7 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 		{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackBuy},
 	})
 
-	_, err := b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{
-		ChatID:    callback.Chat.ID,
-		MessageID: callback.ID,
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: keyboard,
-		},
-	})
-
-	if err != nil {
-		slog.Error("Error sending sell message", "error", err)
-	}
+	return keyboard
 }
 
 func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -132,9 +138,9 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 	invoiceType := database.InvoiceType(callbackQuery["invoiceType"])
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	dbCtx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	customer, err := h.customerRepository.FindByTelegramId(ctx, callback.Chat.ID)
+	customer, err := h.customerRepository.FindByTelegramId(dbCtx, callback.Chat.ID)
 	if err != nil {
 		slog.Error("Error finding customer", "error", err)
 		return
@@ -144,47 +150,53 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
-	ctxWithUsername := context.WithValue(ctx, "username", update.CallbackQuery.From.Username)
+	ctxWithUsername := context.WithValue(dbCtx, "username", update.CallbackQuery.From.Username)
 	langCode := update.CallbackQuery.From.LanguageCode
 
 	if invoiceType == database.InvoiceTypeMobileBanking {
-		// Mobile banking: create purchase, show instructions, wait for screenshot
-		_, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
-		if err != nil {
-			slog.Error("Error creating mobile banking purchase", "error", err)
-			return
-		}
-
-		// Store pending state: telegramID → purchaseID
-		h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
-
-		instructions := fmt.Sprintf(
-			h.translation.GetText(langCode, "mobile_pay_instructions"),
-			plan.Price,
-			config.MobileBankingPhone(),
-		)
-
-		_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-			ChatID:    callback.Chat.ID,
-			MessageID: callback.ID,
-			ParseMode: models.ParseModeHTML,
-			Text:      instructions,
-			ReplyMarkup: models.InlineKeyboardMarkup{
-				InlineKeyboard: [][]models.InlineKeyboardButton{
-					{
-						{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
-					},
-				},
-			},
-		})
-		if err != nil {
-			slog.Error("Error sending mobile pay instructions", "error", err)
-		}
+		h.handleMobileBankingPayment(ctxWithUsername, b, callback, plan, customer, planIdx, langCode)
 		return
 	}
 
-	// CryptoPay flow
-	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto, "")
+	h.handleCryptoPayment(ctxWithUsername, b, callback, plan, customer, planIdx, langCode)
+}
+
+func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
+	_, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
+	if err != nil {
+		slog.Error("Error creating mobile banking purchase", "error", err)
+		return
+	}
+
+	// Store pending state: telegramID → purchaseID
+	h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
+
+	instructions := fmt.Sprintf(
+		h.translation.GetText(langCode, "mobile_pay_instructions"),
+		plan.Price,
+		config.MobileBankingPhone(),
+	)
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    callback.Chat.ID,
+		MessageID: callback.ID,
+		ParseMode: models.ParseModeHTML,
+		Text:      instructions,
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{
+					{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
+				},
+			},
+		},
+	})
+	if err != nil {
+		slog.Error("Error sending mobile pay instructions", "error", err)
+	}
+}
+
+func (h Handler) handleCryptoPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
+	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto, "")
 	if err != nil {
 		slog.Error("Error creating payment", "error", err)
 		return
@@ -228,6 +240,42 @@ func parseCallbackData(data string) map[string]string {
 	return result
 }
 
+// downloadTelegramFile downloads a file from Telegram and returns its bytes and mime type.
+func (h Handler) downloadTelegramFile(ctx context.Context, b *bot.Bot, fileID string) ([]byte, string, error) {
+	file, err := b.GetFile(ctx, &bot.GetFileParams{FileID: fileID})
+	if err != nil {
+		return nil, "", fmt.Errorf("getting file info: %w", err)
+	}
+
+	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", config.TelegramToken(), file.FilePath)
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("creating download request: %w", err)
+	}
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("downloading photo: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("unexpected status downloading photo: %d", httpResp.StatusCode)
+	}
+
+	imageBytes, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("reading photo bytes: %w", err)
+	}
+
+	mimeType := "image/jpeg"
+	if strings.HasSuffix(strings.ToLower(file.FilePath), ".png") {
+		mimeType = "image/png"
+	}
+
+	return imageBytes, mimeType, nil
+}
+
 // MobilePayScreenshotHandler handles photo messages from users with pending mobile banking payments.
 func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.Message == nil || len(update.Message.Photo) == 0 {
@@ -250,44 +298,27 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		Text:   h.translation.GetText(langCode, "mobile_pay_verifying"),
 	})
 
+	// Clear the pending state so user can't double-submit
+	h.mobilePayCache.Delete(chatID)
+
+	defer func() {
+		// Delete the "verifying" message later
+		if verifyMsg != nil {
+			_, _ = b.DeleteMessage(context.Background(), &bot.DeleteMessageParams{
+				ChatID:    chatID,
+				MessageID: verifyMsg.ID,
+			})
+		}
+	}()
+
 	// Get the highest resolution photo
 	photo := update.Message.Photo[len(update.Message.Photo)-1]
 
-	// Download the photo from Telegram
-	file, err := b.GetFile(ctx, &bot.GetFileParams{FileID: photo.FileID})
+	imageBytes, mimeType, err := h.downloadTelegramFile(ctx, b, photo.FileID)
 	if err != nil {
-		slog.Error("Error getting file from Telegram", "error", err)
+		slog.Error("Error downloading telegram file", "error", err)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
 		return
-	}
-
-	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", config.TelegramToken(), file.FilePath)
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
-	if err != nil {
-		slog.Error("Error creating download request", "error", err)
-		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
-		return
-	}
-	httpResp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		slog.Error("Error downloading photo", "error", err)
-		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
-		return
-	}
-	defer httpResp.Body.Close()
-
-	imageBytes, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		slog.Error("Error reading photo bytes", "error", err)
-		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
-		return
-	}
-
-	// Determine MIME type
-	mimeType := "image/jpeg"
-	if strings.HasSuffix(file.FilePath, ".png") {
-		mimeType = "image/png"
 	}
 
 	// Verify the payment
@@ -301,23 +332,10 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		return
 	}
 
-	// Delete the "verifying" message
-	if verifyMsg != nil {
-		_, _ = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
-			ChatID:    chatID,
-			MessageID: verifyMsg.ID,
-		})
-	}
-
 	if result.Success {
-		// Clear the pending state so user can't re-submit
-		h.mobilePayCache.Delete(chatID)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, result.ReasonKey, 0)
 		return
 	}
-
-	// Clear cache on failure too - user needs to start fresh
-	h.mobilePayCache.Delete(chatID)
 
 	// For amount mismatch, pass the expected purchase amount
 	var expectedAmount int
