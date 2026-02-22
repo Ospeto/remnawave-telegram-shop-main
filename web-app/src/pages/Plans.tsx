@@ -1,36 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { LoadingScreen } from '../components/LoadingScreen';
+import { TipBox } from '../components/TipBox';
+import { Plan, UserData } from '../lib/types';
+import { useMXBrownSound } from '../lib/useMXBrownSound';
 
-interface Plan {
-    label: string;
-    days: number;
-    price: number;
-    traffic_limit_gb: number;
-    currency: string;
-}
 
-interface DisplayPlan extends Plan {
-    discountedPrice?: number;
-}
-
-interface UserData {
-    is_active: boolean;
-    expire_at: string | null;
-    days_remaining: number;
-    keys: { id: number; label: string; expire_at: string | null; status: string; traffic_limit_gb: number }[];
-}
 
 export function Plans() {
     const { tg, initData } = useTelegram();
     const { t, language } = useLanguage();
     const navigate = useNavigate();
+    const { playClick } = useMXBrownSound();
     const [searchParams] = useSearchParams();
     const [plans, setPlans] = useState<Plan[]>([]);
     const [userData, setUserData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
     const [promoCode, setPromoCode] = useState('');
     const [promoStatus, setPromoStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
     const [discountPercent, setDiscountPercent] = useState<number>(0);
@@ -38,19 +25,21 @@ export function Plans() {
 
     const extendKeyId = searchParams.get('extend');
     const isExtend = !!extendKeyId;
+    const isWalletTopup = searchParams.get('walletTopup') === 'true';
 
-    // Find the key being extended
     const extendingKey = userData?.keys?.find(k => k.id === Number(extendKeyId));
     const currentExpiry = extendingKey?.expire_at ? new Date(extendingKey.expire_at) : null;
 
+    const handleBack = useCallback(() => {
+        navigate(isWalletTopup ? '/wallet' : '/');
+    }, [navigate, isWalletTopup]);
+
     useEffect(() => {
-        if (tg) {
-            tg.BackButton.show();
-            const handler = () => navigate('/');
-            tg.BackButton.onClick(handler);
-            return () => tg.BackButton.offClick(handler);
-        }
-    }, [tg, navigate]);
+        if (!tg) return;
+        tg.BackButton.show();
+        tg.BackButton.onClick(handleBack);
+        return () => tg.BackButton.offClick(handleBack);
+    }, [tg, handleBack]);
 
     useEffect(() => {
         if (!initData) return;
@@ -60,9 +49,7 @@ export function Plans() {
             fetch('/api/me', { headers }).then(r => r.json()),
         ])
             .then(([p, m]) => { setPlans(p || []); setUserData(m); })
-            .catch(err => {
-                setError(`${err.name}: ${err.message}`);
-            })
+            .catch(err => console.warn('Plans load error:', err))
             .finally(() => setLoading(false));
     }, [initData]);
 
@@ -97,20 +84,7 @@ export function Plans() {
             });
     };
 
-    if (loading) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 12 }}>
-            <div className="spinner" />
-            <span className="text-hint" style={{ fontSize: 13 }}>{t('loading_plans')}</span>
-        </div>
-    );
-
-    if (error) return (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
-            <div style={{ fontSize: 48 }}>⚠️</div>
-            <p style={{ color: '#ff3b30' }}>{t('error_prefix')} {error}</p>
-            <button className="btn-secondary" onClick={() => window.location.reload()}>{t('retry')}</button>
-        </div>
-    );
+    if (loading) return <LoadingScreen message={t('loading_plans')} />;
 
     const calcNewExpiry = (days: number) => {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
@@ -119,20 +93,48 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // Apply discount if valid promo
-    const displayPlans: DisplayPlan[] = plans.map(p => {
-        if (discountPercent > 0) {
-            return { ...p, discountedPrice: Math.round(p.price * (1 - discountPercent / 100)) };
+    const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
+
+    // Extend plan filtering rules:
+    //   Key is ACTIVE  → lock to same traffic type (unlimited↔limited, no switching)
+    //   Key is EXPIRED → all plans available (starting fresh)
+    //   New purchase   → all plans available
+    const extendingKeyIsActive = extendingKey?.status === 'active';
+    const extendingKeyIsUnlimited = extendingKey?.traffic_limit_gb === 0;
+    const filteredPlans = isExtend && extendingKey && extendingKeyIsActive
+        ? plans.filter(p =>
+            extendingKeyIsUnlimited
+                ? p.traffic_limit_gb === 0   // Unlimited → Unlimited only
+                : p.traffic_limit_gb > 0     // Limited   → Limited only
+        )
+        : plans;
+
+
+    const itemsToDisplay = isWalletTopup
+        ? TOPUP_AMOUNTS.map(amount => ({
+            label: `${amount.toLocaleString()} ${plans[0]?.currency || 'MMK'}`,
+            days: 0,
+            price: amount,
+            traffic_limit_gb: 0,
+            currency: plans[0]?.currency || 'MMK',
+            isTopUp: true
+        }))
+        : filteredPlans;
+
+    const displayItems = itemsToDisplay.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }) => {
+        if (!isWalletTopup && discountPercent > 0) {
+            return { ...item, discountedPrice: Math.round(item.price * (1 - discountPercent / 100)) };
         }
-        return p;
+        return item;
     });
 
-    // Best value = lowest price per day
-    const bestIdx = displayPlans.length > 0
-        ? displayPlans.reduce((b, p, i) => {
-            const priceP = p.discountedPrice ?? p.price;
-            const priceB = displayPlans[b].discountedPrice ?? displayPlans[b].price;
-            return (priceP / p.days) < (priceB / displayPlans[b].days) ? i : b;
+    const bestIdx = !isWalletTopup && displayItems.length > 0
+        ? displayItems.reduce((b, p, i) => {
+            const priceP = (p as Plan & { discountedPrice?: number }).discountedPrice || p.price;
+            const priceB = (displayItems[b] as Plan & { discountedPrice?: number }).discountedPrice || displayItems[b].price;
+            const daysP = p.days || 1;
+            const daysB = displayItems[b].days || 1;
+            return (priceP / daysP) < (priceB / daysB) ? i : b;
         }, 0)
         : -1;
 
@@ -141,20 +143,15 @@ export function Plans() {
             {/* Header */}
             <div style={{ textAlign: 'center', padding: '8px 0' }}>
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
-                    {isExtend ? t('title_extend') : t('title_choose_plan')}
+                    {isWalletTopup ? t('title_top_up') : (isExtend ? t('title_extend') : t('title_choose_plan'))}
                 </h1>
-                {isExtend && extendingKey && (
+                {isExtend && extendingKey && !isWalletTopup && (
                     <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
                         {t('subtitle_extending', { label: extendingKey.label })}
                         {currentExpiry && <> · {t('expires_on', { date: currentExpiry.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { month: 'short', day: 'numeric' }) })}</>}
                     </p>
                 )}
-                {!isExtend && (
-                    <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>
-                        {t('subtitle_new_key')}
-                    </p>
-                )}
-                {!isExtend && (
+                {!isExtend && !isWalletTopup && (
                     <div className="text-hint" style={{ fontSize: 11, marginTop: 4, opacity: 0.7 }}>
                         {t('subtitle_new_key_hint')}
                     </div>
@@ -162,75 +159,79 @@ export function Plans() {
             </div>
 
             {/* Promo Code Input */}
-            <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input
-                    type="text"
-                    value={promoCode}
-                    onChange={(e) => {
-                        setPromoCode(e.target.value);
-                        if (promoStatus !== 'idle') setPromoStatus('idle');
-                    }}
-                    placeholder={t('promo_placeholder')}
-                    style={{
-                        flex: 1,
-                        background: 'rgba(255,255,255,0.05)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8,
-                        padding: '10px 12px',
-                        color: 'white',
-                        fontSize: 14,
-                        outline: 'none'
-                    }}
-                />
-                <button
-                    onClick={handleApplyPromo}
-                    disabled={promoStatus === 'validating' || !promoCode.trim()}
-                    className="btn-secondary"
-                    style={{
-                        padding: '10px 16px',
-                        fontSize: 13,
-                        opacity: !promoCode.trim() ? 0.5 : 1
-                    }}
-                >
-                    {promoStatus === 'validating' ? '...' : t('promo_apply')}
-                </button>
-            </div>
-            {promoStatus === 'valid' && (
-                <div style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ✅ {t('promo_applied', { percent: discountPercent })}
+            {!isWalletTopup && (
+                <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                        type="text"
+                        value={promoCode}
+                        onChange={(e) => {
+                            setPromoCode(e.target.value);
+                            if (promoStatus !== 'idle') setPromoStatus('idle');
+                        }}
+                        placeholder={t('promo_placeholder')}
+                        aria-label={t('promo_placeholder')}
+                        style={{
+                            flex: 1,
+                            background: 'var(--input-bg)',
+                            border: '1px solid var(--input-border)',
+                            borderRadius: 8,
+                            padding: '10px 12px',
+                            color: 'var(--tg-text)',
+                            fontSize: 14,
+                            outline: 'none',
+                            // Replace outline:none with a custom focus ring
+                            boxShadow: 'none',
+                        }}
+                        onFocus={e => (e.target.style.border = '1px solid var(--input-focus-border)')}
+                        onBlur={e => (e.target.style.border = '1px solid var(--input-border)')}
+                    />
+                    <button
+                        onClick={() => { playClick(); handleApplyPromo(); }}
+                        disabled={promoStatus === 'validating' || !promoCode.trim()}
+                        className="btn-secondary"
+                        style={{
+                            padding: '10px 16px',
+                            fontSize: 13,
+                            opacity: !promoCode.trim() ? 0.5 : 1
+                        }}
+                    >
+                        {promoStatus === 'validating' ? t('promo_validating') : t('promo_apply')}
+                    </button>
                 </div>
             )}
-            {promoStatus === 'invalid' && (
-                <div style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ❌ {t('promo_invalid')}
+            {!isWalletTopup && promoStatus === 'valid' && (
+                <div role="status" style={{ color: 'var(--color-success)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    {t('promo_valid', { percent: String(discountPercent) })}
                 </div>
             )}
-
-            {/* Extend explanation */}
-            {isExtend && (
-                <div className="tip-box tip-box-info">
-                    <span className="tip-icon">ℹ️</span>
-                    <span>{t('help_extend_info')}</span>
-                </div>
-            )}
-
-            {/* New key explanation */}
-            {!isExtend && (
-                <div className="tip-box tip-box-info">
-                    <span className="tip-icon">ℹ️</span>
-                    <span>{t('help_new_key_info')}</span>
+            {!isWalletTopup && promoStatus === 'invalid' && (
+                <div role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    {t('promo_invalid')}
                 </div>
             )}
 
-            {/* Plan cards */}
+            {/* Extend info */}
+            {isExtend && !isWalletTopup && (
+                <TipBox variant="info" icon="ℹ️">{t('help_extend_info')}</TipBox>
+            )}
+
+            {/* New key info */}
+            {!isExtend && !isWalletTopup && (
+                <TipBox variant="info" icon="ℹ️">{t('help_new_key_info')}</TipBox>
+            )}
+
+            {/* Plan / Top-up cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {displayPlans.map((plan, idx) => {
-                    const originalIdx = plans.findIndex(p => p.label === plan.label && p.days === plan.days);
-                    const price = plan.discountedPrice ?? plan.price;
-                    const hasDiscount = plan.discountedPrice !== undefined && plan.discountedPrice < plan.price;
+                {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
+                    const originalIdx = isWalletTopup ? -1 : plans.findIndex(p => p.label === item.label && p.days === item.days);
+                    const price = item.discountedPrice || item.price;
+                    const hasDiscount = item.discountedPrice !== undefined && item.discountedPrice < item.price;
 
                     let checkoutUrl = `/checkout/${originalIdx}?`;
                     if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
+                    if (isWalletTopup) {
+                        checkoutUrl += `walletTopup=true&amount=${item.price}&`;
+                    }
                     if (appliedPromoCode) checkoutUrl += `promo=${encodeURIComponent(appliedPromoCode)}`;
 
                     return (
@@ -240,14 +241,10 @@ export function Plans() {
                             style={{ textDecoration: 'none', color: 'inherit' }}
                         >
                             <div
-                                className={`glass-card ${idx === bestIdx ? 'glass-card-active' : ''}`}
-                                style={{
-                                    padding: 16,
-                                    position: 'relative',
-                                    transition: 'transform 0.15s ease',
-                                }}
+                                className={`glass-card ${idx === bestIdx && !isWalletTopup ? 'glass-card-active' : ''}`}
+                                style={{ padding: 16, position: 'relative', transition: 'transform 0.15s ease' }}
                             >
-                                {idx === bestIdx && (
+                                {idx === bestIdx && !isWalletTopup && (
                                     <div style={{
                                         position: 'absolute', top: -8, right: 12,
                                         background: 'linear-gradient(135deg, #5ebbff, #007AFF)',
@@ -261,33 +258,42 @@ export function Plans() {
 
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                     <div>
-                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{plan.label}</div>
-                                        <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                            <span>📅 {plan.days} {t('days_left').replace(' left', '')}</span>
-                                            <span style={{ opacity: 0.3 }}>·</span>
-                                            <span style={plan.traffic_limit_gb === 0 ? { color: '#34c759' } : {}}>
-                                                {plan.traffic_limit_gb > 0 ? `📊 ${plan.traffic_limit_gb} GB` : t('unlimited')}
-                                            </span>
-                                        </div>
-                                        {isExtend && (
-                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: '#34c759' }}>
-                                                {t('new_expiry', { date: calcNewExpiry(plan.days) })}
+                                        <div style={{ fontWeight: 600, fontSize: 15 }}>{item.label}</div>
+                                        {!isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <span>📅 {item.days} {t('days_left').replace(' left', '')}</span>
+                                                <span style={{ opacity: 0.3 }}>·</span>
+                                                <span style={item.traffic_limit_gb === 0 ? { color: 'var(--color-success)' } : {}}>
+                                                    {item.traffic_limit_gb > 0 ? `📊 ${item.traffic_limit_gb} GB` : t('unlimited')}
+                                                </span>
+                                            </div>
+                                        )}
+                                        {isExtend && !isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 10, marginTop: 4, color: 'var(--color-success)' }}>
+                                                {t('new_expiry', { date: calcNewExpiry(item.days) })}
+                                            </div>
+                                        )}
+                                        {isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 12, marginTop: 3 }}>
+                                                {t('top_up_amount', { amount: item.price.toLocaleString(), currency: item.currency })}
                                             </div>
                                         )}
                                     </div>
                                     <div style={{ textAlign: 'right' }}>
-                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700, color: hasDiscount ? '#34c759' : undefined }}>
+                                        <div className="text-link" style={{ fontSize: 18, fontWeight: 700, color: hasDiscount ? 'var(--color-success)' : undefined }}>
                                             {price.toLocaleString()}
                                         </div>
                                         {hasDiscount && (
                                             <div style={{ fontSize: 13, textDecoration: 'line-through', opacity: 0.5 }}>
-                                                {plan.price.toLocaleString()}
+                                                {item.price.toLocaleString()}
                                             </div>
                                         )}
-                                        <div className="text-hint" style={{ fontSize: 11 }}>{plan.currency}</div>
-                                        <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                            {Math.round(price / plan.days)} {t('per_day', { currency: plan.currency.toLowerCase() })}
-                                        </div>
+                                        <div className="text-hint" style={{ fontSize: 11 }}>{item.currency}</div>
+                                        {!isWalletTopup && (
+                                            <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
+                                                {Math.round(price / item.days)} {t('per_day', { currency: item.currency.toLowerCase() })}
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -296,10 +302,7 @@ export function Plans() {
                 })}
             </div>
 
-            <div className="tip-box tip-box-success">
-                <span className="tip-icon">✅</span>
-                <span>{t('help_payments')}</span>
-            </div>
+            <TipBox variant="success" icon="✅">{t('help_payments')}</TipBox>
         </div>
     );
 }

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -29,16 +31,19 @@ type KeyResponse struct {
 	Status          string     `json:"status"`
 	TrafficUsedGB   float64    `json:"traffic_used_gb"`
 	TrafficLimitGB  float64    `json:"traffic_limit_gb"`
+	AutoRenew       bool       `json:"auto_renew"`
 }
 
 type ValidationResponse struct {
-	User          *database.Customer `json:"user"`
-	Keys          []KeyResponse      `json:"keys"`
-	IsActive      bool               `json:"is_active"`
-	ExpireAt      *time.Time         `json:"expire_at"`
-	DaysRemaining int                `json:"days_remaining"`
-	TrialEligible bool               `json:"trial_eligible"`
-	TrialDays     int                `json:"trial_days"`
+	User           *database.Customer `json:"user"`
+	Keys           []KeyResponse      `json:"keys"`
+	IsActive       bool               `json:"is_active"`
+	ExpireAt       *time.Time         `json:"expire_at"`
+	DaysRemaining  int                `json:"days_remaining"`
+	TrialEligible  bool               `json:"trial_eligible"`
+	TrialDays      int                `json:"trial_days"`
+	ReferralCount  int                `json:"referral_count"`
+	ReferralEarned float64            `json:"referral_earned"`
 }
 
 type PlanResponse struct {
@@ -50,9 +55,11 @@ type PlanResponse struct {
 }
 
 type CreatePurchaseRequest struct {
-	PlanIndex   int    `json:"plan_index"`
-	ExtendKeyID *int64 `json:"extend_key_id,omitempty"`
-	PromoCode   string `json:"promo_code,omitempty"`
+	PlanIndex     int    `json:"plan_index"`
+	ExtendKeyID   *int64 `json:"extend_key_id,omitempty"`
+	PromoCode     string `json:"promo_code,omitempty"`
+	PaymentMethod string `json:"payment_method,omitempty"`
+	Amount        int    `json:"amount,omitempty"` // Explicit amount for wallet top-up
 }
 
 type CreatePurchaseResponse struct {
@@ -62,6 +69,17 @@ type CreatePurchaseResponse struct {
 	Currency     string `json:"currency"`
 	Instructions string `json:"instructions"`
 	InvoiceType  string `json:"invoice_type"`
+}
+
+// WalletServiceInterface defines the interface for wallet operations
+type WalletServiceInterface interface {
+	GetBalance(ctx context.Context, customerID int64) (float64, error)
+	GetTransactionHistory(ctx context.Context, customerID int64, limit int) ([]database.WalletTransaction, error)
+	HasSufficientBalance(ctx context.Context, customerID int64, amount float64) (bool, error)
+	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
+	SetAutoRenew(ctx context.Context, customerID int64, enabled bool, duration int) error
+	GetAutoRenewStatus(ctx context.Context, customerID int64) (enabled bool, duration int, err error)
+	SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error
 }
 
 type UploadScreenshotResponse struct {
@@ -85,6 +103,8 @@ type APIHandler struct {
 	translation         *translation.Manager
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
+	walletService       WalletServiceInterface
+	referralRepo        *database.ReferralRepository
 }
 
 func NewAPIHandler(
@@ -94,6 +114,8 @@ func NewAPIHandler(
 	tm *translation.Manager,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
+	walletService WalletServiceInterface,
+	referralRepo *database.ReferralRepository,
 ) *APIHandler {
 	return &APIHandler{
 		customerRepo:        customerRepo,
@@ -102,6 +124,8 @@ func NewAPIHandler(
 		translation:         tm,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
+		walletService:       walletService,
+		referralRepo:        referralRepo,
 	}
 }
 
@@ -120,18 +144,18 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
-	if err != nil {
-		http.Error(w, "Invalid code", http.StatusNotFound)
+	// Return the same 404 for all invalid/exhausted/expired cases to prevent
+	// oracle attacks that distinguish between "code never existed" vs "code exhausted".
+	if err != nil || promo == nil {
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
-
 	if promo.UsedCount >= promo.MaxUses {
-		http.Error(w, "Code usage limit reached", http.StatusForbidden)
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
-
 	if time.Now().After(promo.ValidUntil) {
-		http.Error(w, "Code expired", http.StatusForbidden)
+		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
 
@@ -156,7 +180,6 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	username, _ := r.Context().Value(usernameKey).(string)
 
 	var req CreatePurchaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -164,10 +187,40 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan := config.PlanByIndex(req.PlanIndex)
-	if plan == nil {
-		http.Error(w, "Invalid plan index", http.StatusBadRequest)
-		return
+	invoiceType := database.InvoiceTypeMobileBanking
+	if req.PaymentMethod == "crypto" {
+		invoiceType = database.InvoiceTypeCrypto
+	} else if req.PaymentMethod == "wallet" {
+		invoiceType = database.InvoiceTypeWalletPayment
+	} else if req.PaymentMethod == "wallet_topup" {
+		invoiceType = database.InvoiceTypeWalletTopUp
+	}
+
+	var price float64
+	var days int
+	var trafficLimit int
+	var label string
+
+	if invoiceType == database.InvoiceTypeWalletTopUp {
+		if req.Amount <= 0 {
+			http.Error(w, "Invalid amount for top-up", http.StatusBadRequest)
+			return
+		}
+		// For top-up, we use the explicit amount
+		price = float64(req.Amount)
+		days = 0
+		trafficLimit = 0
+		label = fmt.Sprintf("Wallet Top-up: %d %s", req.Amount, config.Currency())
+	} else {
+		plan := config.PlanByIndex(req.PlanIndex)
+		if plan == nil {
+			http.Error(w, "Invalid plan index", http.StatusBadRequest)
+			return
+		}
+		price = float64(plan.Price)
+		days = plan.Days
+		trafficLimit = plan.TrafficLimitGB
+		label = plan.Label
 	}
 
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
@@ -180,33 +233,30 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoiceType := database.InvoiceTypeMobileBanking
-	ctxWithUsername := context.WithValue(r.Context(), "username", username)
-
 	// Delegate to PaymentService with Promo Code
-	_, purchaseID, err := h.paymentService.CreatePurchase(ctxWithUsername, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, invoiceType, req.PromoCode)
+	_, purchaseID, err := h.paymentService.CreatePurchase(r.Context(), price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	// Fetch the actual purchase to get the final amount (which might be discounted)
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), purchaseID)
-	finalAmount := int(plan.Price)
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), purchaseID)
+	finalAmount := int(price)
 	if err == nil && purchase != nil {
 		finalAmount = int(purchase.Amount)
 	}
 
-	// Store plan label and payment phone for revenue tracking
 	updateFields := map[string]interface{}{
-		"plan_label":    plan.Label,
+		"plan_label":    label,
 		"payment_phone": config.MobileBankingPhone(),
 	}
 	if req.ExtendKeyID != nil {
 		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
-	purchaseRepo := h.paymentService.GetPurchaseRepository()
-	_ = purchaseRepo.UpdateFields(r.Context(), purchaseID, updateFields)
+	if err := h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields); err != nil {
+		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
+	}
 
 	instructions := fmt.Sprintf(
 		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
@@ -300,6 +350,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				Status:          k.Status,
 				TrafficUsedGB:   usedGB,
 				TrafficLimitGB:  limitGB,
+				AutoRenew:       k.AutoRenew,
 			})
 		}
 	} else if h.subKeyRepo != nil {
@@ -325,6 +376,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				ExpireAt:        k.ExpireAt,
 				DaysRemaining:   kDays,
 				Status:          k.Status,
+				AutoRenew:       k.AutoRenew,
 			})
 		}
 	}
@@ -349,14 +401,30 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Determine trial eligibility: trial enabled + no subscription ever created
 	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0
 
+	// Fetch referral summary for the home chip (non-fatal)
+	referralCount := 0
+	var referralEarned float64
+	if h.referralRepo != nil {
+		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
+			referralCount = len(refs)
+			for _, ref := range refs {
+				if ref.BonusGranted {
+					referralEarned += 1000
+				}
+			}
+		}
+	}
+
 	resp := ValidationResponse{
-		User:          customer,
-		Keys:          keys,
-		IsActive:      isActive,
-		ExpireAt:      customer.ExpireAt,
-		DaysRemaining: daysRemaining,
-		TrialEligible: trialEligible,
-		TrialDays:     config.TrialDays(),
+		User:           customer,
+		Keys:           keys,
+		IsActive:       isActive,
+		ExpireAt:       customer.ExpireAt,
+		DaysRemaining:  daysRemaining,
+		TrialEligible:  trialEligible,
+		TrialDays:      config.TrialDays(),
+		ReferralCount:  referralCount,
+		ReferralEarned: referralEarned,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -396,7 +464,12 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctxWithUsername := context.WithValue(r.Context(), "username", fmt.Sprintf("%d", telegramID))
+	// Use actual username if available, otherwise stringified ID. Ideally this logic belongs in service layer.
+	username, _ := r.Context().Value(payment.UsernameCtxKey).(string)
+	if username == "" {
+		username = fmt.Sprintf("%d", telegramID)
+	}
+	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, username)
 	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
 	if err != nil {
 		http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
@@ -442,12 +515,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
-		return
-	}
-
 	purchaseIDStr := r.URL.Query().Get("id")
 	if purchaseIDStr == "" {
 		http.Error(w, "Missing purchase id", http.StatusBadRequest)
@@ -456,6 +523,26 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
 	if err != nil {
 		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		return
+	}
+
+	// === OWNERSHIP CHECK BEFORE READING FILE BODY ===
+	// Do this first to avoid loading up to 10MB into RAM for unauthorized requests.
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
+	if err != nil || purchase == nil {
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
+		http.Error(w, "Purchase not allowed", http.StatusForbidden)
+		return
+	}
+
+	// Now safe to read the file. Limit body to 10 MB.
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
 		return
 	}
 
@@ -477,17 +564,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		mimeType = http.DetectContentType(fileBytes)
 	}
 
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), int64(purchaseID))
-	if err != nil || purchase == nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
-		return
-	}
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
-	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
-		http.Error(w, "Purchase not allowed", http.StatusForbidden)
-		return
-	}
-
 	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
 	if err != nil {
 		http.Error(w, "Verification error: "+err.Error(), http.StatusInternalServerError)
@@ -502,7 +578,6 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		if h.subKeyRepo != nil {
 			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 			if kErr == nil && len(keys) > 0 {
-				// Return the most recently added key's happ link (keys are sorted DESC by default)
 				latestKey := keys[0]
 				resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
 			}
@@ -539,7 +614,7 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	purchase, err := h.paymentService.GetPurchaseRepository().FindById(r.Context(), int64(purchaseID))
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
 	if err != nil || purchase == nil {
 		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
@@ -573,8 +648,7 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	purchaseRepo := h.paymentService.GetPurchaseRepository()
-	summary, err := purchaseRepo.GetRevenueSummary(r.Context(), days)
+	summary, err := h.paymentService.GetRevenueSummary(r.Context(), days)
 	if err != nil {
 		http.Error(w, "Failed to fetch revenue: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -587,4 +661,255 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(summary)
+}
+
+// --- Wallet Handlers ---
+
+func maskHalfInt64(id int64) string {
+	s := strconv.FormatInt(id, 10)
+	if len(s) <= 4 {
+		return strings.Repeat("*", len(s))
+	}
+	maskLen := len(s) / 2
+	visibleLen := len(s) - maskLen
+	return strings.Repeat("*", maskLen) + s[visibleLen:]
+}
+
+func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	type ReferralItem struct {
+		ID        int64     `json:"id"`
+		MaskedID  string    `json:"masked_id"`
+		CreatedAt time.Time `json:"created_at"`
+		Status    string    `json:"status"` // "bonus_received" or "pending"
+	}
+
+	var items []ReferralItem
+	if h.referralRepo != nil {
+		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
+			for _, ref := range refs {
+				status := "pending"
+				if ref.BonusGranted {
+					status = "bonus_received"
+				}
+				items = append(items, ReferralItem{
+					ID:        ref.ID,
+					MaskedID:  maskHalfInt64(ref.RefereeID),
+					CreatedAt: ref.UsedAt,
+					Status:    status,
+				})
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	balance, err := h.walletService.GetBalance(r.Context(), customer.ID)
+	if err != nil {
+		http.Error(w, "Failed to get balance: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	autoRenew, autoRenewDuration, err := h.walletService.GetAutoRenewStatus(r.Context(), customer.ID)
+	if err != nil {
+		http.Error(w, "Failed to get auto-renew status: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := map[string]interface{}{
+		"balance":             balance,
+		"currency":            config.Currency(),
+		"auto_renew":          autoRenew,
+		"auto_renew_duration": autoRenewDuration,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) GetWalletHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 20
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 100 {
+			limit = l
+		}
+	}
+
+	history, err := h.walletService.GetTransactionHistory(r.Context(), customer.ID, limit)
+	if err != nil {
+		http.Error(w, "Failed to get transaction history: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
+func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		Enabled  bool `json:"enabled"`
+		Duration int  `json:"duration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// Validate duration if enabled
+	if req.Enabled {
+		isValidDuration := false
+		for _, plan := range config.Plans() {
+			if plan.Days == req.Duration {
+				isValidDuration = true
+				break
+			}
+		}
+		if !isValidDuration {
+			http.Error(w, "Invalid auto-renew duration", http.StatusBadRequest)
+			return
+		}
+	}
+
+	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
+		http.Error(w, "Failed to update auto-renew: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// UpdateKeyAutoRenew toggles the auto_renew flag on a specific subscription key.
+// POST /api/keys/autorenew
+// Body: { "key_id": 42, "enabled": true }
+func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req struct {
+		KeyID   int64 `json:"key_id"`
+		Enabled bool  `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.KeyID == 0 {
+		http.Error(w, "Missing key_id", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	// SetKeyAutoRenew validates that key.customer_id == customer.ID internally.
+	if err := h.walletService.SetKeyAutoRenew(r.Context(), req.KeyID, customer.ID, req.Enabled); err != nil {
+		http.Error(w, "Failed to update key auto-renew: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }

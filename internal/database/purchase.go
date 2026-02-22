@@ -17,6 +17,8 @@ type InvoiceType string
 const (
 	InvoiceTypeCrypto        InvoiceType = "crypto"
 	InvoiceTypeMobileBanking InvoiceType = "mobile_banking"
+	InvoiceTypeWalletTopUp   InvoiceType = "wallet_topup"
+	InvoiceTypeWalletPayment InvoiceType = "wallet_payment"
 )
 
 type PurchaseStatus string
@@ -93,6 +95,7 @@ var purchaseColumns = []string{
 	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id",
 }
 
+// scanPurchaseRow scans a single pgx.Row into a Purchase.
 func scanPurchase(row pgx.Row) (*Purchase, error) {
 	p := &Purchase{}
 	err := row.Scan(
@@ -107,6 +110,23 @@ func scanPurchase(row pgx.Row) (*Purchase, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to scan purchase: %w", err)
+	}
+	return p, nil
+}
+
+// scanPurchaseRow scans the current row from a pgx.Rows iterator into a Purchase.
+// Use this in multi-row loops to avoid duplicating field-order across callers.
+func scanPurchaseRow(rows pgx.Rows) (*Purchase, error) {
+	p := &Purchase{}
+	err := rows.Scan(
+		&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
+		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
+		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
+		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan purchase row: %w", err)
 	}
 	return p, nil
 }
@@ -133,18 +153,11 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 
 	purchases := []Purchase{}
 	for rows.Next() {
-		p := Purchase{}
-		err = rows.Scan(
-			&p.ID, &p.Amount, &p.CustomerID, &p.CreatedAt, &p.Month,
-			&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
-			&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
-			&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
-			&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
-		)
+		p, err := scanPurchaseRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("failed to scan purchase: %w", err)
+			return nil, err
 		}
-		purchases = append(purchases, p)
+		purchases = append(purchases, *p)
 	}
 
 	if err = rows.Err(); err != nil {
@@ -221,13 +234,15 @@ func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) 
 	return pr.UpdateFields(ctx, purchaseID, updates)
 }
 
-func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
+// FindSuccessfulPaidPurchaseByCustomer returns the most recent paid purchase for
+// the customer regardless of invoice type, used to determine referral eligibility.
+// Previously filtered to crypto-only which silently excluded wallet/mobile users.
+func (cr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
 	query := sq.Select(purchaseColumns...).
 		From("purchase").
 		Where(sq.And{
 			sq.Eq{"customer_id": customerID},
 			sq.Eq{"status": PurchaseStatusPaid},
-			sq.Eq{"invoice_type": InvoiceTypeCrypto},
 		}).
 		OrderBy("paid_at DESC").
 		Limit(1).
@@ -238,7 +253,7 @@ func (pr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 		return nil, fmt.Errorf("build query: %w", err)
 	}
 
-	return scanPurchase(pr.pool.QueryRow(ctx, sql, args...))
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
 }
 
 // RevenueSummaryRow represents a single row from the revenue_daily view.
@@ -272,6 +287,44 @@ func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) (
 			return nil, fmt.Errorf("failed to scan revenue row: %w", err)
 		}
 		r.Day = dayTime.Format("2006-01-02")
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
+
+// RecentPaidRow holds a paid purchase with the customer's Telegram ID.
+type RecentPaidRow struct {
+	PurchaseID    int64
+	TelegramID    int64
+	Amount        float64
+	Currency      string
+	PlanLabel     string
+	PaymentMethod string
+	PaidAt        time.Time
+}
+
+// FindRecentPaid returns the most recently paid purchases, up to limit rows.
+func (pr *PurchaseRepository) FindRecentPaid(ctx context.Context, limit int) ([]RecentPaidRow, error) {
+	query := `
+		SELECT p.id, c.telegram_id, p.amount, p.currency, p.plan_label, p.payment_method, p.paid_at
+		FROM purchase p
+		JOIN customer c ON c.id = p.customer_id
+		WHERE p.status = 'paid' AND p.paid_at IS NOT NULL
+		ORDER BY p.paid_at DESC
+		LIMIT $1`
+
+	rows, err := pr.pool.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent paid purchases: %w", err)
+	}
+	defer rows.Close()
+
+	var result []RecentPaidRow
+	for rows.Next() {
+		var r RecentPaidRow
+		if err := rows.Scan(&r.PurchaseID, &r.TelegramID, &r.Amount, &r.Currency, &r.PlanLabel, &r.PaymentMethod, &r.PaidAt); err != nil {
+			return nil, fmt.Errorf("failed to scan recent paid row: %w", err)
+		}
 		result = append(result, r)
 	}
 	return result, rows.Err()

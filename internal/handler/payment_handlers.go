@@ -119,6 +119,11 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
+	if planIdx < 0 {
+		slog.Error("Invalid plan index (negative)", "index", planIdx)
+		return
+	}
+
 	plan := config.PlanByIndex(planIdx)
 	if plan == nil {
 		slog.Error("Invalid plan index", "index", planIdx)
@@ -310,6 +315,9 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		h.sendMobilePayResult(ctx, b, chatID, langCode, result.ReasonKey, 0)
 		return
 	}
+
+	// Clear cache on failure too - user needs to start fresh
+	h.mobilePayCache.Delete(chatID)
 
 	// For amount mismatch, pass the expected purchase amount
 	var expectedAmount int

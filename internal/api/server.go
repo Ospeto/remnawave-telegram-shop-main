@@ -26,11 +26,10 @@ type contextKey string
 
 const (
 	telegramIDKey contextKey = "telegram_id"
-	usernameKey   contextKey = "username"
 )
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface, referralRepo *database.ReferralRepository) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -51,6 +50,17 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
+
+	// Wallet endpoints
+	mux.HandleFunc("/api/wallet", withAuth(handler.GetWallet))
+	mux.HandleFunc("/api/wallet/history", withAuth(handler.GetWalletHistory))
+	mux.HandleFunc("/api/wallet/autorenew", withAuth(handler.UpdateAutoRenew))
+
+	// Referral endpoint
+	mux.HandleFunc("/api/referrals", withAuth(handler.GetReferrals))
+
+	// Per-key auto-renew toggle
+	mux.HandleFunc("/api/keys/autorenew", withAuth(handler.UpdateKeyAutoRenew))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +254,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		ctx := context.WithValue(r.Context(), telegramIDKey, telegramID)
 		if username != "" {
-			ctx = context.WithValue(ctx, usernameKey, username)
+			ctx = context.WithValue(ctx, payment.UsernameCtxKey, username)
 		}
 		next(w, r.WithContext(ctx))
 	}

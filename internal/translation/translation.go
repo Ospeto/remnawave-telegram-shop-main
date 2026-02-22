@@ -83,6 +83,16 @@ func (tm *Manager) GetText(langCode, key string) string {
 		}
 	}
 
+	// Try base language (e.g., "my-MM" -> "my")
+	if strings.Contains(langCode, "-") {
+		baseLang := strings.Split(langCode, "-")[0]
+		if translation, exists := tm.translations[baseLang]; exists {
+			if text, exists := translation[key]; exists && text != "" {
+				return text
+			}
+		}
+	}
+
 	if translation, exists := tm.translations[tm.defaultLanguage]; exists {
 		if text, exists := translation[key]; exists {
 			return text

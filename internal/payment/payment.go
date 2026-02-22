@@ -14,12 +14,30 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
 	"strings"
+	"sync"
 	"time"
 
 	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
+
+// testTransactionID is the magic bypass transaction ID used only in test mode.
+// Unexported to prevent misuse; test mode must be enabled by admin command.
+const testTransactionID = "01004063070995016447"
+
+// ctxKey is an unexported type to prevent context key collisions across packages.
+type ctxKey struct{}
+
+// UsernameCtxKey is the typed context key for passing the Telegram username.
+// Callers must use this exact key with context.WithValue.
+var UsernameCtxKey = ctxKey{}
+
+// syncCacheEntry stores a snapshot of synced keys with an expiry.
+type syncCacheEntry struct {
+	keys      []KeyStats
+	expiresAt time.Time
+}
 
 type PaymentService struct {
 	purchaseRepository  *database.PurchaseRepository
@@ -34,6 +52,10 @@ type PaymentService struct {
 	mobilePaymentRepo   *database.MobilePaymentRepository
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
+	walletTxRepo        *database.WalletTransactionRepository
+	testMode            bool
+	testModeMu          sync.RWMutex
+	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
 }
 
 func NewPaymentService(
@@ -49,6 +71,7 @@ func NewPaymentService(
 	mobilePaymentRepo *database.MobilePaymentRepository,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
+	walletTxRepo *database.WalletTransactionRepository,
 ) *PaymentService {
 	return &PaymentService{
 		purchaseRepository:  purchaseRepository,
@@ -63,15 +86,58 @@ func NewPaymentService(
 		mobilePaymentRepo:   mobilePaymentRepo,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
+		walletTxRepo:        walletTxRepo,
 	}
 }
 
-// GetPurchaseRepository exposes the purchase repository for external use (e.g. API handlers).
-func (s PaymentService) GetPurchaseRepository() *database.PurchaseRepository {
-	return s.purchaseRepository
+// GetPurchaseByID retrieves a purchase record by its ID.
+// Prefer this over exposing the raw repository.
+func (s *PaymentService) GetPurchaseByID(ctx context.Context, id int64) (*database.Purchase, error) {
+	return s.purchaseRepository.FindById(ctx, id)
 }
 
-func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
+// GetRevenueSummary returns daily revenue aggregated over the last N days.
+func (s *PaymentService) GetRevenueSummary(ctx context.Context, days int) ([]database.RevenueSummaryRow, error) {
+	return s.purchaseRepository.GetRevenueSummary(ctx, days)
+}
+
+// UpdatePurchaseFields updates arbitrary (whitelisted) fields on a purchase record.
+func (s *PaymentService) UpdatePurchaseFields(ctx context.Context, id int64, fields map[string]interface{}) error {
+	return s.purchaseRepository.UpdateFields(ctx, id, fields)
+}
+
+func (s *PaymentService) SetTestMode(enabled bool) {
+	s.testModeMu.Lock()
+	defer s.testModeMu.Unlock()
+	s.testMode = enabled
+}
+
+func (s *PaymentService) IsTestMode() bool {
+	s.testModeMu.RLock()
+	defer s.testModeMu.RUnlock()
+	return s.testMode
+}
+
+// GetTestTransactionID returns the magic bypass transaction ID for test mode.
+// Only display this in admin-only commands — never expose to regular users.
+func (s *PaymentService) GetTestTransactionID() string {
+	return testTransactionID
+}
+
+const syncCacheTTL = 2 * time.Minute
+
+// SyncKeys fetches fresh key stats from Remnawave and syncs local DB.
+// Results are cached for syncCacheTTL to avoid hammering the external API
+// on every GET /api/me request.
+func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
+	// Return cached result if still fresh
+	if v, ok := s.syncCache.Load(customerID); ok {
+		entry := v.(syncCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.keys, nil
+		}
+	}
+
 	if s.subKeyRepo == nil {
 		return nil, nil
 	}
@@ -141,6 +207,12 @@ func (s PaymentService) SyncKeys(ctx context.Context, customerID int64, telegram
 		result = append(result, stats)
 	}
 
+	// Cache the result in the sync cache
+	s.syncCache.Store(customerID, syncCacheEntry{
+		keys:      result,
+		expiresAt: time.Now().Add(syncCacheTTL),
+	})
+
 	return result, nil
 }
 
@@ -152,7 +224,7 @@ type KeyStats struct {
 	Status            string
 }
 
-func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
+func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
 	purchase, err := s.purchaseRepository.FindById(ctx, purchaseId)
 	if err != nil {
 		return err
@@ -187,7 +259,45 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 
 	const bytesInGB = 1073741824
 
-	if purchase.ExtendKeyID != nil {
+	if purchase.InvoiceType == database.InvoiceTypeWalletTopUp {
+		// WALLET TOP-UP — balance credit and transaction log must be atomic.
+		dbTx, err := s.customerRepository.BeginTx(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to begin wallet top-up transaction: %w", err)
+		}
+		defer func() {
+			if p := recover(); p != nil {
+				_ = dbTx.Rollback(ctx)
+				panic(p)
+			}
+		}()
+
+		if err := s.customerRepository.AddBalanceTx(ctx, dbTx, customer.ID, purchase.Amount); err != nil {
+			_ = dbTx.Rollback(ctx)
+			slog.Error("CRITICAL: Failed to add balance for wallet top-up", "purchase_id", purchaseId, "error", err)
+			return err
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.CreateTx(ctx, dbTx, &database.WalletTransaction{
+				CustomerID:  customer.ID,
+				Amount:      purchase.Amount,
+				Type:        database.WalletTransactionTypeTopup,
+				PurchaseID:  &purchaseId,
+				Description: "Wallet Top-up",
+			}); err != nil {
+				_ = dbTx.Rollback(ctx)
+				slog.Error("CRITICAL: Failed to log wallet top-up transaction", "purchase_id", purchaseId, "error", err)
+				return err
+			}
+		}
+
+		if err := dbTx.Commit(ctx); err != nil {
+			_ = dbTx.Rollback(ctx)
+			return fmt.Errorf("failed to commit wallet top-up: %w", err)
+		}
+		slog.Info("Wallet top-up successful", "purchase_id", purchaseId, "amount", purchase.Amount, "customer_id", customer.ID)
+	} else if purchase.ExtendKeyID != nil {
 		// EXTEND existing key
 		existingKey, err := s.subKeyRepo.FindByID(ctx, *purchase.ExtendKeyID)
 		if err != nil || existingKey == nil {
@@ -243,6 +353,7 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 				ExpireAt:        &remnawaveUser.ExpireAt,
 				Status:          "active",
 				Label:           label,
+				TrafficLimitGB:  purchase.TrafficLimitGB,
 			})
 			if err != nil {
 				slog.Error("CRITICAL: Failed to save subscription key to DB. Key EXISTS on Remnawave but NOT in local DB.",
@@ -299,54 +410,103 @@ func (s PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int6
 	return nil
 }
 
-// processReferralBonus grants a referral bonus to the referrer if applicable.
+// referralBonusAmount is the wallet credit (in MMK) granted to each party when a referral converts.
+// The referrer gets this when their referee makes their first purchase.
+// The referee gets this as a welcome bonus on the same purchase.
+const referralBonusAmount = 1000.0
+
+// processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
+// the referee (new buyer) when the referee completes their first purchase.
 // This is intentionally non-fatal — errors are logged but never block the purchase flow.
-func (s PaymentService) processReferralBonus(ctx context.Context, customer *database.Customer) {
-	ctxReferee := context.Background()
-	referee, err := s.referralRepository.FindByReferee(ctxReferee, customer.TelegramID)
+func (s *PaymentService) processReferralBonus(ctx context.Context, customer *database.Customer) {
+	// context.WithoutCancel inherits values (tracing, etc.) from the parent context
+	// but is not cancelled when the parent is cancelled, making this operation
+	// safe to run after the purchase flow completes.
+	ctxRef := context.WithoutCancel(ctx)
+
+	referral, err := s.referralRepository.FindByReferee(ctxRef, customer.TelegramID)
 	if err != nil {
 		slog.Error("Referral lookup failed (non-fatal)", "error", err)
 		return
 	}
-	if referee == nil || referee.BonusGranted {
-		return
+	if referral == nil {
+		return // customer was not referred by anyone
 	}
-	refereeCustomer, err := s.customerRepository.FindByTelegramId(ctxReferee, referee.ReferrerID)
-	if err != nil {
-		slog.Error("Referral customer lookup failed (non-fatal)", "error", err)
-		return
+
+	// --- Credit REFERRER (person who shared the link) ---
+	if !referral.BonusGranted {
+		referrerCustomer, err := s.customerRepository.FindByTelegramId(ctxRef, referral.ReferrerID)
+		if err != nil || referrerCustomer == nil {
+			slog.Error("Referral: referrer customer lookup failed (non-fatal)", "error", err)
+			return
+		}
+
+		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, referralBonusAmount); err != nil {
+			slog.Error("Referral: failed to credit referrer balance (non-fatal)", "error", err)
+			return
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
+				CustomerID:  referrerCustomer.ID,
+				Amount:      referralBonusAmount,
+				Type:        database.WalletTransactionTypeReferral,
+				Description: "Referral bonus — friend made their first purchase",
+			}); err != nil {
+				slog.Error("Referral: failed to log referrer wallet transaction (non-fatal)", "error", err)
+			}
+		}
+
+		if err := s.referralRepository.MarkBonusGranted(ctxRef, referral.ID); err != nil {
+			slog.Error("Referral: failed to mark bonus_granted (non-fatal)", "error", err)
+		}
+
+		slog.Info("Granted referral bonus to referrer", "referrer_id", utils.MaskHalfInt64(referrerCustomer.ID), "amount", referralBonusAmount)
+
+		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+			ChatID:    referrerCustomer.TelegramID,
+			ParseMode: models.ParseModeHTML,
+			Text:      s.translation.GetText(referrerCustomer.Language, "referral_bonus_granted"),
+		}); err != nil {
+			slog.Error("Referral: bonus notification to referrer failed (non-fatal)", "error", err)
+		}
 	}
-	refereeUser, err := s.remnawaveClient.CreateOrUpdateUser(ctxReferee, refereeCustomer.ID, refereeCustomer.TelegramID, 0, config.GetReferralDays(), false)
-	if err != nil {
-		slog.Error("Referral bonus user creation failed (non-fatal)", "error", err)
-		return
-	}
-	refereeUserFilesToUpdate := map[string]interface{}{
-		"subscription_link": refereeUser.GetSubscriptionUrl(),
-		"expire_at":         refereeUser.GetExpireAt(),
-	}
-	if err := s.customerRepository.UpdateFields(ctxReferee, refereeCustomer.ID, refereeUserFilesToUpdate); err != nil {
-		slog.Error("Referral customer update failed (non-fatal)", "error", err)
-		return
-	}
-	if err := s.referralRepository.MarkBonusGranted(ctxReferee, referee.ID); err != nil {
-		slog.Error("Referral mark granted failed (non-fatal)", "error", err)
-		return
-	}
-	slog.Info("Granted referral bonus", "customer_id", utils.MaskHalfInt64(refereeCustomer.ID))
-	if _, err := s.telegramBot.SendMessage(ctxReferee, &bot.SendMessageParams{
-		ChatID:    refereeCustomer.TelegramID,
-		ParseMode: models.ParseModeHTML,
-		Text:      s.translation.GetText(refereeCustomer.Language, "referral_bonus_granted"),
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: s.createConnectKeyboard(refereeCustomer),
-		},
-	}); err != nil {
-		slog.Error("Referral bonus notification failed (non-fatal)", "error", err)
+
+	// --- Credit REFEREE (the new buyer who clicked the link) ---
+	if !referral.RefereeBonusGranted {
+		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, referralBonusAmount); err != nil {
+			slog.Error("Referral: failed to credit referee balance (non-fatal)", "error", err)
+			return
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
+				CustomerID:  customer.ID,
+				Amount:      referralBonusAmount,
+				Type:        database.WalletTransactionTypeReferral,
+				Description: "Welcome bonus — joined via referral link",
+			}); err != nil {
+				slog.Error("Referral: failed to log referee wallet transaction (non-fatal)", "error", err)
+			}
+		}
+
+		if err := s.referralRepository.MarkRefereeBonusGranted(ctxRef, referral.ID); err != nil {
+			slog.Error("Referral: failed to mark referee_bonus_granted (non-fatal)", "error", err)
+		}
+
+		slog.Info("Granted welcome bonus to referee", "referee_id", utils.MaskHalfInt64(customer.ID), "amount", referralBonusAmount)
+
+		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+			ChatID:    customer.TelegramID,
+			ParseMode: models.ParseModeHTML,
+			Text:      s.translation.GetText(customer.Language, "referee_bonus_granted"),
+		}); err != nil {
+			slog.Error("Referral: welcome bonus notification to referee failed (non-fatal)", "error", err)
+		}
 	}
 }
 
-func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {
+func (s *PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {
 	var inlineCustomerKeyboard [][]models.InlineKeyboardButton
 
 	if config.GetMiniAppURL() != "" {
@@ -378,7 +538,7 @@ func (s PaymentService) createConnectKeyboard(customer *database.Customer) [][]m
 	return inlineCustomerKeyboard
 }
 
-func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string) (url string, purchaseId int64, err error) {
+func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string) (url string, purchaseId int64, err error) {
 	var promoID *int64
 	if promoCode != "" && s.promoCodeRepository != nil {
 		promo, err := s.promoCodeRepository.FindByCode(ctx, promoCode)
@@ -401,12 +561,16 @@ func (s PaymentService) CreatePurchase(ctx context.Context, amount float64, days
 		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID)
 	case database.InvoiceTypeMobileBanking:
 		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
+	case database.InvoiceTypeWalletTopUp:
+		return s.createWalletTopUpInvoice(ctx, amount, customer)
+	case database.InvoiceTypeWalletPayment:
+		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
 }
 
-func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeCrypto,
 		Status:         database.PurchaseStatusNew,
@@ -425,10 +589,10 @@ func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64,
 
 	invoice, err := s.cryptoPayClient.CreateInvoice(&cryptopay.InvoiceRequest{
 		CurrencyType:   "fiat",
-		Fiat:           "RUB",
+		Fiat:           config.Currency(),
 		Amount:         fmt.Sprintf("%d", int(amount)),
 		AcceptedAssets: "USDT",
-		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, ctx.Value("username")),
+		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, ctx.Value(UsernameCtxKey)),
 		Description:    fmt.Sprintf("Subscription for %d days", days),
 		PaidBtnName:    "callback",
 		PaidBtnUrl:     config.BotURL(),
@@ -453,7 +617,7 @@ func (s PaymentService) createCryptoInvoice(ctx context.Context, amount float64,
 	return invoice.BotInvoiceUrl, purchaseId, nil
 }
 
-func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (string, error) {
+func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (string, error) {
 	if config.TrialDays() == 0 {
 		return "", nil
 	}
@@ -485,7 +649,7 @@ func (s PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (st
 
 }
 
-func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeMobileBanking,
 		Status:         database.PurchaseStatusPending,
@@ -507,6 +671,116 @@ func (s PaymentService) createMobileBankingPurchase(ctx context.Context, amount 
 	return "", purchaseId, nil
 }
 
+func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+	// Check if customer has sufficient balance logic is handled by DeductBalance (atomic)
+	// But we check first to fail fast before creating purchase
+	if customer.Balance < amount {
+		return "", 0, fmt.Errorf("insufficient wallet balance")
+	}
+
+	// Create purchase record
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
+	})
+	if err != nil {
+		slog.Error("Error creating wallet purchase", "error", err)
+		return "", 0, err
+	}
+
+	// Deduct balance immediately
+	if err := s.customerRepository.DeductBalance(ctx, customer.ID, amount); err != nil {
+		slog.Error("Error deducting wallet balance", "error", err, "purchase_id", purchaseId)
+		// Mark purchase as cancelled
+		s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{"status": database.PurchaseStatusCancel})
+		return "", 0, fmt.Errorf("failed to deduct balance: %w", err)
+	}
+
+	// Log transaction if repo exists
+	if s.walletTxRepo != nil {
+		_, err := s.walletTxRepo.Create(ctx, &database.WalletTransaction{
+			CustomerID:  customer.ID,
+			Amount:      -amount,
+			Type:        database.WalletTransactionTypePurchase,
+			PurchaseID:  &purchaseId,
+			Description: fmt.Sprintf("Purchase plan %d days", days),
+		})
+		if err != nil {
+			slog.Error("Failed to log wallet transaction (non-fatal)", "error", err)
+		}
+	}
+
+	// Process the purchase immediately (no waiting for payment confirmation)
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		slog.Error("Error processing wallet purchase", "error", err, "purchase_id", purchaseId)
+		return "", 0, err
+	}
+
+	slog.Info("Wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
+	return "", purchaseId, nil
+}
+
+// CreatePurchaseWithExtend is like createWalletPurchase but sets ExtendKeyID so
+// ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
+// rather than creating a brand-new user. Used by the per-key auto-renew cron.
+func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64) (url string, purchaseId int64, err error) {
+	if customer.Balance < amount {
+		return "", 0, fmt.Errorf("insufficient wallet balance")
+	}
+
+	// Create the purchase record with ExtendKeyID set.
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    &keyID,
+	})
+	if err != nil {
+		slog.Error("Error creating extend-key wallet purchase", "error", err)
+		return "", 0, err
+	}
+
+	// Deduct balance atomically.
+	if err := s.customerRepository.DeductBalance(ctx, customer.ID, amount); err != nil {
+		slog.Error("Error deducting wallet balance for extend-key", "error", err, "purchase_id", purchaseId)
+		s.purchaseRepository.UpdateFields(ctx, purchaseId, map[string]interface{}{"status": database.PurchaseStatusCancel})
+		return "", 0, fmt.Errorf("failed to deduct balance: %w", err)
+	}
+
+	// Log the transaction.
+	if s.walletTxRepo != nil {
+		if _, err := s.walletTxRepo.Create(ctx, &database.WalletTransaction{
+			CustomerID:  customer.ID,
+			Amount:      -amount,
+			Type:        database.WalletTransactionTypePurchase,
+			PurchaseID:  &purchaseId,
+			Description: fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days),
+		}); err != nil {
+			slog.Error("Failed to log extend-key wallet transaction (non-fatal)", "error", err)
+		}
+	}
+
+	// Process immediately: follows the ExtendKeyID branch in ProcessPurchaseById.
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		slog.Error("Error processing extend-key wallet purchase", "error", err, "purchase_id", purchaseId)
+		return "", 0, err
+	}
+
+	slog.Info("Extend-key wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "key_id", keyID, "customer_id", utils.MaskHalfInt64(customer.ID))
+	return "", purchaseId, nil
+}
+
 // VerificationResult holds the outcome of a mobile payment screenshot check.
 type VerificationResult struct {
 	Success   bool
@@ -514,7 +788,7 @@ type VerificationResult struct {
 	ReasonKey string // translation key
 }
 
-func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
+func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
 	if s.geminiClient == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
@@ -553,6 +827,51 @@ func (s PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int6
 	if strings.TrimSpace(info.TransactionID) == "" {
 		return &VerificationResult{Success: false, Reason: "No transaction ID found", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
+
+	// === TEST MODE BYPASS ===
+	// In Test Mode, we accept:
+	// 1. "Magic" Transaction ID (bypasses everything)
+	// 2. Any valid-looking receipt (bypasses duplicate/amount checks)
+	if s.IsTestMode() {
+		isMagic := strings.TrimSpace(info.TransactionID) == testTransactionID
+		slog.Info("Test Mode processing", "purchase_id", purchaseID, "is_magic", isMagic)
+
+		// Record verification as "TEST_MODE_BYPASS"
+		// Append random suffix to transaction ID to avoid duplicate key violations on multiple tests
+		storedTxID := fmt.Sprintf("%s_%d", info.TransactionID, time.Now().UnixNano())
+
+		_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
+			PurchaseID:    purchaseID,
+			TransactionID: storedTxID,
+			Provider:      info.Provider,
+			PhoneNumber:   info.PhoneNumber,
+			Amount:        info.Amount,
+			Note:          info.Note + " [TEST_MODE]",
+			Verified:      true,
+		})
+		if err != nil {
+			slog.Error("Error recording mobile payment (test mode)", "error", err)
+			return nil, err
+		}
+
+		// Update purchase fields
+		now := time.Now()
+		_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
+			"transaction_id": storedTxID,
+			"payment_method": info.Provider + " [TEST]",
+			"payment_phone":  info.PhoneNumber,
+			"verified_at":    now,
+		})
+
+		err = s.ProcessPurchaseById(ctx, purchaseID)
+		if err != nil {
+			slog.Error("Error processing verified mobile purchase (test mode)", "error", err)
+			return nil, err
+		}
+
+		return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
+	}
+	// ========================
 
 	// 2. Check for duplicate transaction ID
 	exists, err := s.mobilePaymentRepo.ExistsByTransactionID(ctx, info.TransactionID)
@@ -664,3 +983,26 @@ func phoneMatchesSuffix(expected, actual string, n int) bool {
 	}
 	return expSuffix == actSuffix
 }
+
+func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer) (url string, purchaseId int64, err error) {
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletTopUp,
+		Status:         database.PurchaseStatusPending,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0, // Not applicable for top-up
+		Days:           0, // Not applicable
+		TrafficLimitGB: 0, // Not applicable
+	})
+	if err != nil {
+		slog.Error("Error creating wallet top-up", "error", err)
+		return "", 0, err
+	}
+	slog.Info("Wallet top-up invoice created", "purchase_id", purchaseId, "customer_id", customer.ID)
+	return "", purchaseId, nil
+}
+
+// CreateWalletPayment was a duplicate of createWalletPurchase with diverging behavior
+// (it set paid_at before delivery succeeded). Removed — all wallet payments now go
+// through CreatePurchase → createWalletPurchase which is the single, correct code path.

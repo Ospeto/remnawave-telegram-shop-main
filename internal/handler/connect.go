@@ -36,7 +36,7 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 			WebApp: &models.WebAppInfo{
 				URL: config.GetMiniAppURL(),
 			}}})
-	} else if config.IsWepAppLinkEnabled() {
+	} else if config.IsWebAppLinkEnabled() {
 		if customer.SubscriptionLink != nil && customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
 			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
 				WebApp: &models.WebAppInfo{
@@ -88,7 +88,7 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 			WebApp: &models.WebAppInfo{
 				URL: config.GetMiniAppURL(),
 			}}})
-	} else if config.IsWepAppLinkEnabled() {
+	} else if config.IsWebAppLinkEnabled() {
 		if customer.SubscriptionLink != nil && customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
 			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
 				WebApp: &models.WebAppInfo{

@@ -147,6 +147,19 @@ func PlanByIndex(idx int) *Plan {
 	return &conf.plans[idx]
 }
 
+func LowestPlanPrice() int {
+	if len(conf.plans) == 0 {
+		return 6000
+	}
+	minPrice := conf.plans[0].Price
+	for _, plan := range conf.plans {
+		if plan.Price < minPrice {
+			minPrice = plan.Price
+		}
+	}
+	return minPrice
+}
+
 func ExternalSquadUUID() uuid.UUID {
 	return conf.externalSquadUUID
 }
@@ -214,7 +227,7 @@ func GetHealthCheckPort() int {
 	return conf.healthCheckPort
 }
 
-func IsWepAppLinkEnabled() bool {
+func IsWebAppLinkEnabled() bool {
 	return conf.isWebAppLinkEnabled
 }
 

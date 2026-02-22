@@ -3,13 +3,14 @@ package notification
 import (
 	"context"
 	"fmt"
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 	"log/slog"
+	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
-	"remnawave-tg-shop-bot/internal/handler"
 	"remnawave-tg-shop-bot/internal/translation"
 	"time"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 type customerRepository interface {
@@ -27,7 +28,7 @@ func NewSubscriptionService(customerRepository customerRepository,
 	telegramBot *bot.Bot,
 	tm *translation.Manager) *SubscriptionService {
 	svc := &SubscriptionService{customerRepository: customerRepository, telegramBot: telegramBot, tm: tm}
-	svc.notify = svc.sendNotification
+	svc.notify = svc.SendNotification
 	return svc
 }
 func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
@@ -47,7 +48,7 @@ func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
 
 		send := s.notify
 		if send == nil {
-			send = s.sendNotification
+			send = s.SendNotification
 		}
 
 		err := send(ctx, customer)
@@ -78,7 +79,7 @@ func (s *SubscriptionService) getCustomersWithExpiringSubscriptions() (*[]databa
 	return dbCustomers, nil
 }
 
-func (s *SubscriptionService) sendNotification(ctx context.Context, customer database.Customer) error {
+func (s *SubscriptionService) SendNotification(ctx context.Context, customer database.Customer) error {
 	expireDate := customer.ExpireAt.Format("02.01.2006")
 
 	messageText := fmt.Sprintf(
@@ -94,8 +95,10 @@ func (s *SubscriptionService) sendNotification(ctx context.Context, customer dat
 			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{
 					{
-						Text:         s.tm.GetText(customer.Language, "renew_subscription_button"),
-						CallbackData: handler.CallbackBuy,
+						Text: s.tm.GetText(customer.Language, "renew_subscription_button"),
+						WebApp: &models.WebAppInfo{
+							URL: config.GetMiniAppURL() + "/plans?extend=" + fmt.Sprintf("%d", customer.ID),
+						},
 					},
 				},
 			},
