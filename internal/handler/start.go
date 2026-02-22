@@ -89,43 +89,28 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 							"referee_bonus_granted", existingRef.RefereeBonusGranted,
 						)
 					} else {
-						// Check if user has ever made a paid purchase
-						paidPurchase, purchaseErr := h.purchaseRepository.FindSuccessfulPaidPurchaseByCustomer(ctx, existingCustomer.ID)
-						slog.Info("[REFERRAL-DEBUG] FindSuccessfulPaidPurchaseByCustomer result",
-							"customer_id", existingCustomer.ID,
-							"has_paid_purchase", paidPurchase != nil,
-							"error", purchaseErr,
+						// No existing referral — eligible! Verify referrer exists.
+						referrer, referrerErr := h.customerRepository.FindByTelegramId(ctx, referrerId)
+						slog.Info("[REFERRAL-DEBUG] Referrer lookup result",
+							"referrer_telegram_id", referrerId,
+							"referrer_found", referrer != nil,
+							"error", referrerErr,
 						)
 
-						if paidPurchase != nil {
-							slog.Info("[REFERRAL-DEBUG] SKIPPED: user already has paid purchase, referral not eligible",
-								"purchase_id", paidPurchase.ID,
-								"purchase_status", paidPurchase.Status,
-							)
-						} else {
-							// Verify referrer exists
-							referrer, referrerErr := h.customerRepository.FindByTelegramId(ctx, referrerId)
-							slog.Info("[REFERRAL-DEBUG] Referrer lookup result",
-								"referrer_telegram_id", referrerId,
-								"referrer_found", referrer != nil,
-								"error", referrerErr,
-							)
-
-							if referrerErr == nil && referrer != nil {
-								ctxRef := context.WithoutCancel(ctx)
-								createdRef, createErr := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
-								if createErr != nil {
-									slog.Error("[REFERRAL-DEBUG] FAILED: error creating referral", "error", createErr)
-								} else {
-									slog.Info("[REFERRAL-DEBUG] SUCCESS: referral created!",
-										"referral_id", createdRef.ID,
-										"referrer_telegram_id", referrerId,
-										"referee_telegram_id", existingCustomer.TelegramID,
-									)
-								}
+						if referrerErr == nil && referrer != nil {
+							ctxRef := context.WithoutCancel(ctx)
+							createdRef, createErr := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+							if createErr != nil {
+								slog.Error("[REFERRAL-DEBUG] FAILED: error creating referral", "error", createErr)
 							} else {
-								slog.Warn("[REFERRAL-DEBUG] SKIPPED: referrer not found in database", "referrer_telegram_id", referrerId)
+								slog.Info("[REFERRAL-DEBUG] SUCCESS: referral created!",
+									"referral_id", createdRef.ID,
+									"referrer_telegram_id", referrerId,
+									"referee_telegram_id", existingCustomer.TelegramID,
+								)
 							}
+						} else {
+							slog.Warn("[REFERRAL-DEBUG] SKIPPED: referrer not found in database", "referrer_telegram_id", referrerId)
 						}
 					}
 				}
