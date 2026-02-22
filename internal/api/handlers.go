@@ -35,16 +35,17 @@ type KeyResponse struct {
 }
 
 type ValidationResponse struct {
-	User           *database.Customer `json:"user"`
-	Keys           []KeyResponse      `json:"keys"`
-	IsActive       bool               `json:"is_active"`
-	ExpireAt       *time.Time         `json:"expire_at"`
-	DaysRemaining  int                `json:"days_remaining"`
-	TrialEligible  bool               `json:"trial_eligible"`
-	TrialDays      int                `json:"trial_days"`
-	ReferralCount  int                `json:"referral_count"`
-	ReferralEarned float64            `json:"referral_earned"`
-	BotURL         string             `json:"bot_url"`
+	User                *database.Customer `json:"user"`
+	Keys                []KeyResponse      `json:"keys"`
+	IsActive            bool               `json:"is_active"`
+	ExpireAt            *time.Time         `json:"expire_at"`
+	DaysRemaining       int                `json:"days_remaining"`
+	TrialEligible       bool               `json:"trial_eligible"`
+	TrialDays           int                `json:"trial_days"`
+	ReferralCount       int                `json:"referral_count"`
+	ReferralEarned      float64            `json:"referral_earned"`
+	ReferralBonusAmount float64            `json:"referral_bonus_amount"`
+	BotURL              string             `json:"bot_url"`
 }
 
 type PlanResponse struct {
@@ -418,23 +419,24 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 			referralCount = len(refs)
 			for _, ref := range refs {
 				if ref.BonusGranted {
-					referralEarned += 1000
+					referralEarned += payment.ReferralBonusAmount
 				}
 			}
 		}
 	}
 
 	resp := ValidationResponse{
-		User:           customer,
-		Keys:           keys,
-		IsActive:       isActive,
-		ExpireAt:       customer.ExpireAt,
-		DaysRemaining:  daysRemaining,
-		TrialEligible:  trialEligible,
-		TrialDays:      config.TrialDays(),
-		ReferralCount:  referralCount,
-		ReferralEarned: referralEarned,
-		BotURL:         config.BotURL(),
+		User:                customer,
+		Keys:                keys,
+		IsActive:            isActive,
+		ExpireAt:            customer.ExpireAt,
+		DaysRemaining:       daysRemaining,
+		TrialEligible:       trialEligible,
+		TrialDays:           config.TrialDays(),
+		ReferralCount:       referralCount,
+		ReferralEarned:      referralEarned,
+		ReferralBonusAmount: payment.ReferralBonusAmount,
+		BotURL:              config.BotURL(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -771,11 +773,12 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"balance":             balance,
-		"currency":            config.Currency(),
-		"auto_renew":          autoRenew,
-		"auto_renew_duration": autoRenewDuration,
-		"bot_url":             config.BotURL(),
+		"balance":               balance,
+		"currency":              config.Currency(),
+		"auto_renew":            autoRenew,
+		"auto_renew_duration":   autoRenewDuration,
+		"bot_url":               config.BotURL(),
+		"referral_bonus_amount": payment.ReferralBonusAmount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

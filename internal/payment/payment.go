@@ -413,7 +413,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 // referralBonusAmount is the wallet credit (in MMK) granted to each party when a referral converts.
 // The referrer gets this when their referee makes their first purchase.
 // The referee gets this as a welcome bonus on the same purchase.
-const referralBonusAmount = 1000.0
+const ReferralBonusAmount = 1000.0
 
 // processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
 // the referee (new buyer) when the referee completes their first purchase.
@@ -441,7 +441,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			return
 		}
 
-		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, referralBonusAmount); err != nil {
+		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, ReferralBonusAmount); err != nil {
 			slog.Error("Referral: failed to credit referrer balance (non-fatal)", "error", err)
 			return
 		}
@@ -449,7 +449,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 		if s.walletTxRepo != nil {
 			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
 				CustomerID:  referrerCustomer.ID,
-				Amount:      referralBonusAmount,
+				Amount:      ReferralBonusAmount,
 				Type:        database.WalletTransactionTypeReferral,
 				Description: "Referral bonus — friend made their first purchase",
 			}); err != nil {
@@ -461,7 +461,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Error("Referral: failed to mark bonus_granted (non-fatal)", "error", err)
 		}
 
-		slog.Info("Granted referral bonus to referrer", "referrer_id", utils.MaskHalfInt64(referrerCustomer.ID), "amount", referralBonusAmount)
+		slog.Info("Granted referral bonus to referrer", "referrer_id", utils.MaskHalfInt64(referrerCustomer.ID), "amount", ReferralBonusAmount)
 
 		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 			ChatID:    referrerCustomer.TelegramID,
@@ -474,7 +474,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 
 	// --- Credit REFEREE (the new buyer who clicked the link) ---
 	if !referral.RefereeBonusGranted {
-		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, referralBonusAmount); err != nil {
+		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, ReferralBonusAmount); err != nil {
 			slog.Error("Referral: failed to credit referee balance (non-fatal)", "error", err)
 			return
 		}
@@ -482,7 +482,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 		if s.walletTxRepo != nil {
 			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
 				CustomerID:  customer.ID,
-				Amount:      referralBonusAmount,
+				Amount:      ReferralBonusAmount,
 				Type:        database.WalletTransactionTypeReferral,
 				Description: "Welcome bonus — joined via referral link",
 			}); err != nil {
@@ -494,7 +494,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Error("Referral: failed to mark referee_bonus_granted (non-fatal)", "error", err)
 		}
 
-		slog.Info("Granted welcome bonus to referee", "referee_id", utils.MaskHalfInt64(customer.ID), "amount", referralBonusAmount)
+		slog.Info("Granted welcome bonus to referee", "referee_id", utils.MaskHalfInt64(customer.ID), "amount", ReferralBonusAmount)
 
 		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 			ChatID:    customer.TelegramID,

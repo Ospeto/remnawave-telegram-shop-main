@@ -37,31 +37,34 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		}
 
 		if strings.Contains(update.Message.Text, "ref_") {
-			arg := strings.Split(update.Message.Text, " ")[1]
-			if strings.HasPrefix(arg, "ref_") {
-				code := strings.TrimPrefix(arg, "ref_")
-				referrerId, err := strconv.ParseInt(code, 10, 64)
-				if err != nil {
-					slog.Error("error parsing referrer id", "error", err)
-					return
-				}
-				// Bug fix 2: block self-referral
-				if referrerId == existingCustomer.TelegramID {
-					slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
-				} else {
-					// Bug fix 1: check both err == nil AND referrer != nil
-					referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
-					if err == nil && referrer != nil {
-						// Use a detached context so a handler timeout doesn't cancel this insert
-						ctxRef := context.WithoutCancel(ctx)
-						_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
-						if err != nil {
-							slog.Error("error creating referral", "error", err)
-							return
+			parts := strings.Split(update.Message.Text, " ")
+			if len(parts) > 1 {
+				arg := parts[1]
+				if strings.HasPrefix(arg, "ref_") {
+					code := strings.TrimPrefix(arg, "ref_")
+					referrerId, err := strconv.ParseInt(code, 10, 64)
+					if err != nil {
+						slog.Error("error parsing referrer id", "error", err)
+					} else if referrerId == existingCustomer.TelegramID {
+						// Bug fix 2: block self-referral
+						slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
+					} else {
+						// Bug fix 1: check both err == nil AND referrer != nil
+						referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
+						if err == nil && referrer != nil {
+							// Use a detached context so a handler timeout doesn't cancel this insert
+							ctxRef := context.WithoutCancel(ctx)
+							_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+							if err != nil {
+								slog.Error("error creating referral", "error", err)
+							} else {
+								slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
+							}
 						}
-						slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
 					}
 				}
+			} else {
+				slog.Warn("referral link malformed: no argument", "text", update.Message.Text)
 			}
 		}
 

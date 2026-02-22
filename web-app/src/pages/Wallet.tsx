@@ -11,6 +11,7 @@ interface WalletData {
   auto_renew: boolean;
   auto_renew_duration: number | null;
   bot_url: string;
+  referral_bonus_amount: number;
 }
 
 interface Transaction {
@@ -212,7 +213,7 @@ export function Wallet() {
           <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
             <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('total_earned')}</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-success)', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-              +{referrals.filter(r => r.status === 'bonus_received').length * 1000} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
+              +{referrals.filter(r => r.status === 'bonus_received').length * (wallet?.referral_bonus_amount || 1000)} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
             </div>
           </div>
         </div>
