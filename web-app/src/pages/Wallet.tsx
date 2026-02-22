@@ -8,6 +8,9 @@ import { ErrorScreen } from '../components/ErrorScreen';
 interface WalletData {
   balance: number;
   currency: string;
+  auto_renew: boolean;
+  auto_renew_duration: number | null;
+  bot_url: string;
 }
 
 interface Transaction {
@@ -248,11 +251,14 @@ export function Wallet() {
           onClick={() => {
             const uid = tg?.initDataUnsafe?.user?.id;
             if (!uid) return;
-            // Bot username is currently hardcoded for the frontend or injected from env. We will just use the default share dialogue.
-            const botUsername = "WavyVpnBot"; // Fallback, could be fetched via /api/me
+            // Use the bot URL from the backend if available, otherwise just use the web App's URL parameter or fallback username
+            let botUrlToUse = "https://t.me/WavyVpnBot"; // absolute fallback
+            if (wallet?.bot_url) {
+              botUrlToUse = wallet.bot_url;
+            }
             const text = `Hey! Join Wavy Private Server using my link and we both get free VPN balance! 🌊`;
-            const url = `https://t.me/${botUsername}?start=${uid}`;
-            tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+            const url = `${botUrlToUse}?start=${uid}`;
+            (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
           }}
           style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
         >

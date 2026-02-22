@@ -13,6 +13,7 @@ interface PurchaseResponse {
     currency: string;
     instructions: string;
     invoice_type: string;
+    bot_url: string;
 }
 
 export function Checkout() {
@@ -258,9 +259,12 @@ export function Checkout() {
                             playClick();
                             const uid = tg?.initDataUnsafe?.user?.id;
                             if (!uid) return;
-                            const botUsername = "WavyVpnBot"; // Fallback, we could inject this eventually
+                            let botUrlToUse = "https://t.me/WavyVpnBot";
+                            if (purchase?.bot_url) {
+                                botUrlToUse = purchase.bot_url;
+                            }
                             const text = `Hey! Join Wavy Private Server using my link and we both get free VPN balance! 🌊`;
-                            const url = `https://t.me/${botUsername}?start=${uid}`;
+                            const url = `${botUrlToUse}?start=${uid}`;
                             (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
                         }}
                         style={{

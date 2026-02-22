@@ -44,6 +44,7 @@ type ValidationResponse struct {
 	TrialDays      int                `json:"trial_days"`
 	ReferralCount  int                `json:"referral_count"`
 	ReferralEarned float64            `json:"referral_earned"`
+	BotURL         string             `json:"bot_url"`
 }
 
 type PlanResponse struct {
@@ -64,11 +65,12 @@ type CreatePurchaseRequest struct {
 
 type CreatePurchaseResponse struct {
 	PurchaseID   int64  `json:"purchase_id"`
-	PaymentPhone string `json:"payment_phone"`
+	PaymentPhone string `json:"payment_phone,omitempty"`
 	Amount       int    `json:"amount"`
 	Currency     string `json:"currency"`
-	Instructions string `json:"instructions"`
+	Instructions string `json:"instructions,omitempty"`
 	InvoiceType  string `json:"invoice_type"`
+	BotURL       string `json:"bot_url"`
 }
 
 // WalletServiceInterface defines the interface for wallet operations
@@ -242,9 +244,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch the actual purchase to get the final amount (which might be discounted)
 	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), purchaseID)
-	finalAmount := int(price)
-	if err == nil && purchase != nil {
-		finalAmount = int(purchase.Amount)
+	if err != nil || purchase == nil {
+		slog.Error("Failed to retrieve purchase after creation", "purchase_id", purchaseID, "error", err)
+		http.Error(w, "Failed to retrieve purchase details", http.StatusInternalServerError)
+		return
 	}
 
 	updateFields := map[string]interface{}{
@@ -258,19 +261,25 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
 	}
 
-	instructions := fmt.Sprintf(
-		h.translation.GetText(customer.Language, "mobile_pay_instructions"),
-		finalAmount,
-		config.MobileBankingPhone(),
-	)
+	var instructions string
+	var mobileNumber string
+	if purchase.PaymentMethod == string(database.InvoiceTypeMobileBanking) {
+		instructions = fmt.Sprintf(
+			h.translation.GetText(customer.Language, "mobile_pay_instructions"),
+			int(purchase.Amount),
+			config.MobileBankingPhone(),
+		)
+		mobileNumber = config.MobileBankingPhone()
+	}
 
 	resp := CreatePurchaseResponse{
-		PurchaseID:   purchaseID,
-		PaymentPhone: config.MobileBankingPhone(),
-		Amount:       finalAmount,
+		PurchaseID:   purchase.ID,
+		PaymentPhone: mobileNumber,
+		Amount:       int(purchase.Amount),
 		Currency:     config.Currency(),
 		Instructions: instructions,
-		InvoiceType:  string(invoiceType),
+		InvoiceType:  purchase.PaymentMethod,
+		BotURL:       config.BotURL(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -425,6 +434,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		TrialDays:      config.TrialDays(),
 		ReferralCount:  referralCount,
 		ReferralEarned: referralEarned,
+		BotURL:         config.BotURL(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -765,6 +775,7 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"currency":            config.Currency(),
 		"auto_renew":          autoRenew,
 		"auto_renew_duration": autoRenewDuration,
+		"bot_url":             config.BotURL(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
