@@ -11,10 +11,11 @@
     <script>
         const params = new URLSearchParams(window.location.search);
         const url = params.get('url');
-        if (url) {
+        // Only allow happ:// and happproxy:// deep-link schemes
+        if (url && (url.startsWith('happ://') || url.startsWith('happproxy://'))) {
             window.location.replace(url);
         } else {
-            document.body.textContent = 'No URL provided.';
+            document.body.textContent = 'Invalid or missing URL.';
         }
     </script>
 </body>

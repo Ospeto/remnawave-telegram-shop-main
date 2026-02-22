@@ -11,6 +11,10 @@ interface Plan {
     currency: string;
 }
 
+interface DisplayPlan extends Plan {
+    discountedPrice?: number;
+}
+
 interface UserData {
     is_active: boolean;
     expire_at: string | null;
@@ -26,6 +30,7 @@ export function Plans() {
     const [plans, setPlans] = useState<Plan[]>([]);
     const [userData, setUserData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
     const [promoCode, setPromoCode] = useState('');
     const [promoStatus, setPromoStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
     const [discountPercent, setDiscountPercent] = useState<number>(0);
@@ -41,7 +46,9 @@ export function Plans() {
     useEffect(() => {
         if (tg) {
             tg.BackButton.show();
-            tg.BackButton.onClick(() => navigate('/'));
+            const handler = () => navigate('/');
+            tg.BackButton.onClick(handler);
+            return () => tg.BackButton.offClick(handler);
         }
     }, [tg, navigate]);
 
@@ -53,7 +60,9 @@ export function Plans() {
             fetch('/api/me', { headers }).then(r => r.json()),
         ])
             .then(([p, m]) => { setPlans(p || []); setUserData(m); })
-            .catch(console.error)
+            .catch(err => {
+                setError(`${err.name}: ${err.message}`);
+            })
             .finally(() => setLoading(false));
     }, [initData]);
 
@@ -95,6 +104,14 @@ export function Plans() {
         </div>
     );
 
+    if (error) return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', gap: 16, padding: 24 }}>
+            <div style={{ fontSize: 48 }}>⚠️</div>
+            <p style={{ color: '#ff3b30' }}>{t('error_prefix')} {error}</p>
+            <button className="btn-secondary" onClick={() => window.location.reload()}>{t('retry')}</button>
+        </div>
+    );
+
     const calcNewExpiry = (days: number) => {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
         const d = new Date(base);
@@ -102,22 +119,19 @@ export function Plans() {
         return d.toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', { year: 'numeric', month: 'short', day: 'numeric' });
     };
 
-    // All plans available for both new keys and extending
-    const filteredPlans = plans;
-
     // Apply discount if valid promo
-    const displayPlans = filteredPlans.map(p => {
+    const displayPlans: DisplayPlan[] = plans.map(p => {
         if (discountPercent > 0) {
             return { ...p, discountedPrice: Math.round(p.price * (1 - discountPercent / 100)) };
         }
         return p;
     });
 
-    // Best value = lowest price per day (within filtered set)
+    // Best value = lowest price per day
     const bestIdx = displayPlans.length > 0
         ? displayPlans.reduce((b, p, i) => {
-            const priceP = (p as any).discountedPrice || p.price;
-            const priceB = (displayPlans[b] as any).discountedPrice || displayPlans[b].price;
+            const priceP = p.discountedPrice ?? p.price;
+            const priceB = displayPlans[b].discountedPrice ?? displayPlans[b].price;
             return (priceP / p.days) < (priceB / displayPlans[b].days) ? i : b;
         }, 0)
         : -1;
@@ -156,7 +170,7 @@ export function Plans() {
                         setPromoCode(e.target.value);
                         if (promoStatus !== 'idle') setPromoStatus('idle');
                     }}
-                    placeholder="Promo Code"
+                    placeholder={t('promo_placeholder')}
                     style={{
                         flex: 1,
                         background: 'rgba(255,255,255,0.05)',
@@ -178,17 +192,17 @@ export function Plans() {
                         opacity: !promoCode.trim() ? 0.5 : 1
                     }}
                 >
-                    {promoStatus === 'validating' ? '...' : 'Apply'}
+                    {promoStatus === 'validating' ? '...' : t('promo_apply')}
                 </button>
             </div>
             {promoStatus === 'valid' && (
                 <div style={{ color: '#34c759', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ✅ Code applied! {discountPercent}% off
+                    ✅ {t('promo_applied', { percent: discountPercent })}
                 </div>
             )}
             {promoStatus === 'invalid' && (
                 <div style={{ color: '#ff3b30', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
-                    ❌ Invalid or expired code
+                    ❌ {t('promo_invalid')}
                 </div>
             )}
 
@@ -208,14 +222,12 @@ export function Plans() {
                 </div>
             )}
 
-
-
             {/* Plan cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {displayPlans.map((plan, idx) => {
-                    const originalIdx = plans.findIndex(p => p.label === plan.label && p.days === plan.days); // Robust find
-                    const price = (plan as any).discountedPrice || plan.price;
-                    const hasDiscount = (plan as any).discountedPrice && (plan as any).discountedPrice < plan.price;
+                    const originalIdx = plans.findIndex(p => p.label === plan.label && p.days === plan.days);
+                    const price = plan.discountedPrice ?? plan.price;
+                    const hasDiscount = plan.discountedPrice !== undefined && plan.discountedPrice < plan.price;
 
                     let checkoutUrl = `/checkout/${originalIdx}?`;
                     if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;

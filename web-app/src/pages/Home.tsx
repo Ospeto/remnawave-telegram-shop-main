@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { openHappLink } from '../lib/openHapp';
 
 interface SubscriptionKey {
     id: number;
@@ -55,10 +56,24 @@ export function Home() {
     }, [initData]);
 
     const handleCopy = (url: string, id: number) => {
-        navigator.clipboard.writeText(url).then(() => {
-            setCopiedId(id);
-            setTimeout(() => setCopiedId(null), 2000);
-        });
+        navigator.clipboard.writeText(url)
+            .then(() => {
+                setCopiedId(id);
+                setTimeout(() => setCopiedId(null), 2000);
+            })
+            .catch(() => {
+                // Fallback for environments where clipboard API is unavailable
+                const textArea = document.createElement('textarea');
+                textArea.value = url;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                setCopiedId(id);
+                setTimeout(() => setCopiedId(null), 2000);
+            });
     };
 
     const toggleLanguage = () => {
@@ -81,7 +96,7 @@ export function Home() {
             if (!res.ok) throw new Error(`${res.status}`);
             // Reload to show the new key
             window.location.reload();
-        } catch (err) {
+        } catch (_err) {
             setTrialError(t('trial_error'));
         } finally {
             setTrialLoading(false);
@@ -200,7 +215,7 @@ export function Home() {
                                         <div style={{
                                             height: '100%', borderRadius: 2,
                                             background: key.days_remaining > 7 ? '#00d2be' : key.days_remaining > 3 ? '#ff9f0a' : '#ff3b30',
-                                            width: `${Math.min(100, (key.days_remaining / 30) * 100)}%`,
+                                            width: `${Math.min(100, (key.days_remaining / Math.max(key.days_remaining, 30)) * 100)}%`,
                                             transition: 'width 0.5s ease'
                                         }} />
                                     </div>
@@ -241,22 +256,7 @@ export function Home() {
                                     <button
                                         className="btn-primary"
                                         style={{ padding: '13px', fontSize: 14, fontWeight: 600 }}
-                                        onClick={() => {
-                                            const happUrl = key.happ_link;
-                                            // Strategy 1: Try hidden iframe (works on most Android/iOS)
-                                            const iframe = document.createElement('iframe');
-                                            iframe.style.display = 'none';
-                                            iframe.src = happUrl;
-                                            document.body.appendChild(iframe);
-                                            setTimeout(() => iframe.remove(), 3000);
-                                            // Strategy 2: Also try tg.openLink with redirect.html
-                                            const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
-                                            if (tg?.openLink) {
-                                                tg.openLink(redirectUrl);
-                                            } else {
-                                                window.open(redirectUrl, '_blank');
-                                            }
-                                        }}
+                                        onClick={() => openHappLink(key.happ_link, tg)}
                                     >
                                         {t('btn_add_happ')}
                                     </button>

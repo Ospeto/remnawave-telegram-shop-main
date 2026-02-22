@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { openHappLink } from '../lib/openHapp';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -35,8 +36,9 @@ export function Checkout() {
     useEffect(() => {
         if (tg) {
             tg.BackButton.show();
-            // Preserve flow: if from plans, go back to plans.
-            tg.BackButton.onClick(() => navigate('/plans'));
+            const handler = () => navigate('/plans');
+            tg.BackButton.onClick(handler);
+            return () => tg.BackButton.offClick(handler);
         }
     }, [tg, navigate]);
 
@@ -46,7 +48,7 @@ export function Checkout() {
         if (!planIndex || !initData || purchaseCreated.current) return;
         purchaseCreated.current = true;
 
-        const body: any = { plan_index: parseInt(planIndex) };
+        const body: Record<string, string | number> = { plan_index: parseInt(planIndex) };
         if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
         if (promoCode) body.promo_code = promoCode;
 
@@ -88,8 +90,9 @@ export function Checkout() {
             }
             const data = await res.json();
             setVerificationResult(data);
-        } catch (err: any) {
-            setVerificationResult({ status: 'failed', message: err?.message || 'Upload failed. Please try again.' });
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : 'Upload failed. Please try again.';
+            setVerificationResult({ status: 'failed', message });
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -97,15 +100,34 @@ export function Checkout() {
     };
 
     const copyToClipboard = (text: string, type: 'phone' | 'amount') => {
-        navigator.clipboard.writeText(text).then(() => {
-            if (type === 'phone') {
-                setPhoneCopied(true);
-                setTimeout(() => setPhoneCopied(false), 2000);
-            } else {
-                setAmountCopied(true);
-                setTimeout(() => setAmountCopied(false), 2000);
-            }
-        });
+        navigator.clipboard.writeText(text)
+            .then(() => {
+                if (type === 'phone') {
+                    setPhoneCopied(true);
+                    setTimeout(() => setPhoneCopied(false), 2000);
+                } else {
+                    setAmountCopied(true);
+                    setTimeout(() => setAmountCopied(false), 2000);
+                }
+            })
+            .catch(() => {
+                // Fallback for environments where clipboard API is unavailable
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                if (type === 'phone') {
+                    setPhoneCopied(true);
+                    setTimeout(() => setPhoneCopied(false), 2000);
+                } else {
+                    setAmountCopied(true);
+                    setTimeout(() => setAmountCopied(false), 2000);
+                }
+            });
     };
 
     if (loading) return (
@@ -137,20 +159,7 @@ export function Checkout() {
                     className="btn-primary"
                     onClick={() => {
                         if (verificationResult?.happ_link) {
-                            const happUrl = verificationResult.happ_link;
-                            // Strategy 1: Try hidden iframe (works on most Android/iOS)
-                            const iframe = document.createElement('iframe');
-                            iframe.style.display = 'none';
-                            iframe.src = happUrl;
-                            document.body.appendChild(iframe);
-                            setTimeout(() => iframe.remove(), 3000);
-                            // Strategy 2: Also try tg.openLink with redirect.html
-                            const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
-                            if (tg?.openLink) {
-                                tg.openLink(redirectUrl);
-                            } else {
-                                window.open(redirectUrl, '_blank');
-                            }
+                            openHappLink(verificationResult.happ_link, tg);
                         } else {
                             navigate('/');
                         }
@@ -266,7 +275,7 @@ export function Checkout() {
                     </div>
                 </div>
 
-                {/* Step 4 — No notes */}
+                {/* Step 4 — Write "Payment" only */}
                 <div className="step-row">
                     <span className="step-number">4</span>
                     <div className="step-text">

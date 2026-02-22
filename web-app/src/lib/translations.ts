@@ -83,27 +83,34 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_filtered_plans': 'Only {{type}} plans are shown because your key is {{type_desc}} plan.',
         'help_payments': 'Accepted payments: KPay · Wave · AYA Pay. After selecting a plan, you\'ll send money and upload a screenshot for instant verification.',
 
+        // Promo Code
+        'promo_placeholder': 'Promo Code',
+        'promo_apply': 'Apply',
+        'promo_applied': '✅ Code applied! {{percent}}% off',
+        'promo_invalid': '❌ Invalid or expired code',
+
         // Checkout
         'creating_purchase': 'Creating purchase...',
         'payment_details': 'Payment Details',
         'amount_to_send': 'Amount to Send',
         'send_to_phone': 'Send to Phone Number',
-        'warning_no_note': '⚠️ Do NOT add any note or remark',
+        'warning_no_note': '⚠️ Write only "Payment" in the note/remark field',
         'upload_btn': 'Upload Payment Screenshot',
         'uploading_btn': 'Verifying your payment...',
         'upload_hint': 'After you\'ve sent the money, take a screenshot of the confirmation and upload it here. We\'ll verify it automatically in seconds.',
 
         // Checkout Guide
         'guide_title': 'Follow these steps',
+        'guide_step_4': 'Write only "Payment" in the note/remark',
+        'guide_step_4_hint': 'Do NOT write anything like "VPN" or "Subscription" — only write "Payment"',
         'guide_step_1': 'Open your banking app',
         'guide_step_1_hint': 'KPay, Wave, or AYA Pay',
         'guide_step_2': 'Send this exact amount',
         'guide_step_3': 'To this phone number',
         'tap_to_copy': 'Tap to copy',
         'copied': 'Copied!',
-        'guide_step_4': 'Leave the note/remark empty',
-        'guide_step_4_hint': 'Do NOT write anything like "VPN" or "subscription"',
-        'important_warning': 'Important: Send the exact amount shown above. Different amounts will fail verification. Do not add any notes or remarks.',
+
+        'important_warning': 'Important: Send the exact amount shown above. Different amounts will fail verification. Write only "Payment" in the note/remark — do NOT write "VPN" or "Subscription".',
 
         // Success / Fail
         'success_title': 'Payment Verified!',
@@ -194,6 +201,12 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_new_key_info': 'Plan သစ် ဝယ်ယူတိုင်း VPN key အသစ်တစ်ခု ရရှိပါမည်။ Unlimited Plan များတွင် Data ကန့်သတ်ချက် မရှိပါ။ Limited Plan များသည် ဈေးသက်သာသော်လည်း Data ကန့်သတ်ချက် ရှိပါသည်။',
         'help_filtered_plans': 'သင်၏ Key သည် {{type_desc}} ဖြစ်သောကြောင့် {{type}} Plan များကိုသာ ပြထားပါသည်။',
         'help_payments': 'လက်ခံသော ငွေပေးချေမှုများ: KPay · Wave · AYA Pay။ Plan ရွေးပြီးပါက ငွေလွှဲပြီး Screenshot တင်ကာ အသုံးပြုနိုင်ပါသည်။',
+
+        // Promo Code
+        'promo_placeholder': 'ပရိုမိုကုဒ်',
+        'promo_apply': 'အသုံးပြုမည်',
+        'promo_applied': '✅ ကုဒ်အသုံးပြုပြီး! {{percent}}% လျှော့စျေး',
+        'promo_invalid': '❌ ကုဒ်မမှန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ',
 
         // Checkout
         'creating_purchase': 'အော်ဒါ တင်နေသည်...',
