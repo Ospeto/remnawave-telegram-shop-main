@@ -35,39 +35,6 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 			slog.Error("error creating customer", "error", err)
 			return
 		}
-
-		if strings.Contains(update.Message.Text, "ref_") {
-			parts := strings.Split(update.Message.Text, " ")
-			if len(parts) > 1 {
-				arg := parts[1]
-				if strings.HasPrefix(arg, "ref_") {
-					code := strings.TrimPrefix(arg, "ref_")
-					referrerId, err := strconv.ParseInt(code, 10, 64)
-					if err != nil {
-						slog.Error("error parsing referrer id", "error", err)
-					} else if referrerId == existingCustomer.TelegramID {
-						// Bug fix 2: block self-referral
-						slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
-					} else {
-						// Bug fix 1: check both err == nil AND referrer != nil
-						referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
-						if err == nil && referrer != nil {
-							// Use a detached context so a handler timeout doesn't cancel this insert
-							ctxRef := context.WithoutCancel(ctx)
-							_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
-							if err != nil {
-								slog.Error("error creating referral", "error", err)
-							} else {
-								slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
-							}
-						}
-					}
-				}
-			} else {
-				slog.Warn("referral link malformed: no argument", "text", update.Message.Text)
-			}
-		}
-
 	} else {
 		updates := map[string]interface{}{
 			"language": langCode,
@@ -77,6 +44,53 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		if err != nil {
 			slog.Error("Error updating customer", "error", err)
 			return
+		}
+	}
+
+	// === Referral recording ===
+	// Works for BOTH new and existing users, as long as:
+	// 1. The message contains a ref_ code
+	// 2. The user has never made a paid purchase
+	// 3. The user doesn't already have a referral record (UNIQUE constraint)
+	if strings.Contains(update.Message.Text, "ref_") {
+		parts := strings.Split(update.Message.Text, " ")
+		if len(parts) > 1 {
+			arg := parts[1]
+			if strings.HasPrefix(arg, "ref_") {
+				code := strings.TrimPrefix(arg, "ref_")
+				referrerId, err := strconv.ParseInt(code, 10, 64)
+				if err != nil {
+					slog.Error("error parsing referrer id", "error", err)
+				} else if referrerId == existingCustomer.TelegramID {
+					slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
+				} else {
+					// Check if user already has a referral (prevents duplicate attempts)
+					existingRef, _ := h.referralRepository.FindByReferee(ctx, existingCustomer.TelegramID)
+					if existingRef != nil {
+						slog.Info("referral already exists for this user, skipping", "referee_id", utils.MaskHalfInt64(existingCustomer.TelegramID))
+					} else {
+						// Check if user has ever made a paid purchase
+						paidPurchase, _ := h.purchaseRepository.FindSuccessfulPaidPurchaseByCustomer(ctx, existingCustomer.ID)
+						if paidPurchase != nil {
+							slog.Info("user already has paid purchase, referral not eligible", "customer_id", utils.MaskHalfInt64(existingCustomer.ID))
+						} else {
+							// Verify referrer exists
+							referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
+							if err == nil && referrer != nil {
+								ctxRef := context.WithoutCancel(ctx)
+								_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+								if err != nil {
+									slog.Error("error creating referral", "error", err)
+								} else {
+									slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
+								}
+							}
+						}
+					}
+				}
+			}
+		} else {
+			slog.Warn("referral link malformed: no argument", "text", update.Message.Text)
 		}
 	}
 
