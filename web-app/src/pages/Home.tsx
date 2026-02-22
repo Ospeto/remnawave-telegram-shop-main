@@ -227,6 +227,29 @@ export function Home() {
                 </Link>
             </div>
 
+            {/* Referral Ambient Chip */}
+            {data && data.referral_count !== undefined && data.referral_count > 0 && (
+                <Link to="/wallet" style={{
+                    textDecoration: 'none',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '12px 16px',
+                    borderRadius: 14,
+                    background: 'var(--digital-card-inner-bg)',
+                    marginBottom: 24,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                    animationDelay: '0.15s'
+                }} className="animate-slide-up">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 18 }} aria-hidden="true">🤝</span>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-color)' }}>
+                            {t('referral_wallet_chip')
+                                .replace('{{count}}', data.referral_count.toString())
+                                .replace('{{earned}}', (data.referral_earned || 0).toLocaleString())}
+                        </span>
+                    </div>
+                </Link>
+            )}
+
             {/* Download App Prompt */}
             <div className="glass-card" style={{ background: 'var(--info-card-bg)', border: '1px solid var(--info-card-border)', padding: 16 }}>
                 <h3 style={{ fontSize: 'var(--font-body)', fontWeight: 700, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>

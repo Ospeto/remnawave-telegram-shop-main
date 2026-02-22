@@ -16,6 +16,7 @@ const (
 	WalletTransactionTypeTopup    WalletTransactionType = "topup"
 	WalletTransactionTypePurchase WalletTransactionType = "purchase"
 	WalletTransactionTypeRefund   WalletTransactionType = "refund"
+	WalletTransactionTypeReferral WalletTransactionType = "referral"
 )
 
 type WalletTransaction struct {

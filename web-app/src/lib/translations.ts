@@ -142,6 +142,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'no_refund_title': 'Refund Policy',
         'no_refund_desc': 'All plan purchases are final and non-refundable. Your wallet balance never expires.',
 
+        // ── Referral ──
+        'referral_earnings': '🤝 Referral Earnings',
+        'friends_invited': 'Friends invited:',
+        'total_earned': 'Total earned:',
+        'share_link': 'Share your link →',
+        'referral_pending': 'Pending',
+        'referral_bonus_received': 'Bonus Received',
+        'referral_wallet_chip': '{{count}} referral · {{earned}} earned →',
+        'referral_checkout_title': '🎁 Give 1000, Get 1000',
+        'referral_checkout_desc': 'Invite friends to Wavy and you both get free VPN balance!',
+        'referral_checkout_btn': 'Share link',
+
         // ── Wallet Tips ──
         'wallet_tips_title': 'Why use Wallet?',
         'wallet_tip_1_title': '🔒 Stay Connected 24/7',
@@ -319,6 +331,18 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_info': 'Wallet အတွင်းရှိ ငွေများသည် သက်တမ်းကုန်ဆုံးခြင်း မရှိဘဲ မည်သည့် Plan အတွက်မဆို အသုံးပြုနိုင်ပါသည်။',
         'no_refund_title': 'ငွေပြန်အမ်းနိုင်မှု မူဝါဒ',
         'no_refund_desc': 'Plan ဝယ်ယူပြီးပါက ငွေပြန်အမ်းခြင်း ပြုလုပ်၍ မရပါ။ Wallet ငွေများသည်မူ သက်တမ်းကုန်ဆုံးခြင်း မရှိပါ။',
+
+        // ── Referral ──
+        'referral_earnings': '🤝 မိတ်ဆက်ကြေး',
+        'friends_invited': 'ဖိတ်ခေါ်ထားသော သူငယ်ချင်းများ:',
+        'total_earned': 'စုစုပေါင်း ရရှိငွေ:',
+        'share_link': 'Link မျှဝေမည် →',
+        'referral_pending': 'စောင့်ဆိုင်းဆဲ',
+        'referral_bonus_received': 'ဘောနပ်စ် ရရှိပါသည်',
+        'referral_wallet_chip': 'မိတ်ဆက် {{count}} ယောက် · {{earned}} ကျပ် ရရှိပါသည် →',
+        'referral_checkout_title': '🎁 သူငယ်ချင်းများကို ဖိတ်ခေါ်ပါ',
+        'referral_checkout_desc': 'သူငယ်ချင်းများကို Wavy သို့ ဖိတ်ခေါ်ပြီး နှစ်ဦးစလုံး အခမဲ့ VPN list ရယူပါ!',
+        'referral_checkout_btn': 'Link မျှဝေမည်',
 
         // ── Wallet Tips ──
         'wallet_tips_title': 'Wallet ၏ အကျိုးကျေးဇူးများ',

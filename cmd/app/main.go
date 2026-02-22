@@ -200,7 +200,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
 
 	// Rate Limiter: 10 req/s, burst 20
 	// This prevents abuse while allowing normal usage patterns.

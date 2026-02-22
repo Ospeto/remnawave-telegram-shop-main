@@ -45,17 +45,26 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 					slog.Error("error parsing referrer id", "error", err)
 					return
 				}
-				_, err = h.customerRepository.FindByTelegramId(ctx, referrerId)
-				if err == nil {
-					_, err := h.referralRepository.Create(ctx, referrerId, existingCustomer.TelegramID)
-					if err != nil {
-						slog.Error("error creating referral", "error", err)
-						return
+				// Bug fix 2: block self-referral
+				if referrerId == existingCustomer.TelegramID {
+					slog.Warn("self-referral attempt blocked", "telegram_id", utils.MaskHalfInt64(referrerId))
+				} else {
+					// Bug fix 1: check both err == nil AND referrer != nil
+					referrer, err := h.customerRepository.FindByTelegramId(ctx, referrerId)
+					if err == nil && referrer != nil {
+						// Use a detached context so a handler timeout doesn't cancel this insert
+						ctxRef := context.WithoutCancel(ctx)
+						_, err := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+						if err != nil {
+							slog.Error("error creating referral", "error", err)
+							return
+						}
+						slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
 					}
-					slog.Info("referral created", "referrerId", utils.MaskHalfInt64(referrerId), "refereeId", utils.MaskHalfInt64(existingCustomer.TelegramID))
 				}
 			}
 		}
+
 	} else {
 		updates := map[string]interface{}{
 			"language": langCode,

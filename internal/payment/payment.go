@@ -410,53 +410,99 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	return nil
 }
 
-// processReferralBonus grants a referral bonus to the referrer if applicable.
+// referralBonusAmount is the wallet credit (in MMK) granted to each party when a referral converts.
+// The referrer gets this when their referee makes their first purchase.
+// The referee gets this as a welcome bonus on the same purchase.
+const referralBonusAmount = 1000.0
+
+// processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
+// the referee (new buyer) when the referee completes their first purchase.
 // This is intentionally non-fatal — errors are logged but never block the purchase flow.
 func (s *PaymentService) processReferralBonus(ctx context.Context, customer *database.Customer) {
 	// context.WithoutCancel inherits values (tracing, etc.) from the parent context
 	// but is not cancelled when the parent is cancelled, making this operation
 	// safe to run after the purchase flow completes.
-	ctxReferee := context.WithoutCancel(ctx)
-	referee, err := s.referralRepository.FindByReferee(ctxReferee, customer.TelegramID)
+	ctxRef := context.WithoutCancel(ctx)
+
+	referral, err := s.referralRepository.FindByReferee(ctxRef, customer.TelegramID)
 	if err != nil {
 		slog.Error("Referral lookup failed (non-fatal)", "error", err)
 		return
 	}
-	if referee == nil || referee.BonusGranted {
-		return
+	if referral == nil {
+		return // customer was not referred by anyone
 	}
-	refereeCustomer, err := s.customerRepository.FindByTelegramId(ctxReferee, referee.ReferrerID)
-	if err != nil {
-		slog.Error("Referral customer lookup failed (non-fatal)", "error", err)
-		return
+
+	// --- Credit REFERRER (person who shared the link) ---
+	if !referral.BonusGranted {
+		referrerCustomer, err := s.customerRepository.FindByTelegramId(ctxRef, referral.ReferrerID)
+		if err != nil || referrerCustomer == nil {
+			slog.Error("Referral: referrer customer lookup failed (non-fatal)", "error", err)
+			return
+		}
+
+		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, referralBonusAmount); err != nil {
+			slog.Error("Referral: failed to credit referrer balance (non-fatal)", "error", err)
+			return
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
+				CustomerID:  referrerCustomer.ID,
+				Amount:      referralBonusAmount,
+				Type:        database.WalletTransactionTypeReferral,
+				Description: "Referral bonus — friend made their first purchase",
+			}); err != nil {
+				slog.Error("Referral: failed to log referrer wallet transaction (non-fatal)", "error", err)
+			}
+		}
+
+		if err := s.referralRepository.MarkBonusGranted(ctxRef, referral.ID); err != nil {
+			slog.Error("Referral: failed to mark bonus_granted (non-fatal)", "error", err)
+		}
+
+		slog.Info("Granted referral bonus to referrer", "referrer_id", utils.MaskHalfInt64(referrerCustomer.ID), "amount", referralBonusAmount)
+
+		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+			ChatID:    referrerCustomer.TelegramID,
+			ParseMode: models.ParseModeHTML,
+			Text:      s.translation.GetText(referrerCustomer.Language, "referral_bonus_granted"),
+		}); err != nil {
+			slog.Error("Referral: bonus notification to referrer failed (non-fatal)", "error", err)
+		}
 	}
-	refereeUser, err := s.remnawaveClient.CreateOrUpdateUser(ctxReferee, refereeCustomer.ID, refereeCustomer.TelegramID, 0, config.GetReferralDays(), false)
-	if err != nil {
-		slog.Error("Referral bonus user creation failed (non-fatal)", "error", err)
-		return
-	}
-	refereeUserFilesToUpdate := map[string]interface{}{
-		"subscription_link": refereeUser.GetSubscriptionUrl(),
-		"expire_at":         refereeUser.GetExpireAt(),
-	}
-	if err := s.customerRepository.UpdateFields(ctxReferee, refereeCustomer.ID, refereeUserFilesToUpdate); err != nil {
-		slog.Error("Referral customer update failed (non-fatal)", "error", err)
-		return
-	}
-	if err := s.referralRepository.MarkBonusGranted(ctxReferee, referee.ID); err != nil {
-		slog.Error("Referral mark granted failed (non-fatal)", "error", err)
-		return
-	}
-	slog.Info("Granted referral bonus", "customer_id", utils.MaskHalfInt64(refereeCustomer.ID))
-	if _, err := s.telegramBot.SendMessage(ctxReferee, &bot.SendMessageParams{
-		ChatID:    refereeCustomer.TelegramID,
-		ParseMode: models.ParseModeHTML,
-		Text:      s.translation.GetText(refereeCustomer.Language, "referral_bonus_granted"),
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: s.createConnectKeyboard(refereeCustomer),
-		},
-	}); err != nil {
-		slog.Error("Referral bonus notification failed (non-fatal)", "error", err)
+
+	// --- Credit REFEREE (the new buyer who clicked the link) ---
+	if !referral.RefereeBonusGranted {
+		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, referralBonusAmount); err != nil {
+			slog.Error("Referral: failed to credit referee balance (non-fatal)", "error", err)
+			return
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
+				CustomerID:  customer.ID,
+				Amount:      referralBonusAmount,
+				Type:        database.WalletTransactionTypeReferral,
+				Description: "Welcome bonus — joined via referral link",
+			}); err != nil {
+				slog.Error("Referral: failed to log referee wallet transaction (non-fatal)", "error", err)
+			}
+		}
+
+		if err := s.referralRepository.MarkRefereeBonusGranted(ctxRef, referral.ID); err != nil {
+			slog.Error("Referral: failed to mark referee_bonus_granted (non-fatal)", "error", err)
+		}
+
+		slog.Info("Granted welcome bonus to referee", "referee_id", utils.MaskHalfInt64(customer.ID), "amount", referralBonusAmount)
+
+		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+			ChatID:    customer.TelegramID,
+			ParseMode: models.ParseModeHTML,
+			Text:      s.translation.GetText(customer.Language, "referee_bonus_granted"),
+		}); err != nil {
+			slog.Error("Referral: welcome bonus notification to referee failed (non-fatal)", "error", err)
+		}
 	}
 }
 

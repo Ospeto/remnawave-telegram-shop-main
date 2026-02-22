@@ -8,6 +8,7 @@ declare global {
                 expand: () => void;
                 close: () => void;
                 openLink: (url: string) => void;
+                openTelegramLink: (url: string) => void;
                 initData: string;
                 initDataUnsafe: {
                     user?: {

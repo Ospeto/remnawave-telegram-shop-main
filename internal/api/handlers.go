@@ -12,6 +12,7 @@ import (
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -34,13 +35,15 @@ type KeyResponse struct {
 }
 
 type ValidationResponse struct {
-	User          *database.Customer `json:"user"`
-	Keys          []KeyResponse      `json:"keys"`
-	IsActive      bool               `json:"is_active"`
-	ExpireAt      *time.Time         `json:"expire_at"`
-	DaysRemaining int                `json:"days_remaining"`
-	TrialEligible bool               `json:"trial_eligible"`
-	TrialDays     int                `json:"trial_days"`
+	User           *database.Customer `json:"user"`
+	Keys           []KeyResponse      `json:"keys"`
+	IsActive       bool               `json:"is_active"`
+	ExpireAt       *time.Time         `json:"expire_at"`
+	DaysRemaining  int                `json:"days_remaining"`
+	TrialEligible  bool               `json:"trial_eligible"`
+	TrialDays      int                `json:"trial_days"`
+	ReferralCount  int                `json:"referral_count"`
+	ReferralEarned float64            `json:"referral_earned"`
 }
 
 type PlanResponse struct {
@@ -101,6 +104,7 @@ type APIHandler struct {
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
 	walletService       WalletServiceInterface
+	referralRepo        *database.ReferralRepository
 }
 
 func NewAPIHandler(
@@ -111,6 +115,7 @@ func NewAPIHandler(
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
 	walletService WalletServiceInterface,
+	referralRepo *database.ReferralRepository,
 ) *APIHandler {
 	return &APIHandler{
 		customerRepo:        customerRepo,
@@ -120,6 +125,7 @@ func NewAPIHandler(
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
 		walletService:       walletService,
+		referralRepo:        referralRepo,
 	}
 }
 
@@ -395,14 +401,30 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Determine trial eligibility: trial enabled + no subscription ever created
 	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0
 
+	// Fetch referral summary for the home chip (non-fatal)
+	referralCount := 0
+	var referralEarned float64
+	if h.referralRepo != nil {
+		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
+			referralCount = len(refs)
+			for _, ref := range refs {
+				if ref.BonusGranted {
+					referralEarned += 1000
+				}
+			}
+		}
+	}
+
 	resp := ValidationResponse{
-		User:          customer,
-		Keys:          keys,
-		IsActive:      isActive,
-		ExpireAt:      customer.ExpireAt,
-		DaysRemaining: daysRemaining,
-		TrialEligible: trialEligible,
-		TrialDays:     config.TrialDays(),
+		User:           customer,
+		Keys:           keys,
+		IsActive:       isActive,
+		ExpireAt:       customer.ExpireAt,
+		DaysRemaining:  daysRemaining,
+		TrialEligible:  trialEligible,
+		TrialDays:      config.TrialDays(),
+		ReferralCount:  referralCount,
+		ReferralEarned: referralEarned,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -642,6 +664,67 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Wallet Handlers ---
+
+func maskHalfInt64(id int64) string {
+	s := strconv.FormatInt(id, 10)
+	if len(s) <= 4 {
+		return strings.Repeat("*", len(s))
+	}
+	maskLen := len(s) / 2
+	visibleLen := len(s) - maskLen
+	return strings.Repeat("*", maskLen) + s[visibleLen:]
+}
+
+func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	type ReferralItem struct {
+		ID        int64     `json:"id"`
+		MaskedID  string    `json:"masked_id"`
+		CreatedAt time.Time `json:"created_at"`
+		Status    string    `json:"status"` // "bonus_received" or "pending"
+	}
+
+	var items []ReferralItem
+	if h.referralRepo != nil {
+		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
+			for _, ref := range refs {
+				status := "pending"
+				if ref.BonusGranted {
+					status = "bonus_received"
+				}
+				items = append(items, ReferralItem{
+					ID:        ref.ID,
+					MaskedID:  maskHalfInt64(ref.RefereeID),
+					CreatedAt: ref.UsedAt,
+					Status:    status,
+				})
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
 
 func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

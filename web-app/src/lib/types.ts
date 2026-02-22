@@ -32,4 +32,6 @@ export interface UserData {
     days_remaining: number;
     trial_eligible: boolean;
     trial_days: number;
+    referral_count?: number;
+    referral_earned?: number;
 }

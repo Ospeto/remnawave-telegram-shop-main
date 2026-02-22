@@ -25,6 +25,7 @@ export function Wallet() {
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [referrals, setReferrals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
 
@@ -44,10 +45,12 @@ export function Wallet() {
     Promise.all([
       fetch('/api/wallet', { headers }).then(r => r.json()),
       fetch('/api/wallet/history?limit=10', { headers }).then(r => r.json()),
+      fetch('/api/referrals', { headers }).then(r => r.json()),
     ])
-      .then(([walletData, historyData]) => {
+      .then(([walletData, historyData, referralData]) => {
         setWallet(walletData);
         setTransactions(historyData || []);
+        setReferrals(referralData || []);
       })
       .catch(err => {
         console.warn('Wallet load error:', err);
@@ -180,58 +183,133 @@ export function Wallet() {
           {t('top_up_wallet')}
         </button>
 
-
       </div>
 
+      {/* Referral Card */}
+      <div
+        className="animate-slide-up"
+        style={{
+          borderRadius: 16,
+          padding: '20px',
+          background: 'var(--card-bg)',
+          border: '1px solid var(--border-color)',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
+          animationDelay: '0.1s'
+        }}
+      >
+        <h2 style={{ fontSize: '17px', fontWeight: 700, margin: '0 0 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {t('referral_earnings')}
+        </h2>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
+            <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('friends_invited')}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-color)' }}>{referrals.length}</div>
+          </div>
+          <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
+            <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('total_earned')}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-success)', display: 'flex', alignItems: 'baseline', gap: 4 }}>
+              +{referrals.filter(r => r.status === 'bonus_received').length * 1000} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
+            </div>
+          </div>
+        </div>
+
+        {
+          referrals.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+              {referrals.map(ref => (
+                <div key={ref.id} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '10px 12px', borderRadius: 8, background: 'var(--main-bg)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ fontSize: 16, opacity: 0.8 }}>👤</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace' }}>#{ref.masked_id}</div>
+                      <div className="text-hint" style={{ fontSize: 11 }}>{new Date(ref.created_at).toLocaleDateString()}</div>
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: 12, fontWeight: 600,
+                    color: ref.status === 'bonus_received' ? 'var(--color-success)' : 'var(--hint-color)',
+                    background: ref.status === 'bonus_received' ? 'rgba(52, 199, 89, 0.1)' : 'rgba(150, 150, 150, 0.1)',
+                    padding: '4px 8px', borderRadius: 6
+                  }}>
+                    {ref.status === 'bonus_received' ? `✅ ${t('referral_bonus_received')}` : `⏳ ${t('referral_pending')}`}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        }
+
+        {/* Share Button uses tg API if possible to pick chat, else copies */}
+        <button
+          onClick={() => {
+            const uid = tg?.initDataUnsafe?.user?.id;
+            if (!uid) return;
+            // Bot username is currently hardcoded for the frontend or injected from env. We will just use the default share dialogue.
+            const botUsername = "WavyVpnBot"; // Fallback, could be fetched via /api/me
+            const text = `Hey! Join Wavy Private Server using my link and we both get free VPN balance! 🌊`;
+            const url = `https://t.me/${botUsername}?start=${uid}`;
+            tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+          }}
+          style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
+        >
+          🎁 {t('share_link')}
+        </button>
+      </div >
 
       {/* Transaction History */}
-      <div>
+      < div >
         <h2 style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: '16px 0 12px' }}>
           {t('transaction_history')}
         </h2>
 
-        {transactions.length === 0 ? (
-          <div className="glass-card" style={{ padding: '32px 24px', textAlign: 'center', background: 'var(--card-bg)' }}>
-            <div style={{
-              fontSize: 40, marginBottom: 16,
-              background: 'var(--btn-sec-bg)', width: 80, height: 80, borderRadius: 40,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
-            }} aria-hidden="true">
-              📜
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>{t('wallet_empty_title')}</div>
-            <div className="text-hint" style={{ fontSize: 13, maxWidth: 280, margin: '0 auto', lineHeight: 1.5 }}>
-              {t('wallet_empty_desc')}
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {transactions.map((tx) => (
-              <div key={tx.id} className="glass-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ fontSize: 24 }} aria-hidden="true">{getTransactionIcon(tx.type)}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 'var(--font-body)', fontWeight: 500 }}>
-                    {tx.description || t(`transaction_${tx.type}`)}
-                  </div>
-                  <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>
-                    {new Date(tx.created_at).toLocaleDateString()}
-                  </div>
-                </div>
-                <div style={{
-                  fontSize: 15,
-                  fontWeight: 700,
-                  color: getTransactionColor(tx.type),
-                }}>
-                  {tx.amount > 0 ? '+' : ''}{(tx.amount || 0).toLocaleString()} {wallet.currency}
-                </div>
+        {
+          transactions.length === 0 ? (
+            <div className="glass-card" style={{ padding: '32px 24px', textAlign: 'center', background: 'var(--card-bg)' }}>
+              <div style={{
+                fontSize: 40, marginBottom: 16,
+                background: 'var(--btn-sec-bg)', width: 80, height: 80, borderRadius: 40,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px'
+              }} aria-hidden="true">
+                📜
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 6 }}>{t('wallet_empty_title')}</div>
+              <div className="text-hint" style={{ fontSize: 13, maxWidth: 280, margin: '0 auto', lineHeight: 1.5 }}>
+                {t('wallet_empty_desc')}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {transactions.map((tx) => (
+                <div key={tx.id} className="glass-card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: 24 }} aria-hidden="true">{getTransactionIcon(tx.type)}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 'var(--font-body)', fontWeight: 500 }}>
+                      {tx.description || t(`transaction_${tx.type}`)}
+                    </div>
+                    <div className="text-hint" style={{ fontSize: 11, marginTop: 2 }}>
+                      {new Date(tx.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: getTransactionColor(tx.type),
+                  }}>
+                    {tx.amount > 0 ? '+' : ''}{(tx.amount || 0).toLocaleString()} {wallet.currency}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        }
+      </div >
 
       {/* Wallet Tips */}
-      <div style={{ marginTop: 16 }}>
+      < div style={{ marginTop: 16 }}>
         <h2 style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: '0 0 12px' }}>
           {t('wallet_tips_title')}
         </h2>
@@ -258,7 +336,7 @@ export function Wallet() {
             </div>
           ))}
         </div>
-      </div>
+      </div >
 
       <div style={{ marginTop: 32, padding: '0 24px', textAlign: 'center', opacity: 0.6 }}>
         <div style={{ fontSize: 'var(--font-caption)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 6 }}>
@@ -270,6 +348,6 @@ export function Wallet() {
       </div>
 
       <div style={{ height: 32 }} />
-    </div>
+    </div >
   );
 }
