@@ -28,12 +28,13 @@ export function Home() {
     const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
     const { playClick } = useMXBrownSound();
 
-    const authHeaders = initData ? { 'Authorization': `twa ${initData}` } : undefined;
-
     const loadData = useCallback(() => {
         if (!initData) { setLoading(false); return; }
+
+        const currentAuthHeaders = { 'Authorization': `twa ${initData}` };
+
         setLoading(true);
-        fetcher('/api/me', authHeaders!)
+        fetcher('/api/me', currentAuthHeaders)
             .then(setData)
             .catch(err => setError(`${err.name}: ${err.message}`))
             .finally(() => setLoading(false));

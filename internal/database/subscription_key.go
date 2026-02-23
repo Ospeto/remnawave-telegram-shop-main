@@ -260,6 +260,40 @@ func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Contex
 	return keys, rows.Err()
 }
 
+// FindExpiringKeys returns all active keys whose expire_at is between startDate and endDate.
+func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]SubscriptionKey, error) {
+	query := sq.Select(subKeyColumns...).
+		From("subscription_key").
+		Where(sq.And{
+			sq.Eq{"status": "active"},
+			sq.NotEq{"expire_at": nil},
+			sq.GtOrEq{"expire_at": startDate},
+			sq.LtOrEq{"expire_at": endDate},
+		}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expiring query: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expiring keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []SubscriptionKey
+	for rows.Next() {
+		k, err := scanSubKeyFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, *k)
+	}
+	return keys, rows.Err()
+}
+
 // MarkKeyAutoRenewed stamps last_auto_renewed_at = now to prevent double-charge
 // if the cron fires twice before the subscription is actually extended.
 func (r *SubscriptionKeyRepository) MarkKeyAutoRenewed(ctx context.Context, keyID int64) error {

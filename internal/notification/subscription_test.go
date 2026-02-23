@@ -9,23 +9,39 @@ import (
 )
 
 type customerRepoMock struct {
-	customers *[]database.Customer
+	customers map[int64]*database.Customer
 	err       error
 }
 
-func (m *customerRepoMock) FindByExpirationRange(ctx context.Context, startDate, endDate time.Time) (*[]database.Customer, error) {
-	return m.customers, m.err
+func (m *customerRepoMock) FindById(ctx context.Context, id int64) (*database.Customer, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.customers[id], nil
+}
+
+type subKeyRepoMock struct {
+	keys []database.SubscriptionKey
+	err  error
+}
+
+func (m *subKeyRepoMock) FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]database.SubscriptionKey, error) {
+	return m.keys, m.err
 }
 
 func TestSubscriptionService_ProcessSubscriptionExpiration_SendsNotification(t *testing.T) {
 	expireAt := time.Now().Add(24 * time.Hour)
-	customers := []database.Customer{{ID: 1, ExpireAt: &expireAt}}
+	keys := []database.SubscriptionKey{{ID: 1, CustomerID: 10, ExpireAt: &expireAt}}
+	custs := map[int64]*database.Customer{
+		10: {ID: 10, TelegramID: 100},
+	}
 
-	cRepo := &customerRepoMock{customers: &customers}
+	skRepo := &subKeyRepoMock{keys: keys}
+	cRepo := &customerRepoMock{customers: custs}
 	notifyCalls := 0
 
-	svc := NewSubscriptionService(cRepo, nil, nil)
-	svc.notify = func(ctx context.Context, customer database.Customer) error {
+	svc := NewSubscriptionService(skRepo, cRepo, nil, nil)
+	svc.notify = func(ctx context.Context, key database.SubscriptionKey, customer database.Customer) error {
 		notifyCalls++
 		return nil
 	}
@@ -40,13 +56,12 @@ func TestSubscriptionService_ProcessSubscriptionExpiration_SendsNotification(t *
 }
 
 func TestSubscriptionService_ProcessSubscriptionExpiration_NoCustomers(t *testing.T) {
-	customers := []database.Customer{}
+	skRepo := &subKeyRepoMock{keys: []database.SubscriptionKey{}}
+	cRepo := &customerRepoMock{customers: map[int64]*database.Customer{}}
 
-	cRepo := &customerRepoMock{customers: &customers}
-
-	svc := NewSubscriptionService(cRepo, nil, nil)
-	svc.notify = func(ctx context.Context, customer database.Customer) error {
-		t.Fatalf("sendNotification should not be called when there are no customers")
+	svc := NewSubscriptionService(skRepo, cRepo, nil, nil)
+	svc.notify = func(ctx context.Context, key database.SubscriptionKey, customer database.Customer) error {
+		t.Fatalf("sendNotification should not be called when there are no keys")
 		return nil
 	}
 

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 )
@@ -56,6 +58,7 @@ type config struct {
 	geminiAPIKey                                              string
 	geminiModel                                               string
 	currency                                                  string
+	botURLMu                                                  sync.RWMutex
 }
 
 var conf config
@@ -186,9 +189,13 @@ func CryptoPayToken() string {
 	return conf.cryptoPayToken
 }
 func BotURL() string {
+	conf.botURLMu.RLock()
+	defer conf.botURLMu.RUnlock()
 	return conf.botURL
 }
 func SetBotURL(botURL string) {
+	conf.botURLMu.Lock()
+	defer conf.botURLMu.Unlock()
 	conf.botURL = botURL
 }
 func TrafficLimitResetStrategy() string {
