@@ -200,24 +200,7 @@ export function Home() {
                 </button>
             </div>
 
-            {/* Buy Key CTA — always visible at top */}
-            <Link
-                to="/plans"
-                className="btn-primary animate-slide-up"
-                style={{
-                    display: 'block',
-                    textAlign: 'center',
-                    textDecoration: 'none',
-                    padding: '14px',
-                    fontSize: 15,
-                    fontWeight: 700,
-                    borderRadius: 14,
-                    letterSpacing: '0.2px',
-                }}
-                onClick={() => playClick()}
-            >
-                ⚡ {t('buy_button')}
-            </Link>
+
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
                 <Link to="/wallet" className="digital-card animate-slide-up" style={{
@@ -296,6 +279,26 @@ export function Home() {
                     </a>
                 </div>
             </div>
+
+            {/* Buy Key CTA */}
+            <Link
+                to="/plans"
+                className="btn-primary animate-slide-up"
+                style={{
+                    display: 'block',
+                    textAlign: 'center',
+                    textDecoration: 'none',
+                    padding: '14px',
+                    fontSize: 15,
+                    fontWeight: 700,
+                    borderRadius: 14,
+                    letterSpacing: '0.2px',
+                    marginBottom: 16
+                }}
+                onClick={() => playClick()}
+            >
+                ⚡ {t('buy_button')}
+            </Link>
 
             {/* Key Cards */}
             {keys.length > 0 ? (

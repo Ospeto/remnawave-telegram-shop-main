@@ -8,6 +8,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'error_prefix': 'Error: ',
         'powered_by': 'Wavy Private Server',
         'open_in_tg': 'Open inside Telegram to use this app',
+        'buy_button': 'Buy New Key',
 
         // ── Navigation ──
         'nav_plan': 'Plan',
@@ -199,6 +200,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'error_prefix': 'ချို့ယွင်းချက်: ',
         'powered_by': 'Wavy Private Server',
         'open_in_tg': 'ဤ App အား Telegram အတွင်းမှသာ အသုံးပြုနိုင်ပါသည်',
+        'buy_button': 'Key အသစ်ဝယ်ရန်',
 
         // ── Navigation ──
         'nav_plan': 'ပက်ကေ့ချ် (Plan)',
