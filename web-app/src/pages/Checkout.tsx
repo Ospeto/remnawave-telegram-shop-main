@@ -213,7 +213,7 @@ export function Checkout() {
                     {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
                 </p>
 
-                {verificationResult?.happ_link && (
+                {verificationResult?.happ_link && !isWalletTopup && (
                     <button
                         className="btn-primary"
                         onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!); }}
@@ -223,7 +223,7 @@ export function Checkout() {
                     </button>
                 )}
 
-                {verificationResult?.happ_link && (
+                {verificationResult?.happ_link && !isWalletTopup && (
                     <p className="text-hint" style={{ margin: '-8px 0 0', fontSize: 11 }}>
                         {t('success_happ_hint')}
                     </p>
