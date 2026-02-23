@@ -523,28 +523,6 @@ export function Home() {
                 </>
             )}
 
-            {/* Buy new key button */}
-            <Link to="/plans" className="btn-primary animate-slide-up" style={{
-                textDecoration: 'none',
-                transition: 'all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                ...(data?.trial_eligible && keys.length === 0 ? {
-                    background: 'transparent',
-                    border: '1px solid var(--info-card-border)',
-                    color: 'var(--color-accent)',
-                    boxShadow: 'none'
-                } : {})
-            }}
-                onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.96)')}
-                onMouseUp={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                onTouchStart={(e) => (e.currentTarget.style.transform = 'scale(0.96)')}
-                onTouchEnd={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-            >
-                {keys.length > 0 ? t('btn_buy_new') : t('btn_get_started')}
-            </Link>
-
-
-
             {/* Contact Support */}
             <a
                 href="https://t.me/ospeto"
