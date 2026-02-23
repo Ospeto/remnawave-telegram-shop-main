@@ -108,7 +108,7 @@ func main() {
 		defer cryptoInvoiceCron.Stop()
 	}
 
-	subService := notification.NewSubscriptionService(customerRepository, b, tm)
+	subService := notification.NewSubscriptionService(subKeyRepo, customerRepository, b, tm)
 
 	subscriptionNotificationCronScheduler := subscriptionChecker(subService)
 	subscriptionNotificationCronScheduler.Start()
