@@ -200,7 +200,25 @@ export function Home() {
                 </button>
             </div>
 
-            {/* Wallet Button - Premium Digital Card */}
+            {/* Buy Key CTA — always visible at top */}
+            <Link
+                to="/plans"
+                className="btn-primary animate-slide-up"
+                style={{
+                    display: 'block',
+                    textAlign: 'center',
+                    textDecoration: 'none',
+                    padding: '14px',
+                    fontSize: 15,
+                    fontWeight: 700,
+                    borderRadius: 14,
+                    letterSpacing: '0.2px',
+                }}
+                onClick={() => playClick()}
+            >
+                ⚡ {t('buy_button')}
+            </Link>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
                 <Link to="/wallet" className="digital-card animate-slide-up" style={{
                     padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
@@ -253,7 +271,7 @@ export function Home() {
                 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{ fontSize: 18 }} aria-hidden="true">🤝</span>
-                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-color)' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--tg-text)' }}>
                             {t('referral_wallet_chip')
                                 .replace('{{count}}', data.referral_count.toString())
                                 .replace('{{earned}}', (data.referral_earned || 0).toLocaleString())}
