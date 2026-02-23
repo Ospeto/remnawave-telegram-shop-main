@@ -244,16 +244,13 @@ export function Home() {
 
             {/* Referral Ambient Chip */}
             {data && data.referral_count !== undefined && data.referral_count > 0 && (
-                <Link to="/wallet" style={{
+                <Link to="/wallet" className="glass-card animate-slide-up" style={{
                     textDecoration: 'none',
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '12px 16px',
-                    borderRadius: 14,
-                    background: 'var(--digital-card-inner-bg)',
                     marginBottom: 24,
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
                     animationDelay: '0.15s'
-                }} className="animate-slide-up">
+                }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{ fontSize: 18 }} aria-hidden="true">🤝</span>
                         <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-color)' }}>
