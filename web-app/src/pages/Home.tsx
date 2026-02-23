@@ -262,6 +262,7 @@ export function Home() {
                                 .replace('{{earned}}', (data.referral_earned || 0).toLocaleString())}
                         </span>
                     </div>
+                    <div style={{ color: 'var(--digital-card-hint)', fontSize: 16 }}>→</div>
                 </Link>
             )}
 
