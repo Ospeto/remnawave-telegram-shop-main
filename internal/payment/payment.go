@@ -595,6 +595,10 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 		}
 	}
 
+	if amount <= 0 {
+		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoID)
+	}
+
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
 		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID)
@@ -607,6 +611,32 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
+}
+
+func (s *PaymentService) createFreePurchase(ctx context.Context, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeWalletPayment, // Treat free purchases like wallet payments
+		Status:         database.PurchaseStatusNew,
+		Amount:         0,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
+	})
+	if err != nil {
+		slog.Error("Error creating free purchase", "error", err)
+		return "", 0, err
+	}
+
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		slog.Error("Error processing free purchase", "error", err, "purchase_id", purchaseId)
+		return "", 0, err
+	}
+
+	slog.Info("Free purchase processed successfully", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID), "promo_id", promoID)
+	return "", purchaseId, nil
 }
 
 func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {

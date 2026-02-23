@@ -77,11 +77,9 @@ func (s SyncService) Sync() {
 		}
 	}
 
-	err = s.customerRepository.DeleteByNotInTelegramIds(ctx, telegramIDs)
-	if err != nil {
-		slog.Error("Error while deleting users")
-	}
-	slog.Info("Deleted clients which not exist in panel")
+	// WARNING: We previously deleted customers here if they weren't in the panel.
+	// This is highly destructive because a Customer record holds their Wallet Balance.
+	// We MUST NOT delete the Customer just because they currently have no active keys.
 
 	if len(toCreate) > 0 {
 		if err := s.customerRepository.CreateBatch(ctx, toCreate); err != nil {
