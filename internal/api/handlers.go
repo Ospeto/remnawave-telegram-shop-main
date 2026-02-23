@@ -72,6 +72,7 @@ type CreatePurchaseResponse struct {
 	Instructions string `json:"instructions,omitempty"`
 	InvoiceType  string `json:"invoice_type"`
 	BotURL       string `json:"bot_url"`
+	HappLink     string `json:"happ_link,omitempty"`
 }
 
 // WalletServiceInterface defines the interface for wallet operations
@@ -273,6 +274,17 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		mobileNumber = config.MobileBankingPhone()
 	}
 
+	happLink := ""
+	if purchase.InvoiceType == database.InvoiceTypeWalletPayment {
+		if h.subKeyRepo != nil {
+			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+			if kErr == nil && len(keys) > 0 {
+				latestKey := keys[0]
+				happLink = "happ://add/" + latestKey.SubscriptionURL
+			}
+		}
+	}
+
 	resp := CreatePurchaseResponse{
 		PurchaseID:   purchase.ID,
 		PaymentPhone: mobileNumber,
@@ -281,6 +293,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		Instructions: instructions,
 		InvoiceType:  string(purchase.InvoiceType),
 		BotURL:       config.BotURL(),
+		HappLink:     happLink,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

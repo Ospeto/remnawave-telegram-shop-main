@@ -122,8 +122,8 @@ export function Checkout() {
                 throw new Error(text);
             }
 
-            await res.json();
-            setVerificationResult({ status: 'success', message: t('wallet_pay_success') });
+            const data = await res.json();
+            setVerificationResult({ status: 'success', message: t('wallet_pay_success'), happ_link: data.happ_link });
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : t('wallet_pay_error');
             setWalletPayError(msg || t('wallet_pay_error'));
