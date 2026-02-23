@@ -22,6 +22,7 @@ type Handler struct {
 	paymentService      *payment.PaymentService
 	syncService         *appSync.SyncService
 	subscriptionService *notification.SubscriptionService
+	subKeyRepo          *database.SubscriptionKeyRepository
 	referralRepository  *database.ReferralRepository
 	promoCodeRepository *database.PromoCodeRepository
 	appConfigRepository *database.AppConfigRepository
@@ -41,6 +42,7 @@ func NewHandler(
 	purchaseRepository *database.PurchaseRepository,
 	cryptoPayClient *cryptopay.Client,
 	subscriptionService *notification.SubscriptionService,
+	subKeyRepo *database.SubscriptionKeyRepository,
 	referralRepository *database.ReferralRepository,
 	promoCodeRepository *database.PromoCodeRepository,
 	appConfigRepository *database.AppConfigRepository,
@@ -55,6 +57,7 @@ func NewHandler(
 		cryptoPayClient:     cryptoPayClient,
 		translation:         translation,
 		subscriptionService: subscriptionService,
+		subKeyRepo:          subKeyRepo,
 		referralRepository:  referralRepository,
 		promoCodeRepository: promoCodeRepository,
 		appConfigRepository: appConfigRepository,

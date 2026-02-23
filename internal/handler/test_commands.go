@@ -87,7 +87,16 @@ func (h *Handler) NotiCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		return
 	}
 
-	err = h.subscriptionService.SendNotification(ctx, *customer)
+	keys, err := h.subKeyRepo.FindByCustomerID(ctx, customer.ID)
+	if err != nil || len(keys) == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Customer has no active subscription keys.",
+		})
+		return
+	}
+
+	err = h.subscriptionService.SendNotification(ctx, keys[0], *customer)
 	if err != nil {
 		slog.Error("Failed to send test notification", "error", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
