@@ -166,8 +166,7 @@ export function Checkout() {
     const copyToClipboard = (text: string) => {
         navigator.clipboard.writeText(text)
             .then(() => {
-                setPhoneCopied(true);
-                setTimeout(() => setPhoneCopied(false), 2000);
+                // Success handled by caller
             })
             .catch(() => {
                 // Fallback for environments where clipboard API is unavailable
@@ -179,8 +178,6 @@ export function Checkout() {
                 textArea.select();
                 document.execCommand('copy');
                 document.body.removeChild(textArea);
-                setPhoneCopied(true);
-                setTimeout(() => setPhoneCopied(false), 2000);
             });
     };
 
