@@ -926,7 +926,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
-	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType)
+	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType, GetAllPaymentPhones())
 	if err != nil {
 		slog.Error("Gemini analysis failed", "error", err, "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil

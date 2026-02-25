@@ -45,8 +45,24 @@ func NewClient(apiKey, model string) *Client {
 	}
 }
 
-const analysisPrompt = `Analyze this mobile banking payment screenshot from Myanmar. 
-This is a screenshot from KPay, WavePay, or AyaPay.
+// BuildAnalysisPrompt creates the Gemini analysis prompt with current payment phone numbers.
+func BuildAnalysisPrompt(phones map[string]string) string {
+	var phoneLines []string
+	for provider, phone := range phones {
+		labels := map[string]string{"kpay": "KPay", "wavepay": "WavePay", "ayapay": "AYA Pay"}
+		label := labels[provider]
+		if label == "" {
+			label = provider
+		}
+		phoneLines = append(phoneLines, fmt.Sprintf("  - %s: %s", label, phone))
+	}
+	phoneSection := ""
+	if len(phoneLines) > 0 {
+		phoneSection = fmt.Sprintf("\n\nOur configured receiving phone numbers are:\n%s\nThe recipient phone in the screenshot should match one of these numbers (some digits may be masked with asterisks).", strings.Join(phoneLines, "\n"))
+	}
+
+	return fmt.Sprintf(`Analyze this mobile banking payment screenshot from Myanmar. 
+This is a screenshot from KPay, WavePay, or AyaPay.%s
 
 Extract the following fields and respond ONLY with valid JSON (no markdown, no code fences):
 
@@ -66,7 +82,8 @@ Important:
 - For amount, extract only the numeric value of the FINAL PAID AMOUNT or TRANSFER AMOUNT. Ignore original price if discounted.
 - For is_valid, set to false if: the image is not a payment screenshot, appears to be a screenshot of another screenshot, is heavily blurred, or shows no payment information
 - For tampering_detected, carefully check for: inconsistent fonts or text sizes, pixel-level editing artifacts, unnatural sharp edges around text or numbers, areas with different compression levels, mismatched drop shadows, any signs of cut-paste or cloning, AI-generated content indicators
-- Return ONLY the JSON object, nothing else`
+- Return ONLY the JSON object, nothing else`, phoneSection)
+}
 
 // geminiRequest matches the Gemini REST API request body.
 type geminiRequest struct {
@@ -103,8 +120,10 @@ type geminiResponse struct {
 }
 
 // AnalyzePaymentScreenshot sends image bytes to Gemini and returns extracted payment info.
-func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string) (*PaymentInfo, error) {
+func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, phones map[string]string) (*PaymentInfo, error) {
 	b64Image := base64.StdEncoding.EncodeToString(imageBytes)
+
+	prompt := BuildAnalysisPrompt(phones)
 
 	reqBody := geminiRequest{
 		Contents: []geminiContent{
@@ -117,7 +136,7 @@ func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte
 						},
 					},
 					{
-						Text: analysisPrompt,
+						Text: prompt,
 					},
 				},
 			},
