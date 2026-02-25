@@ -415,6 +415,57 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 // and it persists in the app_config database table.
 var ReferralBonusAmount float64 = 1000.0
 
+// Per-provider payment phone numbers. Configurable via /setphone admin command.
+// These are loaded from app_config on startup and updated at runtime.
+var (
+	PhoneKPay    string
+	PhoneWavePay string
+	PhoneAyaPay  string
+)
+
+// GetAllPaymentPhones returns a map of provider→phone for all configured providers.
+func GetAllPaymentPhones() map[string]string {
+	phones := make(map[string]string)
+	if PhoneKPay != "" {
+		phones["kpay"] = PhoneKPay
+	}
+	if PhoneWavePay != "" {
+		phones["wavepay"] = PhoneWavePay
+	}
+	if PhoneAyaPay != "" {
+		phones["ayapay"] = PhoneAyaPay
+	}
+	return phones
+}
+
+// GetFirstPaymentPhone returns the first non-empty phone (backward compat).
+func GetFirstPaymentPhone() string {
+	if PhoneKPay != "" {
+		return PhoneKPay
+	}
+	if PhoneWavePay != "" {
+		return PhoneWavePay
+	}
+	if PhoneAyaPay != "" {
+		return PhoneAyaPay
+	}
+	return ""
+}
+
+// AnyPhoneMatchesSuffix checks if actualPhone matches any of the configured provider phones.
+func AnyPhoneMatchesSuffix(actualPhone string, digits int) bool {
+	actual := normalizePhone(actualPhone)
+	for _, p := range []string{PhoneKPay, PhoneWavePay, PhoneAyaPay} {
+		if p == "" {
+			continue
+		}
+		if phoneMatchesSuffix(normalizePhone(p), actual, digits) {
+			return true
+		}
+	}
+	return false
+}
+
 // processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
 // the referee (new buyer) when the referee completes their first purchase.
 // This is intentionally non-fatal — errors are logged but never block the purchase flow.
@@ -952,12 +1003,10 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: "mobile_pay_failed_duplicate"}, nil
 	}
 
-	// 3. Check phone number matches configured receiving phone.
+	// 3. Check phone number matches any configured receiving phone.
 	// Some banking apps mask part of the number, so we compare last 4 digits.
-	expectedPhone := normalizePhone(config.MobileBankingPhone())
-	actualPhone := normalizePhone(info.PhoneNumber)
-	if !phoneMatchesSuffix(expectedPhone, actualPhone, 4) {
-		slog.Warn("Phone mismatch", "expected", expectedPhone, "got", actualPhone, "purchase_id", purchaseID)
+	if !AnyPhoneMatchesSuffix(info.PhoneNumber, 4) {
+		slog.Warn("Phone mismatch", "got", info.PhoneNumber, "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Wrong recipient phone number", ReasonKey: "mobile_pay_failed_phone"}, nil
 	}
 

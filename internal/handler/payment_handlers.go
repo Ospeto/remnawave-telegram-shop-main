@@ -15,6 +15,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
 )
 
 func formatPrice(price int) string {
@@ -174,7 +175,7 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 	instructions := fmt.Sprintf(
 		h.translation.GetText(langCode, "mobile_pay_instructions"),
 		plan.Price,
-		config.MobileBankingPhone(),
+		payment.GetFirstPaymentPhone(),
 	)
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{

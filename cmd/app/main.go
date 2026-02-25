@@ -140,6 +140,29 @@ func main() {
 		appConfigRepo.Set(ctx, "referral_bonus_amount", "1000")
 	}
 
+	// Load per-provider payment phones from DB, falling back to MOBILE_BANKING_PHONE env var
+	fallbackPhone := ""
+	if config.IsMobileBankingEnabled() {
+		fallbackPhone = config.MobileBankingPhone()
+	}
+	for _, entry := range []struct {
+		dbKey string
+		ptr   *string
+	}{
+		{"phone_kpay", &payment.PhoneKPay},
+		{"phone_wavepay", &payment.PhoneWavePay},
+		{"phone_ayapay", &payment.PhoneAyaPay},
+	} {
+		v, loadErr := appConfigRepo.Get(ctx, entry.dbKey)
+		if loadErr == nil && v != "" {
+			*entry.ptr = v
+		} else if fallbackPhone != "" {
+			*entry.ptr = fallbackPhone
+			appConfigRepo.Set(ctx, entry.dbKey, fallbackPhone)
+		}
+	}
+	slog.Info("Payment phones loaded", "kpay", payment.PhoneKPay, "wavepay", payment.PhoneWavePay, "ayapay", payment.PhoneAyaPay)
+
 	mobilePayCache := cache.NewCache(1 * time.Hour)
 	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
 
@@ -191,6 +214,8 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/transactions", bot.MatchTypePrefix, h.TransactionsCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/setphone", bot.MatchTypePrefix, h.SetPhoneCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/phones", bot.MatchTypeExact, h.PhonesCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)

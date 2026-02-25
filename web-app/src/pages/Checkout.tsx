@@ -9,6 +9,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 interface PurchaseResponse {
     purchase_id: number;
     payment_phone: string;
+    payment_phones?: Record<string, string>;
     amount: number;
     currency: string;
     instructions: string;
@@ -34,7 +35,7 @@ export function Checkout() {
     const [error, setError] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
-    const [phoneCopied, setPhoneCopied] = useState(false);
+    const [phoneCopied, setPhoneCopied] = useState<string | null>(null);
 
     // Wallet payment state
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -371,14 +372,32 @@ export function Checkout() {
                                 <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-0.5px' }}>{(purchase?.amount || 0).toLocaleString()}</span>
                                 <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
                             </div>
-                            {/* Phone — card with big font + copy */}
-                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{purchase?.payment_phone}</div>
-                                    <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied ? 'var(--color-success)' : undefined }}>{phoneCopied ? '✓' : '📋'}</button>
+                            {/* Phone — per-provider cards */}
+                            {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                    {Object.entries(purchase.payment_phones).map(([provider, phone]) => {
+                                        const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
+                                        const label = labels[provider] || provider;
+                                        return (
+                                            <div key={provider} style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{label}</div>
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{phone}</div>
+                                                    <button onClick={() => { playClick(); copyToClipboard(phone); setPhoneCopied(provider); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === provider ? 'var(--color-success)' : undefined }}>{phoneCopied === provider ? '✓' : '📋'}</button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
-                            </div>
+                            ) : (
+                                <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                    <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                        <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{purchase?.payment_phone}</div>
+                                        <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); setPhoneCopied('default'); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === 'default' ? 'var(--color-success)' : undefined }}>{phoneCopied === 'default' ? '✓' : '📋'}</button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
