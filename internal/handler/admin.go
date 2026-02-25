@@ -42,6 +42,7 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 <b>Settings</b>
 /setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)
 /setphone &lt;provider&gt; &lt;number&gt; — Set phone for a provider (e.g. /setphone kpay 09123456789)
+/disablephone &lt;provider&gt; — Disable a provider (e.g. /disablephone aya)
 /phones — Show all configured payment phones
 
 <b>Transactions</b>
@@ -328,12 +329,12 @@ func (h Handler) PhonesCommandHandler(ctx context.Context, b *bot.Bot, update *m
 
 	format := func(label, phone string) string {
 		if phone == "" {
-			return fmt.Sprintf("%s: <i>not set</i>", label)
+			return fmt.Sprintf("❌ %s: <i>disabled</i>", label)
 		}
-		return fmt.Sprintf("%s: <code>%s</code>", label, phone)
+		return fmt.Sprintf("✅ %s: <code>%s</code>", label, phone)
 	}
 
-	text := fmt.Sprintf("📱 <b>Payment Phones</b>\n\n%s\n%s\n%s\n\nUse /setphone to update.",
+	text := fmt.Sprintf("📱 <b>Payment Phones</b>\n\n%s\n%s\n%s\n\nUse /setphone to enable, /disablephone to disable.",
 		format("KPay", payment.PhoneKPay),
 		format("WavePay", payment.PhoneWavePay),
 		format("AYA Pay", payment.PhoneAyaPay),
@@ -342,6 +343,69 @@ func (h Handler) PhonesCommandHandler(ctx context.Context, b *bot.Bot, update *m
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
 		Text:      text,
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+// DisablePhoneCommandHandler handles /disablephone <provider>
+func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	args := strings.Fields(update.Message.Text)
+	if len(args) != 2 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /disablephone <provider>\nProviders: kpay, wave, aya\nExample: /disablephone aya",
+		})
+		return
+	}
+
+	provider := strings.ToLower(args[1])
+
+	var dbKey string
+	var label string
+	switch provider {
+	case "kpay", "kbzpay", "kbz":
+		dbKey = "phone_kpay"
+		label = "KPay"
+	case "wave", "wavepay":
+		dbKey = "phone_wavepay"
+		label = "WavePay"
+	case "aya", "ayapay":
+		dbKey = "phone_ayapay"
+		label = "AYA Pay"
+	default:
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
+
+	// Clear in database
+	if err := h.appConfigRepository.Set(ctx, dbKey, ""); err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
+		})
+		return
+	}
+
+	// Clear in-memory
+	switch dbKey {
+	case "phone_kpay":
+		payment.PhoneKPay = ""
+	case "phone_wavepay":
+		payment.PhoneWavePay = ""
+	case "phone_ayapay":
+		payment.PhoneAyaPay = ""
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      fmt.Sprintf("✅ %s has been disabled and will no longer appear in checkout.", label),
 		ParseMode: models.ParseModeHTML,
 	})
 }

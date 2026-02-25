@@ -154,9 +154,11 @@ func main() {
 		{"phone_ayapay", &payment.PhoneAyaPay},
 	} {
 		v, loadErr := appConfigRepo.Get(ctx, entry.dbKey)
-		if loadErr == nil && v != "" {
+		if loadErr == nil {
+			// Key exists in DB — use its value (empty = disabled)
 			*entry.ptr = v
 		} else if fallbackPhone != "" {
+			// Key not in DB yet — seed with fallback
 			*entry.ptr = fallbackPhone
 			appConfigRepo.Set(ctx, entry.dbKey, fallbackPhone)
 		}
@@ -215,6 +217,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setphone", bot.MatchTypePrefix, h.SetPhoneCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/disablephone", bot.MatchTypePrefix, h.DisablePhoneCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/phones", bot.MatchTypeExact, h.PhonesCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
