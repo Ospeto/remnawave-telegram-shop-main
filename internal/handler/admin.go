@@ -54,7 +54,11 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 /addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
   Example: /addpromo SALE50 50% 10days 100code
 /listpromos — List all promo codes
-/deletepromo &lt;code&gt; — Delete a promo code`
+/deletepromo &lt;code&gt; — Delete a promo code
+
+<b>Testing &amp; Notifications</b>
+/test — Test mode commands
+/noti — Send subscription notifications`
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
