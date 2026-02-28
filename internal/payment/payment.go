@@ -960,7 +960,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 			Provider:      info.Provider,
 			PhoneNumber:   info.PhoneNumber,
 			Amount:        info.Amount,
-			Note:          info.Note + " [TEST_MODE]",
+			Note:          info.Note,
 			Verified:      true,
 		})
 		if err != nil {
@@ -972,7 +972,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		now := time.Now()
 		_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
 			"transaction_id": storedTxID,
-			"payment_method": info.Provider + " [TEST]",
+			"payment_method": info.Provider,
 			"payment_phone":  info.PhoneNumber,
 			"verified_at":    now,
 		})
