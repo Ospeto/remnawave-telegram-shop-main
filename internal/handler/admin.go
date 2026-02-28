@@ -48,6 +48,7 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 <b>Transactions</b>
 /transactions — Last 10 paid transactions
 /transactions 25 — Last N paid transactions (max 50)
+/revenue — Revenue summary (today + last 7 days)
 
 <b>Promo Codes</b>
 /addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
@@ -408,4 +409,131 @@ func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, upd
 		Text:      fmt.Sprintf("✅ %s has been disabled and will no longer appear in checkout.", label),
 		ParseMode: models.ParseModeHTML,
 	})
+}
+
+// RevenueCommandHandler handles /revenue — shows revenue summary.
+func (h Handler) RevenueCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	rows, err := h.purchaseRepository.GetRevenueSummary(ctx, 7)
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error fetching revenue: %v", err),
+		})
+		return
+	}
+
+	if len(rows) == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "📊 No revenue data for the last 7 days.",
+		})
+		return
+	}
+
+	// Group by day
+	today := time.Now().Format("2006-01-02")
+	var todayLines []string
+	var todayTotal float64
+	var todayTxns int
+
+	// map[day] => aggregated line
+	type daySummary struct {
+		Revenue  float64
+		Txns     int
+		Users    int
+		Currency string
+	}
+	dayMap := make(map[string]*daySummary)
+	var dayOrder []string
+
+	for _, r := range rows {
+		method := r.PaymentMethod
+		if method == "" {
+			method = "unknown"
+		}
+		currency := r.Currency
+		if currency == "" {
+			currency = "MMK"
+		}
+
+		if r.Day == today {
+			todayLines = append(todayLines, fmt.Sprintf("  %s: %s %s (%d txns)",
+				method, formatNumber(r.TotalRevenue), currency, r.TotalPurchases))
+			todayTotal += r.TotalRevenue
+			todayTxns += r.TotalPurchases
+		}
+
+		if _, ok := dayMap[r.Day]; !ok {
+			dayMap[r.Day] = &daySummary{Currency: currency}
+			dayOrder = append(dayOrder, r.Day)
+		}
+		d := dayMap[r.Day]
+		d.Revenue += r.TotalRevenue
+		d.Txns += r.TotalPurchases
+		if r.UniqueCustomers > d.Users {
+			d.Users = r.UniqueCustomers
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊 <b>Revenue Summary</b>\n\n")
+
+	// Today section
+	sb.WriteString("<b>Today</b>\n")
+	if len(todayLines) > 0 {
+		for _, l := range todayLines {
+			sb.WriteString(l + "\n")
+		}
+		sb.WriteString(fmt.Sprintf("  <b>Total: %s (%d txns)</b>\n", formatNumber(todayTotal), todayTxns))
+	} else {
+		sb.WriteString("  No sales yet today\n")
+	}
+
+	// 7-day breakdown
+	sb.WriteString("\n<b>Last 7 Days</b>\n")
+	for _, day := range dayOrder {
+		d := dayMap[day]
+		label := day
+		if day == today {
+			label = day + " (today)"
+		}
+		sb.WriteString(fmt.Sprintf("  %s: %s %s (%d txns, %d users)\n",
+			label, formatNumber(d.Revenue), d.Currency, d.Txns, d.Users))
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      sb.String(),
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+// formatNumber returns a human-readable number string with commas.
+func formatNumber(n float64) string {
+	if n == float64(int64(n)) {
+		// Integer — no decimals
+		s := strconv.FormatInt(int64(n), 10)
+		return addCommas(s)
+	}
+	s := fmt.Sprintf("%.2f", n)
+	parts := strings.SplitN(s, ".", 2)
+	return addCommas(parts[0]) + "." + parts[1]
+}
+
+func addCommas(s string) string {
+	if len(s) <= 3 {
+		return s
+	}
+	var result []byte
+	for i, ch := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(ch))
+	}
+	return string(result)
 }

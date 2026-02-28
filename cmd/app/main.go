@@ -23,6 +23,7 @@ import (
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -219,6 +220,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setphone", bot.MatchTypePrefix, h.SetPhoneCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/disablephone", bot.MatchTypePrefix, h.DisablePhoneCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/phones", bot.MatchTypeExact, h.PhonesCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/revenue", bot.MatchTypeExact, h.RevenueCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
@@ -241,7 +243,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient))
+	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, geminiClient))
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
 
 	// Rate Limiter: 10 req/s, burst 20
@@ -259,6 +261,57 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	// Daily revenue report cron job — runs at midnight every day
+	c := cron.New()
+	c.AddFunc("0 0 * * *", func() {
+		cronCtx, cronCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cronCancel()
+
+		rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 1)
+		if err != nil {
+			slog.Error("Daily revenue report failed", "error", err)
+			return
+		}
+
+		adminID := config.GetAdminTelegramId()
+		var totalRevenue float64
+		var totalTxns int
+		var lines []string
+
+		for _, r := range rows {
+			method := r.PaymentMethod
+			if method == "" {
+				method = "unknown"
+			}
+			currency := r.Currency
+			if currency == "" {
+				currency = "MMK"
+			}
+			lines = append(lines, fmt.Sprintf("  %s: %.0f %s (%d txns, %d users)",
+				method, r.TotalRevenue, currency, r.TotalPurchases, r.UniqueCustomers))
+			totalRevenue += r.TotalRevenue
+			totalTxns += r.TotalPurchases
+		}
+
+		yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+		var text string
+		if len(lines) == 0 {
+			text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n%s: No sales yesterday.", yesterday)
+		} else {
+			text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n<b>%s</b>\n%s\n\n<b>Total: %.0f MMK (%d txns)</b>",
+				yesterday, strings.Join(lines, "\n"), totalRevenue, totalTxns)
+		}
+
+		b.SendMessage(cronCtx, &bot.SendMessageParams{
+			ChatID:    adminID,
+			Text:      text,
+			ParseMode: models.ParseModeHTML,
+		})
+		slog.Info("Daily revenue report sent", "total", totalRevenue, "txns", totalTxns)
+	})
+	c.Start()
+	defer c.Stop()
 
 	slog.Info("Bot is starting...")
 	b.Start(ctx)
@@ -280,12 +333,13 @@ func newCronContext(jobName string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, uuid.New().String())
 }
 
-func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {
+func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, gc *gemini.Client) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		status := map[string]string{
 			"status":    "ok",
 			"db":        "ok",
 			"rw":        "ok",
+			"gemini":    "ok",
 			"time":      time.Now().Format(time.RFC3339),
 			"version":   Version,
 			"commit":    Commit,
@@ -306,6 +360,18 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {
 			status["rw"] = "error: " + err.Error()
 		}
 
+		// Gemini health check
+		if gc != nil {
+			gCtx, gCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer gCancel()
+			if err := gc.Ping(gCtx); err != nil {
+				status["status"] = "fail"
+				status["gemini"] = "error: " + err.Error()
+			}
+		} else {
+			status["gemini"] = "disabled"
+		}
+
 		// Set Content-Type before WriteHeader so it is actually sent.
 		w.Header().Set("Content-Type", "application/json")
 		if status["status"] == "ok" {
@@ -313,8 +379,8 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		fmt.Fprintf(w, `{"status":"%s","db":"%s","remnawave":"%s","time":"%s","version":"%s","commit":"%s","buildDate":"%s"}`,
-			status["status"], status["db"], status["rw"], status["time"], Version, Commit, BuildDate)
+		fmt.Fprintf(w, `{"status":"%s","db":"%s","remnawave":"%s","gemini":"%s","time":"%s","version":"%s","commit":"%s","buildDate":"%s"}`,
+			status["status"], status["db"], status["rw"], status["gemini"], status["time"], Version, Commit, BuildDate)
 	})
 }
 

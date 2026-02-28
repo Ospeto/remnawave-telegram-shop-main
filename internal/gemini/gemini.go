@@ -45,6 +45,27 @@ func NewClient(apiKey, model string) *Client {
 	}
 }
 
+// Ping verifies the Gemini API key is valid by listing models.
+func (c *Client) Ping(ctx context.Context) error {
+	url := "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create ping request: %w", err)
+	}
+	req.Header.Set("x-goog-api-key", c.apiKey)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("gemini ping failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("gemini ping returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // BuildAnalysisPrompt creates the Gemini analysis prompt with current payment phone numbers.
 func BuildAnalysisPrompt(phones map[string]string) string {
 	var phoneLines []string

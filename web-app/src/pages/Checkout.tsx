@@ -36,6 +36,7 @@ export function Checkout() {
     const [uploading, setUploading] = useState(false);
     const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
     const [phoneCopied, setPhoneCopied] = useState<string | null>(null);
+    const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
     // Wallet payment state
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -370,23 +371,40 @@ export function Checkout() {
                                 <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
                             </div>
                             {/* Phone — per-provider cards */}
-                            {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                    {Object.entries(purchase.payment_phones).map(([provider, phone]) => {
-                                        const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
-                                        const label = labels[provider] || provider;
-                                        return (
-                                            <div key={provider} style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{label}</div>
+                            {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (() => {
+                                const providers = Object.entries(purchase.payment_phones);
+                                const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
+                                // Auto-select if only 1 provider
+                                const effectiveSelected = providers.length === 1 ? providers[0][0] : selectedProvider;
+                                const selectedPhone = effectiveSelected ? purchase.payment_phones[effectiveSelected] : null;
+
+                                return (
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        {/* Provider selector buttons (only if 2+) */}
+                                        {providers.length > 1 && (
+                                            <div style={{ display: 'flex', gap: 6 }}>
+                                                {providers.map(([key]) => (
+                                                    <button key={key} onClick={() => { playClick(); setSelectedProvider(key); }} style={{ flex: 1, padding: '8px 4px', borderRadius: 10, border: effectiveSelected === key ? '2px solid var(--accent-color)' : '1px solid var(--input-border)', background: effectiveSelected === key ? 'var(--accent-color)' : 'var(--input-bg)', color: effectiveSelected === key ? '#fff' : 'inherit', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all 0.15s ease' }}>
+                                                        {labels[key] || key}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {/* Selected provider phone card */}
+                                        {effectiveSelected && selectedPhone ? (
+                                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{labels[effectiveSelected] || effectiveSelected}</div>
                                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{phone}</div>
-                                                    <button onClick={() => { playClick(); copyToClipboard(phone); setPhoneCopied(provider); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === provider ? 'var(--color-success)' : undefined }}>{phoneCopied === provider ? '✓' : '📋'}</button>
+                                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{selectedPhone}</div>
+                                                    <button onClick={() => { playClick(); copyToClipboard(selectedPhone); setPhoneCopied(effectiveSelected); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === effectiveSelected ? 'var(--color-success)' : undefined }}>{phoneCopied === effectiveSelected ? '✓' : '📋'}</button>
                                                 </div>
                                             </div>
-                                        );
-                                    })}
-                                </div>
-                            ) : (
+                                        ) : providers.length > 1 ? (
+                                            <div className="text-hint" style={{ textAlign: 'center', padding: 8, fontSize: 13 }}>{t('select_payment_method') || 'Select a payment method above'}</div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })() : (
                                 <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
                                     <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
