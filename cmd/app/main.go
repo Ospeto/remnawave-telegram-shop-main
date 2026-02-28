@@ -360,12 +360,11 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, gc *gemini.Clie
 			status["rw"] = "error: " + err.Error()
 		}
 
-		// Gemini health check
+		// Gemini health check (non-blocking — doesn't affect overall status)
 		if gc != nil {
 			gCtx, gCancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer gCancel()
 			if err := gc.Ping(gCtx); err != nil {
-				status["status"] = "fail"
 				status["gemini"] = "error: " + err.Error()
 			}
 		} else {
