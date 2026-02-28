@@ -268,18 +268,22 @@ func main() {
 		cronCtx, cronCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cronCancel()
 
-		rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 1)
+		rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
 		if err != nil {
 			slog.Error("Daily revenue report failed", "error", err)
 			return
 		}
 
 		adminID := config.GetAdminTelegramId()
+		yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
 		var totalRevenue float64
 		var totalTxns int
 		var lines []string
 
 		for _, r := range rows {
+			if r.Day != yesterday {
+				continue
+			}
 			method := r.PaymentMethod
 			if method == "" {
 				method = "unknown"
@@ -294,7 +298,6 @@ func main() {
 			totalTxns += r.TotalPurchases
 		}
 
-		yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
 		var text string
 		if len(lines) == 0 {
 			text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n%s: No sales yesterday.", yesterday)

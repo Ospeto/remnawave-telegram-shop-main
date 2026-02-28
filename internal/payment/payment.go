@@ -304,7 +304,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			return fmt.Errorf("subscription key %d not found", *purchase.ExtendKeyID)
 		}
 		// Build user description
-		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB/(1073741824), customer.TelegramID, purchase.TransactionID)
+		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB, customer.TelegramID, purchase.TransactionID)
 		ctx = context.WithValue(ctx, "description", userDesc)
 		// Extend the specific Remnawave user by UUID (adds days and traffic)
 		remnawaveUser, err := s.remnawaveClient.ExtendUser(ctx, existingKey.RemnawaveUUID, purchase.TrafficLimitGB*bytesInGB, purchase.Days)
@@ -334,7 +334,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		keyIndex := int(keyCount) + 1
 
 		// Build user description
-		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB/(1073741824), customer.TelegramID, purchase.TransactionID)
+		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB, customer.TelegramID, purchase.TransactionID)
 		ctx = context.WithValue(ctx, "description", userDesc)
 
 		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex, purchase.TransactionID)

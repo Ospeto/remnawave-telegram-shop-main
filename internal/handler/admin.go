@@ -529,8 +529,13 @@ func formatNumber(n float64) string {
 }
 
 func addCommas(s string) string {
+	neg := ""
+	if len(s) > 0 && s[0] == '-' {
+		neg = "-"
+		s = s[1:]
+	}
 	if len(s) <= 3 {
-		return s
+		return neg + s
 	}
 	var result []byte
 	for i, ch := range s {
@@ -539,5 +544,5 @@ func addCommas(s string) string {
 		}
 		result = append(result, byte(ch))
 	}
-	return string(result)
+	return neg + string(result)
 }
