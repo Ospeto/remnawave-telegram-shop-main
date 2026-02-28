@@ -265,12 +265,10 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 		userUpdate.Tag = remapi.NewOptNilString(tag)
 	}
 
-	var username string
-	if ctx.Value("username") != nil {
-		username = ctx.Value("username").(string)
-		userUpdate.Description = remapi.NewOptNilString(username)
-	} else {
-		username = ""
+	if desc, ok := ctx.Value("description").(string); ok && desc != "" {
+		userUpdate.Description = remapi.NewOptNilString(desc)
+	} else if ctx.Value("username") != nil {
+		userUpdate.Description = remapi.NewOptNilString(ctx.Value("username").(string))
 	}
 
 	updateUser, err := r.client.Users().UpdateUser(ctx, userUpdate)
@@ -282,7 +280,7 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 	}
 
 	tgid, _ := existingUser.TelegramId.Get()
-	slog.Info("updated user", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(username), "days", days)
+	slog.Info("updated user", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(existingUser.Username), "days", days)
 	return &updateUser.(*remapi.UserResponse).Response, nil
 }
 
@@ -364,7 +362,9 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 		createUserRequestDto.Tag = remapi.NewOptNilString(tag)
 	}
 
-	if tgUsername != "" {
+	if desc, ok := ctx.Value("description").(string); ok && desc != "" {
+		createUserRequestDto.Description = remapi.NewOptString(desc)
+	} else if tgUsername != "" {
 		createUserRequestDto.Description = remapi.NewOptString(tgUsername)
 	}
 

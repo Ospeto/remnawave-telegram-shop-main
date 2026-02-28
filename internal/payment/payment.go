@@ -303,6 +303,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		if err != nil || existingKey == nil {
 			return fmt.Errorf("subscription key %d not found", *purchase.ExtendKeyID)
 		}
+		// Build user description
+		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB/(1073741824), customer.TelegramID, purchase.TransactionID)
+		ctx = context.WithValue(ctx, "description", userDesc)
 		// Extend the specific Remnawave user by UUID (adds days and traffic)
 		remnawaveUser, err := s.remnawaveClient.ExtendUser(ctx, existingKey.RemnawaveUUID, purchase.TrafficLimitGB*bytesInGB, purchase.Days)
 		if err != nil {
@@ -329,6 +332,10 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		// CREATE new key — always creates a fresh Remnawave user
 		keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
 		keyIndex := int(keyCount) + 1
+
+		// Build user description
+		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB/(1073741824), customer.TelegramID, purchase.TransactionID)
+		ctx = context.WithValue(ctx, "description", userDesc)
 
 		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex, purchase.TransactionID)
 		if err != nil {
@@ -1057,6 +1064,26 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 }
 
 // normalizePhone strips formatting and country code to produce a comparable local number.
+// buildUserDescription creates a description for the Remnawave user.
+// Format: "Wavy: 1 Month 100GB | TG: 5075836448 | Tx: 01004066..."
+func buildUserDescription(paymentMethod, planLabel string, days int, trafficGB int, telegramID int64, txnID string) string {
+	provider := paymentMethod
+	if provider == "" {
+		provider = "Wavy"
+	}
+
+	plan := planLabel
+	if plan == "" {
+		plan = fmt.Sprintf("%d Days %dGB", days, trafficGB)
+	}
+
+	desc := fmt.Sprintf("%s: %s | TG: %d", provider, plan, telegramID)
+	if txnID != "" {
+		desc += " | Tx: " + txnID
+	}
+	return desc
+}
+
 func normalizePhone(phone string) string {
 	phone = strings.ReplaceAll(phone, " ", "")
 	phone = strings.ReplaceAll(phone, "-", "")
