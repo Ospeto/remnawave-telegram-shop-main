@@ -72,8 +72,7 @@ Extract the following fields and respond ONLY with valid JSON (no markdown, no c
   "phone_number": "the recipient phone number who received the money (even if partially masked with asterisks, extract whatever is visible)",
   "amount": numeric payment amount (no currency symbol, just the number),
   "note": "any note or remark text, empty string if none",
-  "is_valid": true if this looks like a genuine payment confirmation screenshot, false otherwise,
-  "tampering_detected": true if there are signs of image manipulation (Photoshop, AI generation, font inconsistencies, unnatural edges, misaligned text, cloned regions, resolution differences between areas, or other editing artifacts), false if the image appears authentic
+  "is_valid": true if this looks like a genuine payment confirmation screenshot, false otherwise
 }
 
 Important:
@@ -81,7 +80,6 @@ Important:
 - For phone_number, look for the RECIPIENT/RECEIVER phone number. If partially masked (e.g. 09***2220), extract what is visible including asterisks.
 - For amount, extract only the numeric value of the FINAL PAID AMOUNT or TRANSFER AMOUNT. Ignore original price if discounted.
 - For is_valid, set to false if: the image is not a payment screenshot, appears to be a screenshot of another screenshot, is heavily blurred, or shows no payment information
-- For tampering_detected, carefully check for: inconsistent fonts or text sizes, pixel-level editing artifacts, unnatural sharp edges around text or numbers, areas with different compression levels, mismatched drop shadows, any signs of cut-paste or cloning, AI-generated content indicators
 - Return ONLY the JSON object, nothing else`, phoneSection)
 }
 

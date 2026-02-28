@@ -937,12 +937,6 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
-	// Check for image tampering (Photoshop, AI generation, etc.)
-	if info.TamperingDetected {
-		slog.Warn("Gemini detected image tampering", "purchase_id", purchaseID, "provider", info.Provider)
-		return &VerificationResult{Success: false, Reason: "Screenshot appears to be altered or manipulated. Please upload an original, unedited screenshot.", ReasonKey: "mobile_pay_failed_generic"}, nil
-	}
-
 	// 1. Check transaction ID not empty
 	if strings.TrimSpace(info.TransactionID) == "" {
 		return &VerificationResult{Success: false, Reason: "No transaction ID found", ReasonKey: "mobile_pay_failed_generic"}, nil
