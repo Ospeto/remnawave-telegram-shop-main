@@ -54,7 +54,8 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 	req.Header.Set("x-goog-api-key", c.apiKey)
 
-	resp, err := c.httpClient.Do(req)
+	pingClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := pingClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("gemini ping failed: %w", err)
 	}

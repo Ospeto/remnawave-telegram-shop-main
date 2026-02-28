@@ -957,7 +957,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		isMagic := strings.TrimSpace(info.TransactionID) == testTransactionID
 		slog.Info("Test Mode processing", "purchase_id", purchaseID, "is_magic", isMagic)
 
-		// Record verification as "TEST_MODE_BYPASS"
+		// Record verification
 		// Append random suffix to transaction ID to avoid duplicate key violations on multiple tests
 		storedTxID := fmt.Sprintf("%s_%d", info.TransactionID, time.Now().UnixNano())
 

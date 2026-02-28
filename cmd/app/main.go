@@ -262,8 +262,9 @@ func main() {
 		}
 	}()
 
-	// Daily revenue report cron job — runs at midnight every day
-	c := cron.New()
+	// Daily revenue report cron job — runs at midnight Myanmar time (UTC+6:30)
+	mmtZone := time.FixedZone("MMT", 6*3600+30*60)
+	c := cron.New(cron.WithLocation(mmtZone))
 	c.AddFunc("0 0 * * *", func() {
 		cronCtx, cronCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cronCancel()
