@@ -93,7 +93,7 @@ func main() {
 	b, err := bot.New(
 		config.TelegramToken(),
 		bot.WithWorkers(3),
-		bot.WithCheckInitTimeout(20*time.Second),
+		bot.WithSkipGetMe(),
 	)
 	if err != nil {
 		panic(err)
@@ -154,7 +154,7 @@ func main() {
 	mobilePayCache := cache.NewCache(1 * time.Hour)
 	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
 
-	me, err := b.GetMe(ctx)
+	me, err := getBotIdentity(ctx, b)
 	if err != nil {
 		panic(err)
 	}
@@ -262,6 +262,33 @@ func newCronContext(jobName string) context.Context {
 	type requestIDKey struct{}
 	ctx := context.WithValue(context.Background(), cronJobKey{}, jobName)
 	return context.WithValue(ctx, requestIDKey{}, uuid.New().String())
+}
+
+func getBotIdentity(ctx context.Context, b *bot.Bot) (*models.User, error) {
+	var lastErr error
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		requestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		me, err := b.GetMe(requestCtx)
+		cancel()
+		if err == nil {
+			return me, nil
+		}
+
+		lastErr = err
+		slog.Warn("Telegram getMe failed during startup", "attempt", attempt, "error", err)
+		if attempt == 5 {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 3 * time.Second):
+		}
+	}
+
+	return nil, fmt.Errorf("telegram getMe failed after retries: %w", lastErr)
 }
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {
