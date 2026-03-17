@@ -90,7 +90,11 @@ func main() {
 		slog.Info("Mobile banking enabled", "phone", config.MobileBankingPhone(), "primary_ai", primaryAnalyzer.ProviderName(), "fallback_ai_enabled", fallbackAnalyzer != nil)
 	}
 
-	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
+	b, err := bot.New(
+		config.TelegramToken(),
+		bot.WithWorkers(3),
+		bot.WithCheckInitTimeout(20*time.Second),
+	)
 	if err != nil {
 		panic(err)
 	}
