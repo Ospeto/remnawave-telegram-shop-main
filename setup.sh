@@ -488,12 +488,20 @@ wizard() {
     ask_bool "Enable Mobile Banking?" "false" "MOBILE_BANKING_ENABLED"
     if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
         ask_required "Receiving Phone Number" "" "MOBILE_BANKING_PHONE"
-        ask_required "Gemini API Key" "" "GEMINI_API_KEY"
+        ask_required "Gemini API Key (primary)" "" "GEMINI_API_KEY"
         ask "Gemini Model" "gemini-2.5-flash" "GEMINI_MODEL"
+        ask "OpenRouter API Key (optional fallback)" "" "OPENROUTER_API_KEY"
+        if [[ -n "${CFG[OPENROUTER_API_KEY]}" ]]; then
+            ask "OpenRouter Model" "google/gemini-2.5-flash" "OPENROUTER_MODEL"
+        else
+            CFG[OPENROUTER_MODEL]="google/gemini-2.5-flash"
+        fi
     else
         CFG[MOBILE_BANKING_PHONE]=""
         CFG[GEMINI_API_KEY]=""
         CFG[GEMINI_MODEL]="gemini-2.5-flash"
+        CFG[OPENROUTER_API_KEY]=""
+        CFG[OPENROUTER_MODEL]="google/gemini-2.5-flash"
         print_info "Mobile Banking disabled — skipping."
     fi
 
@@ -601,6 +609,8 @@ MOBILE_BANKING_ENABLED=${CFG[MOBILE_BANKING_ENABLED]}
 MOBILE_BANKING_PHONE=${CFG[MOBILE_BANKING_PHONE]}
 GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
 GEMINI_MODEL=${CFG[GEMINI_MODEL]}
+OPENROUTER_API_KEY=${CFG[OPENROUTER_API_KEY]}
+OPENROUTER_MODEL=${CFG[OPENROUTER_MODEL]}
 
 # ── Traffic & Referral ──────────────────────────────────────
 TRAFFIC_LIMIT_RESET_STRATEGY=${CFG[TRAFFIC_LIMIT_RESET_STRATEGY]}

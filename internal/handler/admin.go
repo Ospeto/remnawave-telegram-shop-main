@@ -38,6 +38,7 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 /start — Show main menu
 /help — Show this help message
 /sync — Sync users with Remnawave
+/apicheck — Check receipt AI API connectivity
 
 <b>Settings</b>
 /setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)

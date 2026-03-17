@@ -55,6 +55,8 @@ type config struct {
 	mobileBankingPhone                                        string
 	geminiAPIKey                                              string
 	geminiModel                                               string
+	openRouterAPIKey                                          string
+	openRouterModel                                           string
 	currency                                                  string
 }
 
@@ -209,6 +211,14 @@ func GeminiAPIKey() string {
 
 func GeminiModel() string {
 	return conf.geminiModel
+}
+
+func OpenRouterAPIKey() string {
+	return conf.openRouterAPIKey
+}
+
+func OpenRouterModel() string {
+	return conf.openRouterModel
 }
 
 func Currency() string {
@@ -544,6 +554,8 @@ func InitConfig() {
 		conf.mobileBankingPhone = mustEnv("MOBILE_BANKING_PHONE")
 		conf.geminiAPIKey = mustEnv("GEMINI_API_KEY")
 		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
+		conf.openRouterAPIKey = os.Getenv("OPENROUTER_API_KEY")
+		conf.openRouterModel = envStringDefault("OPENROUTER_MODEL", "google/gemini-2.5-flash")
 	}
 
 	conf.currency = envStringDefault("CURRENCY", "MMK")

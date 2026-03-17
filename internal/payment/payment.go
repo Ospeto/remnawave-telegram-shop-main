@@ -9,7 +9,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/cryptopay"
 	"remnawave-tg-shop-bot/internal/database"
-	"remnawave-tg-shop-bot/internal/gemini"
+	"remnawave-tg-shop-bot/internal/receiptai"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
@@ -48,7 +48,7 @@ type PaymentService struct {
 	cryptoPayClient     *cryptopay.Client
 	referralRepository  *database.ReferralRepository
 	cache               *cache.Cache
-	geminiClient        *gemini.Client
+	receiptAnalyzer     receiptai.Analyzer
 	mobilePaymentRepo   *database.MobilePaymentRepository
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
@@ -67,7 +67,7 @@ func NewPaymentService(
 	cryptoPayClient *cryptopay.Client,
 	referralRepository *database.ReferralRepository,
 	cache *cache.Cache,
-	geminiClient *gemini.Client,
+	receiptAnalyzer receiptai.Analyzer,
 	mobilePaymentRepo *database.MobilePaymentRepository,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
@@ -82,7 +82,7 @@ func NewPaymentService(
 		cryptoPayClient:     cryptoPayClient,
 		referralRepository:  referralRepository,
 		cache:               cache,
-		geminiClient:        geminiClient,
+		receiptAnalyzer:     receiptAnalyzer,
 		mobilePaymentRepo:   mobilePaymentRepo,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
@@ -116,6 +116,38 @@ func (s *PaymentService) IsTestMode() bool {
 	s.testModeMu.RLock()
 	defer s.testModeMu.RUnlock()
 	return s.testMode
+}
+
+func (s *PaymentService) CheckReceiptAnalyzer(ctx context.Context) error {
+	if s.receiptAnalyzer == nil {
+		return fmt.Errorf("receipt analyzer is not configured")
+	}
+
+	return s.receiptAnalyzer.CheckHealth(ctx)
+}
+
+func (s *PaymentService) ReceiptAnalyzerProvider() string {
+	if s.receiptAnalyzer == nil {
+		return "Receipt AI"
+	}
+
+	return s.receiptAnalyzer.ProviderName()
+}
+
+func (s *PaymentService) ReceiptAnalyzerHealthReport(ctx context.Context) []receiptai.ProviderStatus {
+	reporter, ok := s.receiptAnalyzer.(receiptai.HealthReporter)
+	if !ok || reporter == nil {
+		if s.receiptAnalyzer == nil {
+			return nil
+		}
+		return []receiptai.ProviderStatus{{
+			Role: "Primary",
+			Name: s.receiptAnalyzer.ProviderName(),
+			Err:  s.receiptAnalyzer.CheckHealth(ctx),
+		}}
+	}
+
+	return reporter.HealthReport(ctx)
 }
 
 // GetTestTransactionID returns the magic bypass transaction ID for test mode.
@@ -828,7 +860,7 @@ type VerificationResult struct {
 }
 
 func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
-	if s.geminiClient == nil {
+	if s.receiptAnalyzer == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
@@ -845,20 +877,20 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
-	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType)
+	info, err := s.receiptAnalyzer.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType)
 	if err != nil {
-		slog.Error("Gemini analysis failed", "error", err, "purchase_id", purchaseID)
+		slog.Error("Receipt analysis failed", "provider", s.receiptAnalyzer.ProviderName(), "error", err, "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
 	if !info.IsValid {
-		slog.Warn("Gemini flagged screenshot as invalid", "purchase_id", purchaseID)
+		slog.Warn("Receipt analyzer flagged screenshot as invalid", "provider", s.receiptAnalyzer.ProviderName(), "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
 	// Check for image tampering (Photoshop, AI generation, etc.)
 	if info.TamperingDetected {
-		slog.Warn("Gemini detected image tampering", "purchase_id", purchaseID, "provider", info.Provider)
+		slog.Warn("Receipt analyzer detected image tampering", "provider", s.receiptAnalyzer.ProviderName(), "purchase_id", purchaseID, "payment_provider", info.Provider)
 		return &VerificationResult{Success: false, Reason: "Screenshot appears to be altered or manipulated. Please upload an original, unedited screenshot.", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 

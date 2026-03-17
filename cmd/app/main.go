@@ -15,7 +15,9 @@ import (
 	"remnawave-tg-shop-bot/internal/gemini"
 	"remnawave-tg-shop-bot/internal/handler"
 	"remnawave-tg-shop-bot/internal/notification"
+	"remnawave-tg-shop-bot/internal/openrouter"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/receiptai"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/service/autorenew"
 	"remnawave-tg-shop-bot/internal/service/invoicechecker"
@@ -74,13 +76,18 @@ func main() {
 	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
 	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
 
-	// Mobile banking / Gemini
-	var geminiClient *gemini.Client
+	// Mobile banking / receipt AI
+	var receiptAnalyzer receiptai.Analyzer
 	var mobilePaymentRepo *database.MobilePaymentRepository
 	if config.IsMobileBankingEnabled() {
-		geminiClient = gemini.NewClient(config.GeminiAPIKey(), config.GeminiModel())
+		primaryAnalyzer := receiptai.Analyzer(gemini.NewClient(config.GeminiAPIKey(), config.GeminiModel()))
+		var fallbackAnalyzer receiptai.Analyzer
+		if config.OpenRouterAPIKey() != "" {
+			fallbackAnalyzer = openrouter.NewClient(config.OpenRouterAPIKey(), config.OpenRouterModel())
+		}
+		receiptAnalyzer = receiptai.NewFailoverAnalyzer(primaryAnalyzer, fallbackAnalyzer)
 		mobilePaymentRepo = database.NewMobilePaymentRepository(pool)
-		slog.Info("Mobile banking enabled", "phone", config.MobileBankingPhone())
+		slog.Info("Mobile banking enabled", "phone", config.MobileBankingPhone(), "primary_ai", primaryAnalyzer.ProviderName(), "fallback_ai_enabled", fallbackAnalyzer != nil)
 	}
 
 	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
@@ -89,7 +96,7 @@ func main() {
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, receiptAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
 
 	// Initialize WalletService second (depends on PaymentService)
 	walletService := wallet.NewWalletService(paymentService, customerRepository, purchaseRepository, remnawaveClient, b, tm, subKeyRepo, walletTxRepo)
@@ -192,6 +199,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/apicheck", bot.MatchTypeExact, h.APICheckCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/notify", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)

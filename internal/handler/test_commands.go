@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -100,5 +101,44 @@ func (h *Handler) NotiCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("✅ Notification sent to %d successfully.", telegramID),
+	})
+}
+
+func (h *Handler) APICheckCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil {
+		return
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+
+	report := h.paymentService.ReceiptAnalyzerHealthReport(checkCtx)
+	if len(report) == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Receipt AI is not configured.",
+		})
+		return
+	}
+
+	var body strings.Builder
+	overallOK := false
+	body.WriteString("Receipt AI health report\n\n")
+	for _, item := range report {
+		if item.Err == nil {
+			overallOK = true
+			body.WriteString(fmt.Sprintf("✅ %s: %s\n", item.Role, item.Name))
+			continue
+		}
+		body.WriteString(fmt.Sprintf("❌ %s: %s\nError: %v\n\n", item.Role, item.Name, item.Err))
+	}
+
+	if !overallOK {
+		body.WriteString("No provider is currently healthy.")
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   strings.TrimSpace(body.String()),
 	})
 }

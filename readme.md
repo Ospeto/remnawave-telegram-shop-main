@@ -28,7 +28,8 @@ A complete, self-hosted Telegram Shop Bot for selling digital goods (subscriptio
 -   A **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather)).
 -   A **Remnawave Panel** URL and API Token (for key generation).
 -   *(Optional)* **CryptoPay** API Token for crypto payments.
--   *(Optional)* **Gemini API Key** for AI verification of payment screenshots.
+-   **Gemini API Key** for primary AI verification of payment screenshots.
+-   *(Optional)* **OpenRouter API Key** as fallback if Gemini is unavailable.
 
 ## Getting Started
 
