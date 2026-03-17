@@ -25,6 +25,7 @@ import (
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -194,19 +195,27 @@ func main() {
 
 	config.SetBotURL(fmt.Sprintf("https://t.me/%s", me.Username))
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, h.StartCommandHandler, h.SuspiciousUserFilterMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/connect", bot.MatchTypeExact, h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/addpromo", bot.MatchTypePrefix, h.AddPromoCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/listpromos", bot.MatchTypeExact, h.ListPromosCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/deletepromo", bot.MatchTypePrefix, h.DeletePromoCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/transactions", bot.MatchTypePrefix, h.TransactionsCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/apicheck", bot.MatchTypeExact, h.APICheckCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/notify", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
+	registerCommand := func(name string, handlerFunc bot.HandlerFunc, middlewares ...bot.Middleware) {
+		b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+			return messageHasCommand(update, name)
+		}, handlerFunc, middlewares...)
+	}
+
+	registerCommand("start", h.StartCommandHandler, h.SuspiciousUserFilterMiddleware)
+	registerCommand("connect", h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	registerCommand("addpromo", h.AddPromoCommandHandler, isAdminMiddleware)
+	registerCommand("listpromos", h.ListPromosCommandHandler, isAdminMiddleware)
+	registerCommand("deletepromo", h.DeletePromoCommandHandler, isAdminMiddleware)
+	registerCommand("transactions", h.TransactionsCommandHandler, isAdminMiddleware)
+	registerCommand("help", h.HelpCommandHandler, isAdminMiddleware)
+	registerCommand("setreferralbonus", h.SetReferralBonusCommandHandler, isAdminMiddleware)
+	registerCommand("sync", h.SyncUsersCommandHandler, isAdminMiddleware)
+	registerCommand("apicheck", h.APICheckCommandHandler, isAdminMiddleware)
+	registerCommand("apihealth", h.APICheckCommandHandler, isAdminMiddleware)
+	registerCommand("healthcheck", h.HealthCheckCommandHandler, isAdminMiddleware)
+	registerCommand("test", h.TestCommandHandler, isAdminMiddleware)
+	registerCommand("noti", h.NotiCommandHandler, isAdminMiddleware)
+	registerCommand("notify", h.NotiCommandHandler, isAdminMiddleware)
 
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackReferral, bot.MatchTypeExact, h.ReferralCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackBuy, bot.MatchTypeExact, h.BuyCallbackHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
@@ -289,6 +298,29 @@ func getBotIdentity(ctx context.Context, b *bot.Bot) (*models.User, error) {
 	}
 
 	return nil, fmt.Errorf("telegram getMe failed after retries: %w", lastErr)
+}
+
+func messageHasCommand(update *models.Update, name string) bool {
+	if update == nil || update.Message == nil || update.Message.Text == "" {
+		return false
+	}
+
+	for _, entity := range update.Message.Entities {
+		if entity.Type != models.MessageEntityTypeBotCommand || entity.Offset != 0 {
+			continue
+		}
+
+		end := entity.Offset + entity.Length
+		if end > len(update.Message.Text) || end <= entity.Offset {
+			continue
+		}
+
+		command := strings.TrimPrefix(update.Message.Text[entity.Offset:end], "/")
+		command = strings.SplitN(command, "@", 2)[0]
+		return command == name
+	}
+
+	return false
 }
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client) http.Handler {

@@ -34,24 +34,34 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 
 	helpText := `🛠 <b>Admin Commands</b>
 
-<b>General</b>
-/start — Show main menu
-/help — Show this help message
-/sync — Sync users with Remnawave
-/apicheck — Check receipt AI API connectivity
-
-<b>Settings</b>
-/setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)
+<b>Diagnostics</b>
+<code>/help</code> — Show this help message
+<code>/sync</code> — Sync users with Remnawave
+<code>/apicheck</code> — Check receipt AI providers
+<code>/apihealth</code> — Alias for /apicheck
+<code>/healthcheck</code> — Check app, DB, and Remnawave health
 
 <b>Transactions</b>
-/transactions — Last 10 paid transactions
-/transactions 25 — Last N paid transactions (max 50)
+<code>/transactions</code> — Last 10 paid transactions
+<code>/transactions 25</code> — Last N paid transactions (max 50)
 
 <b>Promo Codes</b>
-/addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
-  Example: /addpromo SALE50 50% 10days 100code
-/listpromos — List all promo codes
-/deletepromo &lt;code&gt; — Delete a promo code`
+<code>/addpromo SALE50 50% 10days 100code</code> — Create a promo code
+<code>/listpromos</code> — List all promo codes
+<code>/deletepromo SALE50</code> — Delete a promo code
+
+<b>Settings</b>
+<code>/setreferralbonus 2000</code> — Change referral bonus amount
+
+<b>Testing</b>
+<code>/test enable</code> — Enable receipt test mode
+<code>/test disable</code> — Disable receipt test mode
+<code>/noti 532666374</code> — Send a test notification
+<code>/notify 532666374</code> — Alias for /noti
+
+<b>User Commands</b>
+<code>/start</code> — Show main menu
+<code>/connect</code> — Open connection instructions`
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,

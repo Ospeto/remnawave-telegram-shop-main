@@ -3,7 +3,10 @@ package handler
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"remnawave-tg-shop-bot/internal/config"
 	"strconv"
 	"strings"
 	"time"
@@ -140,5 +143,49 @@ func (h *Handler) APICheckCommandHandler(ctx context.Context, b *bot.Bot, update
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   strings.TrimSpace(body.String()),
+	})
+}
+
+func (h *Handler) HealthCheckCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message == nil {
+		return
+	}
+
+	checkCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/healthcheck", config.GetHealthCheckPort())
+	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, url, nil)
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Failed to build healthcheck request: %v", err),
+		})
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Healthcheck request failed: %v", err),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Failed to read healthcheck response: %v", err),
+		})
+		return
+	}
+
+	text := fmt.Sprintf("Healthcheck status: %s\n%s", resp.Status, strings.TrimSpace(string(body)))
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   text,
 	})
 }
