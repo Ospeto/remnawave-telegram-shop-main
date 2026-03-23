@@ -114,7 +114,7 @@ export function Home() {
                 headers: { 'Authorization': `twa ${initData}` },
             });
             if (res.status === 409) {
-                setTrialError('Trial already used');
+                setTrialError(t('trial_already_used'));
                 return;
             }
             if (!res.ok) throw new Error(`${res.status}`);

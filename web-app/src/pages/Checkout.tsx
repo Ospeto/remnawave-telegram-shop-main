@@ -3,8 +3,10 @@ import { useTelegram } from '../lib/twa';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
+import { ErrorScreen } from '../components/ErrorScreen';
 import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
+import { Plan, UserData } from '../lib/types';
 
 interface PurchaseResponse {
     purchase_id: number;
@@ -15,7 +17,10 @@ interface PurchaseResponse {
     instructions: string;
     invoice_type: string;
     bot_url: string;
+    happ_link?: string;
 }
+
+type CheckoutAction = 'manual' | 'wallet' | 'topup';
 
 export function Checkout() {
     const { planIndex } = useParams();
@@ -29,10 +34,15 @@ export function Checkout() {
     const promoCode = searchParams.get('promo');
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
     const amountParam = searchParams.get('amount');
+    const parsedPlanIndex = Number(planIndex);
+    const backTarget = `/plans${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
 
+    const [plans, setPlans] = useState<Plan[]>([]);
+    const [userData, setUserData] = useState<UserData | null>(null);
     const [purchase, setPurchase] = useState<PurchaseResponse | null>(null);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [purchaseError, setPurchaseError] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
     const [phoneCopied, setPhoneCopied] = useState<string | null>(null);
@@ -40,16 +50,19 @@ export function Checkout() {
 
     // Wallet payment state
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
-    const [payingWithWallet, setPayingWithWallet] = useState(false);
+    const [creatingPurchase, setCreatingPurchase] = useState(false);
+    const [selectedAction, setSelectedAction] = useState<CheckoutAction | null>(null);
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const purchaseCreated = useRef(false);
-    const idempotencyKey = useRef(crypto.randomUUID());
+    const selectedPlan = !Number.isNaN(parsedPlanIndex) ? plans[parsedPlanIndex] : undefined;
+    const extendingKey = extendKeyId && userData?.keys
+        ? userData.keys.find((key) => key.id === Number(extendKeyId))
+        : undefined;
 
     const handleBack = useCallback(() => {
-        navigate('/plans' + (isWalletTopup ? '?walletTopup=true' : ''));
-    }, [navigate, isWalletTopup]);
+        navigate(backTarget);
+    }, [backTarget, navigate]);
 
     useEffect(() => {
         if (!tg) return;
@@ -58,81 +71,135 @@ export function Checkout() {
         return () => tg.BackButton.offClick(handleBack);
     }, [tg, handleBack]);
 
-    useEffect(() => {
-        if (!planIndex || !initData || purchaseCreated.current) return;
-        purchaseCreated.current = true;
-
-        const body: Record<string, unknown> = {
-            plan_index: parseInt(planIndex),
-            idempotency_key: idempotencyKey.current
-        };
-        if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
-        if (promoCode) body.promo_code = promoCode;
-        if (isWalletTopup) {
-            body.payment_method = 'wallet_topup';
-            if (amountParam) body.amount = parseInt(amountParam);
+    const loadCheckoutData = useCallback(async () => {
+        if (!initData) {
+            setLoading(false);
+            return;
         }
 
-        fetch('/api/purchase', {
-            method: 'POST',
-            headers: {
-                'Authorization': `twa ${initData}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify(body)
-        })
-            .then(res => {
-                if (!res.ok) return res.text().then(t => { throw new Error(t) });
-                return res.json();
-            })
-            .then(setPurchase)
-            .catch(err => setError(err.message))
-            .finally(() => setLoading(false));
-
-        // Fetch wallet balance (silent fail — just hides wallet option)
-        if (!isWalletTopup) {
-            fetch('/api/wallet', { headers: { 'Authorization': `twa ${initData}` } })
-                .then(r => r.json())
-                .then(data => setWalletBalance(data.balance))
-                .catch(() => { });
+        if (!planIndex || Number.isNaN(parsedPlanIndex) || parsedPlanIndex < 0) {
+            setLoadError(t('invalid_plan_selected'));
+            setLoading(false);
+            return;
         }
-    }, [planIndex, initData, extendKeyId, promoCode, isWalletTopup, amountParam]);
 
-    const handlePayWithWallet = async () => {
-        if (!purchase || payingWithWallet) return;
-        setPayingWithWallet(true);
+        setLoading(true);
+        setLoadError(null);
+        setPurchase(null);
+        setPurchaseError(null);
+        setVerificationResult(null);
+        setSelectedAction(null);
         setWalletPayError(null);
+        setWalletBalance(null);
+
+        try {
+            const headers = { 'Authorization': `twa ${initData}` };
+            const [plansRes, meRes] = await Promise.all([
+                fetch('/api/plans'),
+                fetch('/api/me', { headers }),
+            ]);
+
+            if (!plansRes.ok) {
+                throw new Error(t('plans_load_error'));
+            }
+            if (!meRes.ok) {
+                throw new Error(t('plans_load_error'));
+            }
+
+            const [plansData, meData] = await Promise.all([
+                plansRes.json(),
+                meRes.json(),
+            ]);
+
+            setPlans(Array.isArray(plansData) ? plansData : []);
+            setUserData(meData);
+
+            void fetch('/api/wallet', { headers })
+                .then(async (res) => {
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (typeof data.balance === 'number') {
+                        setWalletBalance(data.balance);
+                    }
+                })
+                .catch(() => { });
+        } catch (err) {
+            console.warn('Checkout load error:', err);
+            setLoadError(err instanceof Error && err.message ? err.message : t('plans_load_error'));
+        } finally {
+            setLoading(false);
+        }
+    }, [initData, parsedPlanIndex, planIndex, t]);
+
+    useEffect(() => {
+        void loadCheckoutData();
+    }, [loadCheckoutData]);
+
+    const createPurchase = useCallback(async (action: CheckoutAction) => {
+        if (!initData || creatingPurchase) return;
+
+        setCreatingPurchase(true);
+        setSelectedAction(action);
+        setPurchaseError(null);
+        setWalletPayError(null);
+
         try {
             const body: Record<string, unknown> = {
-                plan_index: parseInt(planIndex || '0'),
-                payment_method: 'wallet'
+                plan_index: parsedPlanIndex,
             };
-            if (extendKeyId) body.extend_key_id = parseInt(extendKeyId);
-            if (promoCode) body.promo_code = promoCode;
+
+            if (extendKeyId) {
+                body.extend_key_id = Number(extendKeyId);
+            }
+            if (promoCode) {
+                body.promo_code = promoCode;
+            }
+            if (action === 'wallet') {
+                body.payment_method = 'wallet';
+            }
+            if (action === 'topup') {
+                body.payment_method = 'wallet_topup';
+                if (amountParam) {
+                    body.amount = Number(amountParam);
+                }
+            }
 
             const res = await fetch('/api/purchase', {
                 method: 'POST',
                 headers: {
                     'Authorization': `twa ${initData}`,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(body)
+                body: JSON.stringify(body),
             });
 
             if (!res.ok) {
                 const text = await res.text();
-                throw new Error(text);
+                throw new Error(text || t('creating_purchase'));
             }
 
             const data = await res.json();
-            setVerificationResult({ status: 'success', message: t('wallet_pay_success'), happ_link: data.happ_link });
+            setPurchase(data);
+
+            if (action === 'wallet') {
+                setVerificationResult({
+                    status: 'success',
+                    message: t('wallet_pay_success'),
+                    happ_link: data.happ_link,
+                });
+            }
         } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : t('wallet_pay_error');
-            setWalletPayError(msg || t('wallet_pay_error'));
+            const message = err instanceof Error && err.message ? err.message : t('creating_purchase');
+            if (action === 'wallet') {
+                setWalletPayError(message);
+            } else {
+                setPurchaseError(message);
+                setSelectedAction(null);
+            }
         } finally {
-            setPayingWithWallet(false);
+            setCreatingPurchase(false);
         }
-    };
+    }, [amountParam, creatingPurchase, extendKeyId, initData, parsedPlanIndex, promoCode, t]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -193,15 +260,27 @@ export function Checkout() {
         else window.open(redirectUrl, '_blank');
     };
 
-    if (loading) return <LoadingScreen message={t('creating_purchase')} />;
+    if (!initData) {
+        return (
+            <div className="screen-center">
+                <div style={{ fontSize: 48 }}>📱</div>
+                <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Wavy Private Server Shop</h1>
+                <p className="text-hint" style={{ margin: 0 }}>{t('open_in_tg')}</p>
+            </div>
+        );
+    }
 
-    if (error) return (
-        <div className="screen-center">
-            <div style={{ fontSize: 48 }} aria-hidden="true">❌</div>
-            <p style={{ color: 'var(--color-danger)', textAlign: 'center', fontSize: 14 }}>{error}</p>
-            <button className="btn-secondary" onClick={() => { playClick(); navigate('/plans'); }}>{t('back_to_plans')}</button>
-        </div>
-    );
+    if (loading) return <LoadingScreen message={t('loading_plans')} />;
+
+    if (loadError) {
+        return (
+            <ErrorScreen
+                message={loadError}
+                onRetry={() => { playClick(); void loadCheckoutData(); }}
+                retryLabel={t('retry')}
+            />
+        );
+    }
 
     if (verificationResult?.status === 'success') {
         return (
@@ -283,7 +362,11 @@ export function Checkout() {
         );
     }
 
-    const canPayWithWallet = purchase && walletBalance !== null && walletBalance >= purchase.amount && !isWalletTopup;
+    const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= selectedPlan.price;
+    const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
+    const topUpAmount = isWalletTopup ? Number(amountParam || selectedPlan?.price || 0) : 0;
+    const targetAmount = isWalletTopup ? topUpAmount : selectedPlan?.price ?? 0;
+    const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
 
     return (
         <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
@@ -297,156 +380,249 @@ export function Checkout() {
                     <span className="text-hint">{t('nav_verify')}</span>
                 </div>
             )}
-            {isWalletTopup && (
-                <div style={{ textAlign: 'center', fontSize: 16, fontWeight: 700 }}>
-                    {t('title_top_up')}
-                </div>
-            )}
-
-            {/* Wallet Payment Option */}
-            {canPayWithWallet && (
-                <div className="glass-card" style={{ padding: 20, border: '1px solid var(--color-success)' }}>
-                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 8px' }}>{t('pay_with_wallet')}</h2>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 12 }}>
-                        <span className="text-hint">{t('your_balance')}</span>
-                        <span>{walletBalance?.toLocaleString()} {purchase?.currency}</span>
-                    </div>
-                    {walletPayError && (
-                        <div role="alert" style={{
-                            padding: 10, borderRadius: 8, marginBottom: 10,
-                            background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
-                            color: 'var(--color-danger)', fontSize: 13
-                        }}>
-                            {walletPayError}
-                        </div>
-                    )}
-                    <button
-                        className="btn-primary"
-                        onClick={() => { playClick(); handlePayWithWallet(); }}
-                        disabled={payingWithWallet}
-                        style={{ width: '100%', background: 'var(--color-success)', opacity: payingWithWallet ? 0.7 : 1 }}
-                    >
-                        {payingWithWallet
-                            ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('wallet_pay_processing')}</>
-                            : t('wallet_pay_btn', { amount: (purchase?.amount || 0).toLocaleString(), currency: purchase?.currency || '' })}
-                    </button>
-                </div>
-            )}
-
-            {/* Manual Payment Guide — numbered steps */}
-            <div className="glass-card" style={{ padding: 20 }}>
-                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 20px' }}>
-                    {canPayWithWallet ? t('or_pay_manually') : t('guide_title')}
-                </h2>
-
-                {/* Step 1 */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
-                    <div style={{
-                        minWidth: 28, height: 28, borderRadius: '50%',
-                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, flexShrink: 0
-                    }}>1</div>
-                    <div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_1')}</div>
-                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
-                    </div>
-                </div>
-
-                {/* Step 2 — amount + phone cards */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
-                    <div style={{
-                        minWidth: 28, height: 28, borderRadius: '50%',
-                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, flexShrink: 0
-                    }}>2</div>
-                    <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{t('guide_step_2')}</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {/* Amount — plain, no card */}
-                            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                                <span className="text-hint" style={{ fontSize: 12 }}>{t('label_amount')}:</span>
-                                <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-0.5px' }}>{(purchase?.amount || 0).toLocaleString()}</span>
-                                <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
-                            </div>
-                            {/* Phone — per-provider cards */}
-                            {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (() => {
-                                const providers = Object.entries(purchase.payment_phones);
-                                const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
-                                // Auto-select if only 1 provider
-                                const effectiveSelected = providers.length === 1 ? providers[0][0] : selectedProvider;
-                                const selectedPhone = effectiveSelected ? purchase.payment_phones[effectiveSelected] : null;
-
-                                return (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                        {/* Provider selector buttons (only if 2+) */}
-                                        {providers.length > 1 && (
-                                            <div style={{ display: 'flex', gap: 6 }}>
-                                                {providers.map(([key]) => (
-                                                    <button key={key} onClick={() => { playClick(); setSelectedProvider(key); }} style={{ flex: 1, padding: '8px 4px', borderRadius: 10, border: effectiveSelected === key ? '2px solid var(--accent-color)' : '1px solid var(--input-border)', background: effectiveSelected === key ? 'var(--accent-color)' : 'var(--input-bg)', color: effectiveSelected === key ? '#fff' : 'inherit', fontWeight: 600, fontSize: 13, cursor: 'pointer', transition: 'all 0.15s ease' }}>
-                                                        {labels[key] || key}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {/* Selected provider phone card */}
-                                        {effectiveSelected && selectedPhone ? (
-                                            <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                                <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{labels[effectiveSelected] || effectiveSelected}</div>
-                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                                    <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{selectedPhone}</div>
-                                                    <button onClick={() => { playClick(); copyToClipboard(selectedPhone); setPhoneCopied(effectiveSelected); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === effectiveSelected ? 'var(--color-success)' : undefined }}>{phoneCopied === effectiveSelected ? '✓' : '📋'}</button>
-                                                </div>
-                                            </div>
-                                        ) : providers.length > 1 ? (
-                                            <div className="text-hint" style={{ textAlign: 'center', padding: 8, fontSize: 13 }}>{t('select_payment_method') || 'Select a payment method above'}</div>
-                                        ) : null}
-                                    </div>
-                                );
-                            })() : (
-                                <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                    <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                        <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{purchase?.payment_phone}</div>
-                                        <button onClick={() => { playClick(); copyToClipboard(purchase?.payment_phone || ''); setPhoneCopied('default'); setTimeout(() => setPhoneCopied(null), 1500); }} className="btn-secondary" aria-label={t('tap_to_copy')} style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === 'default' ? 'var(--color-success)' : undefined }}>{phoneCopied === 'default' ? '✓' : '📋'}</button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                {/* Step 3 — remark */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
-                    <div style={{
-                        minWidth: 28, height: 28, borderRadius: '50%',
-                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, flexShrink: 0
-                    }}>3</div>
-                    <div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_3')}</div>
-                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_3_hint')}</div>
-                    </div>
-                </div>
-
-                {/* Step 4 — screenshot */}
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                    <div style={{
-                        minWidth: 28, height: 28, borderRadius: '50%',
-                        background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, flexShrink: 0
-                    }}>4</div>
-                    <div>
-                        <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_4')}</div>
-                        <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
-                    </div>
-                </div>
+            <div style={{ textAlign: 'center', fontSize: 16, fontWeight: 700 }}>
+                {isWalletTopup ? t('title_top_up') : (extendKeyId ? t('title_extend') : t('title_choose_plan'))}
             </div>
 
+            <div className="glass-card" style={{ padding: 18 }}>
+                <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 12px' }}>
+                    {t('choose_payment_method')}
+                </h2>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 12 }}>
+                    <span className="text-hint">{isWalletTopup ? t('top_up_amount', { amount: targetAmount.toLocaleString(), currency: selectedPlan?.currency || 'MMK' }) : selectedPlan?.label}</span>
+                    <strong>{targetAmount.toLocaleString()} {selectedPlan?.currency || 'MMK'}</strong>
+                </div>
+
+                {extendKeyId && extendingKey && (
+                    <TipBox variant="info" icon="ℹ️" style={{ marginBottom: 12 }}>
+                        {t('subtitle_extending', { label: extendingKey.label })}{extendingKey.expire_at ? ` · ${new Date(extendingKey.expire_at).toLocaleDateString()}` : ''}
+                    </TipBox>
+                )}
+
+                {purchaseError && (
+                    <div role="alert" style={{
+                        padding: 10, borderRadius: 8, marginBottom: 10,
+                        background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
+                        color: 'var(--color-danger)', fontSize: 13
+                    }}>
+                        {purchaseError}
+                    </div>
+                )}
+
+                {isWalletTopup ? (
+                    <button
+                        className="btn-primary"
+                        onClick={() => { playClick(); void createPurchase('topup'); }}
+                        disabled={creatingPurchase}
+                        style={{ width: '100%', background: 'var(--color-success)', opacity: creatingPurchase && selectedAction === 'topup' ? 0.7 : 1 }}
+                    >
+                        {creatingPurchase && selectedAction === 'topup'
+                            ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('creating_purchase')}</>
+                            : t('create_payment_request')}
+                    </button>
+                ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {canShowWalletOption && (
+                            <button
+                                className="btn-primary"
+                                onClick={() => { playClick(); void createPurchase('wallet'); }}
+                                disabled={creatingPurchase || !canPayWithWallet}
+                                style={{ width: '100%', background: 'var(--color-success)', opacity: creatingPurchase && selectedAction === 'wallet' ? 0.7 : (!canPayWithWallet ? 0.5 : 1) }}
+                            >
+                                {creatingPurchase && selectedAction === 'wallet'
+                                    ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('wallet_pay_processing')}</>
+                                    : t('wallet_pay_btn', { amount: targetAmount.toLocaleString(), currency: selectedPlan?.currency || 'MMK' })}
+                            </button>
+                        )}
+
+                        {canShowWalletOption && walletBalance === null && (
+                            <div className="text-hint" style={{ fontSize: 12 }}>
+                                {t('wallet_balance_unavailable')}
+                            </div>
+                        )}
+
+                        {canShowWalletOption && walletBalance !== null && !canPayWithWallet && (
+                            <div className="text-hint" style={{ fontSize: 12 }}>
+                                {t('wallet_balance_low')}
+                            </div>
+                        )}
+
+                        <button
+                            className="btn-secondary"
+                            onClick={() => { playClick(); void createPurchase('manual'); }}
+                            disabled={creatingPurchase}
+                            style={{ width: '100%', opacity: creatingPurchase && selectedAction === 'manual' ? 0.7 : 1 }}
+                        >
+                            {creatingPurchase && selectedAction === 'manual'
+                                ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('creating_purchase')}</>
+                                : t('pay_with_mobile_banking')}
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {isManualPurchaseReady && purchase && (
+                <div className="glass-card" style={{ padding: 20 }}>
+                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: '0 0 20px' }}>
+                        {t('guide_title')}
+                    </h2>
+
+                    {/* Step 1 */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+                        <div style={{
+                            minWidth: 28, height: 28, borderRadius: '50%',
+                            background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 13, fontWeight: 700, flexShrink: 0
+                        }}>1</div>
+                        <div>
+                            <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_1')}</div>
+                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
+                        </div>
+                    </div>
+
+                    {/* Step 2 — amount + phone cards */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+                        <div style={{
+                            minWidth: 28, height: 28, borderRadius: '50%',
+                            background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 13, fontWeight: 700, flexShrink: 0
+                        }}>2</div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>{t('guide_step_2')}</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                                    <span className="text-hint" style={{ fontSize: 12 }}>{t('label_amount')}:</span>
+                                    <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-0.5px' }}>{(purchase?.amount || 0).toLocaleString()}</span>
+                                    <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
+                                </div>
+                                {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (() => {
+                                    const providers = Object.entries(purchase.payment_phones);
+                                    const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
+                                    const effectiveSelected = providers.length === 1 ? providers[0][0] : selectedProvider;
+                                    const selectedPhone = effectiveSelected ? purchase.payment_phones[effectiveSelected] : null;
+
+                                    return (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                            {providers.length > 1 && (
+                                                <div style={{ display: 'flex', gap: 6 }}>
+                                                    {providers.map(([key]) => (
+                                                        <button
+                                                            key={key}
+                                                            onClick={() => { playClick(); setSelectedProvider(key); }}
+                                                            style={{
+                                                                flex: 1,
+                                                                padding: '8px 4px',
+                                                                borderRadius: 10,
+                                                                border: effectiveSelected === key ? '2px solid var(--accent-color)' : '1px solid var(--input-border)',
+                                                                background: effectiveSelected === key ? 'var(--accent-color)' : 'var(--input-bg)',
+                                                                color: effectiveSelected === key ? '#fff' : 'inherit',
+                                                                fontWeight: 600,
+                                                                fontSize: 13,
+                                                                cursor: 'pointer',
+                                                                transition: 'all 0.15s ease'
+                                                            }}
+                                                        >
+                                                            {labels[key] || key}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {effectiveSelected && selectedPhone ? (
+                                                <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                                    <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{labels[effectiveSelected] || effectiveSelected}</div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                                        <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{selectedPhone}</div>
+                                                        <button
+                                                            onClick={() => {
+                                                                playClick();
+                                                                copyToClipboard(selectedPhone);
+                                                                setPhoneCopied(effectiveSelected);
+                                                                setTimeout(() => setPhoneCopied(null), 1500);
+                                                            }}
+                                                            className="btn-secondary"
+                                                            aria-label={t('tap_to_copy')}
+                                                            style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === effectiveSelected ? 'var(--color-success)' : undefined }}
+                                                        >
+                                                            {phoneCopied === effectiveSelected ? '✓' : '📋'}
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ) : providers.length > 1 ? (
+                                                <div className="text-hint" style={{ textAlign: 'center', padding: 8, fontSize: 13 }}>
+                                                    {t('select_payment_method') || 'Select a payment method above'}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    );
+                                })() : (
+                                    <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
+                                        <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{t('label_phone')}</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                                            <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{purchase?.payment_phone}</div>
+                                            <button
+                                                onClick={() => {
+                                                    playClick();
+                                                    copyToClipboard(purchase?.payment_phone || '');
+                                                    setPhoneCopied('default');
+                                                    setTimeout(() => setPhoneCopied(null), 1500);
+                                                }}
+                                                className="btn-secondary"
+                                                aria-label={t('tap_to_copy')}
+                                                style={{ padding: '4px 8px', fontSize: 13, minWidth: 30, borderRadius: 8, color: phoneCopied === 'default' ? 'var(--color-success)' : undefined }}
+                                            >
+                                                {phoneCopied === 'default' ? '✓' : '📋'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Step 3 — remark */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+                        <div style={{
+                            minWidth: 28, height: 28, borderRadius: '50%',
+                            background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 13, fontWeight: 700, flexShrink: 0
+                        }}>3</div>
+                        <div>
+                            <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_3')}</div>
+                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_3_hint')}</div>
+                        </div>
+                    </div>
+
+                    {/* Step 4 — screenshot */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                        <div style={{
+                            minWidth: 28, height: 28, borderRadius: '50%',
+                            background: 'var(--tg-btn)', color: 'var(--tg-btn-text)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 13, fontWeight: 700, flexShrink: 0
+                        }}>4</div>
+                        <div>
+                            <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_4')}</div>
+                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_4_hint')}</div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div style={{ flex: 1 }} />
+
+            {walletPayError && (
+                <div role="alert" style={{
+                    padding: 12, borderRadius: 12, fontSize: 13, textAlign: 'center',
+                    background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.18)',
+                    color: 'var(--color-danger)'
+                }}>
+                    {walletPayError}
+                </div>
+            )}
 
             {/* Upload verification error */}
             {verificationResult?.status === 'failed' && (
@@ -461,17 +637,21 @@ export function Checkout() {
             )}
 
             {/* Upload */}
-            <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*" />
-            <button
-                disabled={uploading}
-                onClick={() => { playClick(); fileInputRef.current?.click(); }}
-                className="btn-primary"
-                style={{ fontSize: 16, padding: '16px 24px', opacity: uploading ? 0.6 : 1, cursor: uploading ? 'not-allowed' : 'pointer' }}
-            >
-                {uploading
-                    ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />{t('uploading_btn')}</>
-                    : t('upload_btn')}
-            </button>
+            {isManualPurchaseReady && (
+                <>
+                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*" />
+                    <button
+                        disabled={uploading}
+                        onClick={() => { playClick(); fileInputRef.current?.click(); }}
+                        className="btn-primary"
+                        style={{ fontSize: 16, padding: '16px 24px', opacity: uploading ? 0.6 : 1, cursor: uploading ? 'not-allowed' : 'pointer' }}
+                    >
+                        {uploading
+                            ? <><div className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} />{t('uploading_btn')}</>
+                            : t('upload_btn')}
+                    </button>
+                </>
+            )}
         </div>
     );
 }

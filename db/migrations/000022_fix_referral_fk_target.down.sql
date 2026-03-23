@@ -1,4 +1,4 @@
--- Revert: restore original (broken) FK constraints
+-- Revert: keep the repaired customer.id-based FK constraints.
 BEGIN;
 
 ALTER TABLE referral DROP CONSTRAINT IF EXISTS referral_referrer_id_fkey;

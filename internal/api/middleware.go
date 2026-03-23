@@ -4,7 +4,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,13 +89,8 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 func getIP(r *http.Request) string {
-	// Check X-Forwarded-For first (note: not trusted if behind untrusted proxies).
-	// Use RemoteAddr only if your deployment doesn't involve a load balancer.
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		return strings.TrimSpace(ips[0])
-	}
+	// Only trust the socket peer. X-Forwarded-For is client-controlled unless a
+	// trusted proxy explicitly strips/sets it, and this service has no proxy allowlist.
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

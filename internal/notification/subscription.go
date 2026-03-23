@@ -108,7 +108,7 @@ func (s *SubscriptionService) getExpiringSubscriptions() ([]database.Subscriptio
 
 func (s *SubscriptionService) SendNotification(ctx context.Context, key database.SubscriptionKey, customer database.Customer) error {
 	if key.ExpireAt == nil {
-		return nil
+		return fmt.Errorf("subscription key %d has no expiration date", key.ID)
 	}
 
 	expireDate := key.ExpireAt.Format("02.01.2006")
@@ -127,11 +127,9 @@ func (s *SubscriptionService) SendNotification(ctx context.Context, key database
 		)
 	}
 
-	_, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    customer.TelegramID,
-		Text:      messageText,
-		ParseMode: models.ParseModeHTML,
-		ReplyMarkup: models.InlineKeyboardMarkup{
+	var replyMarkup *models.InlineKeyboardMarkup
+	if config.GetMiniAppURL() != "" {
+		replyMarkup = &models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{
 				{
 					{
@@ -142,7 +140,25 @@ func (s *SubscriptionService) SendNotification(ctx context.Context, key database
 					},
 				},
 			},
-		},
+		}
+	} else if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
+		replyMarkup = &models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{
+					{
+						Text: s.tm.GetText(customer.Language, "renew_subscription_button"),
+						URL:  *customer.SubscriptionLink,
+					},
+				},
+			},
+		}
+	}
+
+	_, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      customer.TelegramID,
+		Text:        messageText,
+		ParseMode:   models.ParseModeHTML,
+		ReplyMarkup: replyMarkup,
 	})
 
 	return err

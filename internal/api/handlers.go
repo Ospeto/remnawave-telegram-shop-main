@@ -99,6 +99,21 @@ type PurchaseStatusResponse struct {
 	Status string `json:"status"`
 }
 
+func parsePaymentMethod(method string) (database.InvoiceType, error) {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "", "mobile_banking":
+		return database.InvoiceTypeMobileBanking, nil
+	case "crypto":
+		return database.InvoiceTypeCrypto, nil
+	case "wallet":
+		return database.InvoiceTypeWalletPayment, nil
+	case "wallet_topup":
+		return database.InvoiceTypeWalletTopUp, nil
+	default:
+		return "", fmt.Errorf("unsupported payment_method %q", method)
+	}
+}
+
 // --- Handler ---
 
 type APIHandler struct {
@@ -192,13 +207,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	invoiceType := database.InvoiceTypeMobileBanking
-	if req.PaymentMethod == "crypto" {
-		invoiceType = database.InvoiceTypeCrypto
-	} else if req.PaymentMethod == "wallet" {
-		invoiceType = database.InvoiceTypeWalletPayment
-	} else if req.PaymentMethod == "wallet_topup" {
-		invoiceType = database.InvoiceTypeWalletTopUp
+	invoiceType, err := parsePaymentMethod(req.PaymentMethod)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	var price float64
@@ -209,6 +221,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if invoiceType == database.InvoiceTypeWalletTopUp {
 		if req.Amount <= 0 {
 			http.Error(w, "Invalid amount for top-up", http.StatusBadRequest)
+			return
+		}
+		if req.PromoCode != "" {
+			http.Error(w, "promo_code is not valid for wallet top-up", http.StatusBadRequest)
 			return
 		}
 		// For top-up, we use the explicit amount
@@ -238,8 +254,38 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Delegate to PaymentService with Promo Code
-	_, purchaseID, err := h.paymentService.CreatePurchase(r.Context(), price, days, trafficLimit, customer, invoiceType, req.PromoCode)
+	if req.ExtendKeyID != nil {
+		if invoiceType == database.InvoiceTypeWalletTopUp {
+			http.Error(w, "extend_key_id is not valid for wallet top-up", http.StatusBadRequest)
+			return
+		}
+		if h.subKeyRepo == nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+
+		extendKey, err := h.subKeyRepo.FindByID(r.Context(), *req.ExtendKeyID)
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if extendKey == nil {
+			http.Error(w, "Subscription key not found", http.StatusNotFound)
+			return
+		}
+		if extendKey.CustomerID != customer.ID {
+			http.Error(w, "Purchase not allowed", http.StatusForbidden)
+			return
+		}
+	}
+
+	var purchaseID int64
+	if req.ExtendKeyID != nil && invoiceType == database.InvoiceTypeWalletPayment {
+		_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(r.Context(), price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
+	} else {
+		// Delegate to PaymentService with Promo Code
+		_, purchaseID, err = h.paymentService.CreatePurchase(r.Context(), price, days, trafficLimit, customer, invoiceType, req.PromoCode)
+	}
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -257,7 +303,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		"plan_label":    label,
 		"payment_phone": payment.GetFirstPaymentPhone(),
 	}
-	if req.ExtendKeyID != nil {
+	if req.ExtendKeyID != nil && invoiceType != database.InvoiceTypeWalletPayment {
 		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
 	if err := h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields); err != nil {
@@ -280,10 +326,16 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	happLink := ""
 	if purchase.InvoiceType == database.InvoiceTypeWalletPayment {
 		if h.subKeyRepo != nil {
-			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-			if kErr == nil && len(keys) > 0 {
-				latestKey := keys[0]
-				happLink = "happ://add/" + latestKey.SubscriptionURL
+			if req.ExtendKeyID != nil {
+				if extendKey, kErr := h.subKeyRepo.FindByID(r.Context(), *req.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
+					happLink = "happ://add/" + extendKey.SubscriptionURL
+				}
+			} else {
+				keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+				if kErr == nil && len(keys) > 0 {
+					latestKey := keys[0]
+					happLink = "happ://add/" + latestKey.SubscriptionURL
+				}
 			}
 		}
 	}
@@ -605,10 +657,16 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		resp.Message = "Payment verified successfully!"
 		// Look up the latest subscription key for this customer to build Happ deep link
 		if h.subKeyRepo != nil {
-			keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-			if kErr == nil && len(keys) > 0 {
-				latestKey := keys[0]
-				resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
+			if purchase.ExtendKeyID != nil {
+				if extendKey, kErr := h.subKeyRepo.FindByID(r.Context(), *purchase.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
+					resp.HappLink = "happ://add/" + extendKey.SubscriptionURL
+				}
+			} else {
+				keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+				if kErr == nil && len(keys) > 0 {
+					latestKey := keys[0]
+					resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
+				}
 			}
 		}
 	} else {

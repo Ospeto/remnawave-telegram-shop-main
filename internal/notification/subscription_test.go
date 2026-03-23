@@ -69,3 +69,16 @@ func TestSubscriptionService_ProcessSubscriptionExpiration_NoCustomers(t *testin
 		t.Fatalf("ProcessSubscriptionExpiration returned error: %v", err)
 	}
 }
+
+func TestSubscriptionService_SendNotification_NilExpireAt(t *testing.T) {
+	svc := NewSubscriptionService(&subKeyRepoMock{}, &customerRepoMock{}, nil, nil)
+
+	err := svc.SendNotification(
+		context.Background(),
+		database.SubscriptionKey{ID: 1},
+		database.Customer{ID: 1, TelegramID: 12345},
+	)
+	if err == nil {
+		t.Fatal("expected error for key without expiration date")
+	}
+}

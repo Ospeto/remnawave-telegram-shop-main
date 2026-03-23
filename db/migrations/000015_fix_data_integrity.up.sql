@@ -22,7 +22,7 @@ ALTER TABLE wallet_transaction
 
 ALTER TABLE purchase
     ADD CONSTRAINT purchase_status_valid
-        CHECK (status IN ('pending','paid','failed','refunded'));
+        CHECK (status IN ('new','pending','paid','cancel','failed','refunded'));
 
 ALTER TABLE purchase
     ADD CONSTRAINT purchase_invoice_type_valid
@@ -45,19 +45,16 @@ ALTER TABLE referral
     ADD CONSTRAINT referral_referee_unique UNIQUE (referee_id);
 
 -- ── DB-2: Fix referral FKs to point at customer.id instead of customer.telegram_id ────────────
--- Currently: referrer_id + referee_id FK → customer(telegram_id)
--- They should reference customer(id) to be consistent with all other tables.
--- First drop old FK constraints (they reference telegram_id).
+-- The referral table stores telegram_id values initially, then gets rewritten
+-- to customer.id so the foreign keys are consistent with the rest of the schema.
 ALTER TABLE referral
     DROP CONSTRAINT IF EXISTS referral_referrer_id_fkey,
     DROP CONSTRAINT IF EXISTS referral_referee_id_fkey;
 
--- Add new columns referencing customer.id
 ALTER TABLE referral
     ADD COLUMN referrer_customer_id BIGINT,
     ADD COLUMN referee_customer_id  BIGINT;
 
--- Backfill: resolve telegram_id → customer.id
 UPDATE referral r
 SET referrer_customer_id = c.id
 FROM customer c
@@ -68,7 +65,6 @@ SET referee_customer_id = c.id
 FROM customer c
 WHERE c.telegram_id = r.referee_id;
 
--- Apply NOT NULL and FK constraints on the new columns
 ALTER TABLE referral
     ALTER COLUMN referrer_customer_id SET NOT NULL,
     ALTER COLUMN referee_customer_id  SET NOT NULL;
@@ -79,12 +75,10 @@ ALTER TABLE referral
     ADD CONSTRAINT referral_referee_id_fkey
         FOREIGN KEY (referee_customer_id) REFERENCES customer(id) ON DELETE CASCADE;
 
--- Drop old columns
 ALTER TABLE referral
     DROP COLUMN referrer_id,
     DROP COLUMN referee_id;
 
--- Rename new columns to original names for backward-compat in Go structs
 ALTER TABLE referral
     RENAME COLUMN referrer_customer_id TO referrer_id;
 ALTER TABLE referral

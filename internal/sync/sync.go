@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"log/slog"
+	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/remnawave"
 )
@@ -46,10 +47,13 @@ func (s SyncService) Sync() {
 
 		telegramIDs = append(telegramIDs, int64(user.TelegramId.Value))
 
+		expireAt := user.ExpireAt
+		subscriptionURL := user.SubscriptionUrl
 		mappedUsers = append(mappedUsers, database.Customer{
 			TelegramID:       int64(user.TelegramId.Value),
-			ExpireAt:         &user.ExpireAt,
-			SubscriptionLink: &user.SubscriptionUrl,
+			ExpireAt:         &expireAt,
+			SubscriptionLink: &subscriptionURL,
+			Language:         config.DefaultLanguage(),
 		})
 	}
 
@@ -80,21 +84,36 @@ func (s SyncService) Sync() {
 	// WARNING: We previously deleted customers here if they weren't in the panel.
 	// This is highly destructive because a Customer record holds their Wallet Balance.
 	// We MUST NOT delete the Customer just because they currently have no active keys.
+	tx, err := s.customerRepository.BeginTx(ctx)
+	if err != nil {
+		slog.Error("Error while starting sync transaction", "error", err)
+		return
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if len(toCreate) > 0 {
-		if err := s.customerRepository.CreateBatch(ctx, toCreate); err != nil {
+		if err := s.customerRepository.CreateBatchTx(ctx, tx, toCreate); err != nil {
 			slog.Error("Error while creating users")
+			return
 		} else {
 			slog.Info("Created clients", "count", len(toCreate))
 		}
 	}
 
 	if len(toUpdate) > 0 {
-		if err := s.customerRepository.UpdateBatch(ctx, toUpdate); err != nil {
+		if err := s.customerRepository.UpdateBatchTx(ctx, tx, toUpdate); err != nil {
 			slog.Error("Error while updating users")
+			return
 		} else {
 			slog.Info("Updated clients", "count", len(toUpdate))
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("Error while committing sync transaction", "error", err)
+		return
 	}
 	slog.Info("Synchronization completed")
 }

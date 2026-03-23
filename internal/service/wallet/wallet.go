@@ -199,6 +199,6 @@ func (s *WalletService) ExtendKeyWithBalance(ctx context.Context, keyID int64, c
 
 	// Delegate to CreatePurchase with ExtendKeyID set — this charges the wallet
 	// and calls Remnawave ExtendUser on the specific key UUID.
-	_, _, err = s.paymentService.CreatePurchaseWithExtend(ctx, planPrice, days, trafficGB, customer, keyID)
+	_, _, err = s.paymentService.CreatePurchaseWithExtend(ctx, planPrice, days, trafficGB, customer, keyID, "")
 	return err
 }

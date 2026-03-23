@@ -34,6 +34,43 @@ export function Wallet() {
   const [loadError, setLoadError] = useState(false);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
+  const loadWalletData = useCallback(async () => {
+    if (!initData) {
+      setLoading(false);
+      return;
+    }
+
+    const headers = { 'Authorization': `twa ${initData}` };
+    setLoading(true);
+    setLoadError(false);
+
+    try {
+      const [walletRes, historyRes, referralRes] = await Promise.all([
+        fetch('/api/wallet', { headers }),
+        fetch('/api/wallet/history?limit=10', { headers }),
+        fetch('/api/referrals', { headers }),
+      ]);
+
+      if (!walletRes.ok || !historyRes.ok || !referralRes.ok) {
+        throw new Error('Failed to load wallet data');
+      }
+
+      const [walletData, historyData, referralData] = await Promise.all([
+        walletRes.json(),
+        historyRes.json(),
+        referralRes.json(),
+      ]);
+
+      setWallet(walletData);
+      setTransactions(historyData || []);
+      setReferrals(referralData || []);
+    } catch (err) {
+      console.warn('Wallet load error:', err);
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [initData]);
 
   useEffect(() => {
     if (!tg) return;
@@ -43,25 +80,8 @@ export function Wallet() {
   }, [tg, handleBack]);
 
   useEffect(() => {
-    if (!initData) return;
-    const headers = { 'Authorization': `twa ${initData}` };
-
-    Promise.all([
-      fetch('/api/wallet', { headers }).then(r => r.json()),
-      fetch('/api/wallet/history?limit=10', { headers }).then(r => r.json()),
-      fetch('/api/referrals', { headers }).then(r => r.json()),
-    ])
-      .then(([walletData, historyData, referralData]) => {
-        setWallet(walletData);
-        setTransactions(historyData || []);
-        setReferrals(referralData || []);
-      })
-      .catch(err => {
-        console.warn('Wallet load error:', err);
-        setLoadError(true);
-      })
-      .finally(() => setLoading(false));
-  }, [initData]);
+    void loadWalletData();
+  }, [loadWalletData]);
 
   const getTransactionIcon = (type: string) => {
     switch (type) {
@@ -81,14 +101,24 @@ export function Wallet() {
     }
   };
 
+  if (!initData) {
+    return (
+      <div className="screen-center">
+        <div style={{ fontSize: 48 }}>📱</div>
+        <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Wavy Private Server Shop</h1>
+        <p className="text-hint" style={{ margin: 0 }}>{t('open_in_tg')}</p>
+      </div>
+    );
+  }
+
   if (loading) return <LoadingScreen message={t('loading_wallet')} />;
 
   if (loadError || !wallet) {
     return (
       <ErrorScreen
         message={t('wallet_error')}
-        onRetry={() => navigate('/')}
-        retryLabel={t('go_home')}
+        onRetry={() => { void loadWalletData(); }}
+        retryLabel={t('retry')}
       />
     );
   }

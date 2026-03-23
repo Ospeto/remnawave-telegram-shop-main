@@ -15,6 +15,21 @@ import (
 	"golang.org/x/time/rate"
 )
 
+func (h Handler) AcknowledgeCallbackQueryMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		if update.CallbackQuery != nil {
+			_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+				CallbackQueryID: update.CallbackQuery.ID,
+			})
+			if err != nil {
+				slog.Warn("failed to acknowledge callback query", "error", err)
+			}
+		}
+
+		next(ctx, b, update)
+	}
+}
+
 func (h Handler) CreateCustomerIfNotExistMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		var telegramId int64

@@ -16,20 +16,22 @@ import (
 )
 
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	customer, err := h.ensureCustomer(ctx, update.Message.Chat.ID, update.Message.From.LanguageCode)
+	customer, created, err := h.ensureCustomer(ctx, update.Message.Chat.ID, update.Message.From.LanguageCode)
 	if err != nil {
 		return
 	}
 
-	h.processReferral(ctx, update.Message.Text, customer)
-	h.sendStartMenu(ctx, b, update.Message.Chat.ID, customer)
+	if created {
+		h.processReferral(ctx, update.Message.Text, customer)
+	}
+	h.sendStartMenu(ctx, b, update.Message.Chat.ID, customer, update.Message.From.LanguageCode)
 }
 
-func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode string) (*database.Customer, error) {
+func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode string) (*database.Customer, bool, error) {
 	existingCustomer, err := h.customerRepository.FindByTelegramId(ctx, telegramID)
 	if err != nil {
 		slog.Error("error finding customer by telegram id", "error", err)
-		return nil, err
+		return nil, false, err
 	}
 
 	if existingCustomer == nil {
@@ -41,8 +43,9 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 		})
 		if err != nil {
 			slog.Error("error creating customer", "error", err)
-			return nil, err
+			return nil, false, err
 		}
+		return existingCustomer, true, nil
 	} else {
 		updates := map[string]interface{}{
 			"language": langCode,
@@ -50,11 +53,11 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 		err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
 		if err != nil {
 			slog.Error("Error updating customer", "error", err)
-			return nil, err
+			return nil, false, err
 		}
 	}
 
-	return existingCustomer, nil
+	return existingCustomer, false, nil
 }
 
 func (h Handler) processReferral(ctx context.Context, messageText string, existingCustomer *database.Customer) {
@@ -139,8 +142,8 @@ func (h Handler) processReferral(ctx context.Context, messageText string, existi
 	}
 }
 
-func (h Handler) sendStartMenu(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer) {
-	inlineKeyboard := h.buildStartKeyboard(customer, "my")
+func (h Handler) sendStartMenu(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
+	inlineKeyboard := h.buildStartKeyboard(customer, langCode)
 
 	m, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
@@ -165,7 +168,7 @@ func (h Handler) sendStartMenu(ctx context.Context, b *bot.Bot, chatID int64, cu
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText("my", "greeting"),
+		Text: h.translation.GetText(langCode, "greeting"),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)
@@ -183,8 +186,13 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		slog.Error("error finding customer by telegram id", "error", err)
 		return
 	}
+	if existingCustomer == nil {
+		slog.Error("customer not found for start callback", "telegram_id", callback.From.ID)
+		return
+	}
 
-	inlineKeyboard := h.buildStartKeyboard(existingCustomer, "my")
+	langCode := callback.From.LanguageCode
+	inlineKeyboard := h.buildStartKeyboard(existingCustomer, langCode)
 
 	_, err = b.EditMessageText(ctxWithTime, &bot.EditMessageTextParams{
 		ChatID:    callback.Message.Message.Chat.ID,
@@ -193,7 +201,7 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText("my", "greeting"),
+		Text: h.translation.GetText(langCode, "greeting"),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)
@@ -219,15 +227,24 @@ func (h Handler) resolveConnectButton(lang string) []models.InlineKeyboardButton
 
 func (h Handler) buildStartKeyboard(existingCustomer *database.Customer, langCode string) [][]models.InlineKeyboardButton {
 	shareURL := "https://t.me/share/url?url=" + config.BotURL() + "?start=ref_" + strconv.FormatInt(existingCustomer.TelegramID, 10)
+	var buyButton models.InlineKeyboardButton
+	if config.GetMiniAppURL() != "" {
+		buyButton = models.InlineKeyboardButton{
+			Text: h.translation.GetText(langCode, "buy_button"),
+			WebApp: &models.WebAppInfo{
+				URL: config.GetMiniAppURL(),
+			},
+		}
+	} else {
+		buyButton = models.InlineKeyboardButton{
+			Text:         h.translation.GetText(langCode, "buy_button"),
+			CallbackData: CallbackBuy,
+		}
+	}
 
 	return [][]models.InlineKeyboardButton{
 		{
-			{
-				Text: h.translation.GetText(langCode, "buy_button"),
-				WebApp: &models.WebAppInfo{
-					URL: config.GetMiniAppURL(),
-				},
-			},
+			buyButton,
 		},
 		{
 			{

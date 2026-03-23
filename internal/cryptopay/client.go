@@ -2,15 +2,17 @@ package cryptopay
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 type CryptoPayApi interface {
-	CreateInvoice(invoiceReq *InvoiceRequest) (*InvoiceResponse, error)
-	GetInvoices(status, fiat, asset, invoiceIds string, offset, limit int) (*[]InvoiceResponse, error)
+	CreateInvoice(ctx context.Context, invoiceReq *InvoiceRequest) (*InvoiceResponse, error)
+	GetInvoices(ctx context.Context, status, fiat, asset, invoiceIds string, offset, limit int) (*[]InvoiceResponse, error)
 }
 
 type Client struct {
@@ -21,20 +23,20 @@ type Client struct {
 
 func NewCryptoPayClient(url string, tokn string) *Client {
 	return &Client{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    url,
 		token:      tokn,
 	}
 }
 
-func (c *Client) CreateInvoice(invoiceReq *InvoiceRequest) (*InvoiceResponse, error) {
+func (c *Client) CreateInvoice(ctx context.Context, invoiceReq *InvoiceRequest) (*InvoiceResponse, error) {
 	jsonData, err := json.Marshal(invoiceReq)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling invoice: %w", err)
 	}
 
 	endpoint := fmt.Sprintf("%s/api/createInvoice", c.baseURL)
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("error while creating invoice req: %w", err)
 	}
@@ -69,9 +71,9 @@ func (c *Client) CreateInvoice(invoiceReq *InvoiceRequest) (*InvoiceResponse, er
 	return &apiResp.Result, nil
 }
 
-func (c *Client) GetInvoices(status, fiat, asset, invoiceIds string, offset, limit int) (*[]InvoiceResponse, error) {
+func (c *Client) GetInvoices(ctx context.Context, status, fiat, asset, invoiceIds string, offset, limit int) (*[]InvoiceResponse, error) {
 	endpoint := fmt.Sprintf("%s/api/getInvoices", c.baseURL)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error while creating request: %w", err)
 	}

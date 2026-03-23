@@ -141,6 +141,20 @@ func (r *PromoCodeRepository) IncrementUsageAtomic(ctx context.Context, id int64
 	return result.RowsAffected() > 0, nil
 }
 
+// ReleaseUsageAtomic rolls back one claimed promo usage slot.
+// It is used when downstream purchase creation fails after a promo was already claimed.
+func (r *PromoCodeRepository) ReleaseUsageAtomic(ctx context.Context, id int64) (bool, error) {
+	query := `UPDATE promo_codes SET used_count = used_count - 1
+		WHERE id = $1 AND used_count > 0`
+
+	result, err := r.pool.Exec(ctx, query, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to release promo usage: %w", err)
+	}
+
+	return result.RowsAffected() > 0, nil
+}
+
 // ListAll returns all promo codes ordered by creation date descending.
 func (r *PromoCodeRepository) ListAll(ctx context.Context) ([]PromoCode, error) {
 	buildSelect := sq.Select("*").

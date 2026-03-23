@@ -223,15 +223,29 @@ func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates
 	return nil
 }
 
-func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) error {
-	currentTime := time.Now()
+// TryMarkAsPaid atomically marks a purchase as paid only if it has not already
+// been claimed by another worker. It returns false when another processor
+// already won the race or the row no longer exists.
+func (pr *PurchaseRepository) TryMarkAsPaid(ctx context.Context, purchaseID int64) (bool, error) {
+	now := time.Now()
 
-	updates := map[string]interface{}{
-		"status":  PurchaseStatusPaid,
-		"paid_at": currentTime,
+	query := `
+		UPDATE purchase
+		SET status = $1, paid_at = $2
+		WHERE id = $3 AND status IN ($4, $5)
+	`
+
+	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusPaid, now, purchaseID, PurchaseStatusNew, PurchaseStatusPending)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim purchase %d: %w", purchaseID, err)
 	}
 
-	return pr.UpdateFields(ctx, purchaseID, updates)
+	return tag.RowsAffected() > 0, nil
+}
+
+func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) error {
+	_, err := pr.TryMarkAsPaid(ctx, purchaseID)
+	return err
 }
 
 // FindSuccessfulPaidPurchaseByCustomer returns the most recent paid purchase for

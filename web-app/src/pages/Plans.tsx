@@ -3,6 +3,7 @@ import { useTelegram } from '../lib/twa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
+import { ErrorScreen } from '../components/ErrorScreen';
 import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
@@ -22,6 +23,7 @@ export function Plans() {
     const [promoStatus, setPromoStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
     const [discountPercent, setDiscountPercent] = useState<number>(0);
     const [appliedPromoCode, setAppliedPromoCode] = useState('');
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     const extendKeyId = searchParams.get('extend');
     const isExtend = !!extendKeyId;
@@ -41,17 +43,47 @@ export function Plans() {
         return () => tg.BackButton.offClick(handleBack);
     }, [tg, handleBack]);
 
-    useEffect(() => {
-        if (!initData) return;
+    const loadPlans = useCallback(async () => {
+        if (!initData) {
+            setLoading(false);
+            return;
+        }
+
         const headers = { 'Authorization': `twa ${initData}` };
-        Promise.all([
-            fetch('/api/plans', { headers }).then(r => r.json()),
-            fetch('/api/me', { headers }).then(r => r.json()),
-        ])
-            .then(([p, m]) => { setPlans(p || []); setUserData(m); })
-            .catch(err => console.warn('Plans load error:', err))
-            .finally(() => setLoading(false));
-    }, [initData]);
+        setLoading(true);
+        setLoadError(null);
+
+        try {
+            const [plansRes, meRes] = await Promise.all([
+                fetch('/api/plans'),
+                fetch('/api/me', { headers }),
+            ]);
+
+            if (!plansRes.ok) {
+                throw new Error(await plansRes.text() || 'Failed to load plans');
+            }
+            if (!meRes.ok) {
+                throw new Error(await meRes.text() || 'Failed to load user data');
+            }
+
+            const [plansData, meData] = await Promise.all([
+                plansRes.json(),
+                meRes.json(),
+            ]);
+
+            setPlans(Array.isArray(plansData) ? plansData : []);
+            setUserData(meData);
+        } catch (err) {
+            console.warn('Plans load error:', err);
+            setLoadError(t('plans_load_error'));
+        } finally {
+            setLoading(false);
+        }
+    }, [initData, t]);
+
+    useEffect(() => {
+        void loadPlans();
+    }, [loadPlans]);
 
     const handleApplyPromo = () => {
         if (!promoCode.trim()) return;
@@ -84,7 +116,25 @@ export function Plans() {
             });
     };
 
+    if (!initData) {
+        return (
+            <div className="screen-center">
+                <div style={{ fontSize: 48 }}>📱</div>
+                <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Wavy Private Server Shop</h1>
+                <p className="text-hint" style={{ margin: 0 }}>{t('open_in_tg')}</p>
+            </div>
+        );
+    }
     if (loading) return <LoadingScreen message={t('loading_plans')} />;
+    if (loadError) {
+        return (
+            <ErrorScreen
+                message={loadError}
+                onRetry={loadPlans}
+                retryLabel={t('retry')}
+            />
+        );
+    }
 
     const calcNewExpiry = (days: number) => {
         const base = currentExpiry && currentExpiry > new Date() ? currentExpiry : new Date();
@@ -165,8 +215,13 @@ export function Plans() {
                         type="text"
                         value={promoCode}
                         onChange={(e) => {
-                            setPromoCode(e.target.value);
-                            if (promoStatus !== 'idle') setPromoStatus('idle');
+                            const next = e.target.value;
+                            setPromoCode(next);
+                            if (next !== appliedPromoCode) {
+                                setPromoStatus('idle');
+                                setDiscountPercent(0);
+                                setAppliedPromoCode('');
+                            }
                         }}
                         placeholder={t('promo_placeholder')}
                         aria-label={t('promo_placeholder')}

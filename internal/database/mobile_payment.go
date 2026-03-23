@@ -77,6 +77,23 @@ func (r *MobilePaymentRepository) ExistsByTransactionID(ctx context.Context, txn
 	return true, nil
 }
 
+func (r *MobilePaymentRepository) DeleteByTransactionID(ctx context.Context, txnID string) error {
+	builder := sq.Delete("mobile_payment_verification").
+		Where(sq.Eq{"transaction_id": txnID}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := builder.ToSql()
+	if err != nil {
+		return fmt.Errorf("build delete query: %w", err)
+	}
+
+	if _, err := r.pool.Exec(ctx, sql, args...); err != nil {
+		return fmt.Errorf("delete mobile_payment_verification: %w", err)
+	}
+
+	return nil
+}
+
 func (r *MobilePaymentRepository) FindByPurchaseID(ctx context.Context, purchaseID int64) (*MobilePaymentVerification, error) {
 	builder := sq.Select("id", "purchase_id", "transaction_id", "provider", "phone_number", "amount", "note", "verified", "rejection_reason", "created_at").
 		From("mobile_payment_verification").

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
@@ -290,6 +291,33 @@ func (cr *CustomerRepository) FindByTelegramIds(ctx context.Context, telegramIDs
 }
 
 func (cr *CustomerRepository) CreateBatch(ctx context.Context, customers []Customer) error {
+	tx, err := cr.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := createBatchCustomers(ctx, tx, customers); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (cr *CustomerRepository) CreateBatchTx(ctx context.Context, tx pgx.Tx, customers []Customer) error {
+	return createBatchCustomers(ctx, tx, customers)
+}
+
+type customerBatchExecutor interface {
+	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+}
+
+func createBatchCustomers(ctx context.Context, exec customerBatchExecutor, customers []Customer) error {
 	if len(customers) == 0 {
 		return nil
 	}
@@ -304,15 +332,24 @@ func (cr *CustomerRepository) CreateBatch(ctx context.Context, customers []Custo
 		return fmt.Errorf("failed to build batch insert query: %w", err)
 	}
 
+	_, err = exec.Exec(ctx, sqlStr, args...)
+	if err != nil {
+		return fmt.Errorf("failed to execute batch insert: %w", err)
+	}
+	return nil
+}
+
+func (cr *CustomerRepository) UpdateBatch(ctx context.Context, customers []Customer) error {
 	tx, err := cr.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-
-	_, err = tx.Exec(ctx, sqlStr, args...)
-	if err != nil {
+	defer func() {
 		_ = tx.Rollback(ctx)
-		return fmt.Errorf("failed to execute batch insert: %w", err)
+	}()
+
+	if err := updateBatchCustomers(ctx, tx, customers); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -321,7 +358,11 @@ func (cr *CustomerRepository) CreateBatch(ctx context.Context, customers []Custo
 	return nil
 }
 
-func (cr *CustomerRepository) UpdateBatch(ctx context.Context, customers []Customer) error {
+func (cr *CustomerRepository) UpdateBatchTx(ctx context.Context, tx pgx.Tx, customers []Customer) error {
+	return updateBatchCustomers(ctx, tx, customers)
+}
+
+func updateBatchCustomers(ctx context.Context, exec customerBatchExecutor, customers []Customer) error {
 	if len(customers) == 0 {
 		return nil
 	}
@@ -331,30 +372,27 @@ func (cr *CustomerRepository) UpdateBatch(ctx context.Context, customers []Custo
 		if i > 0 {
 			query += ", "
 		}
-		query += fmt.Sprintf("($%d::bigint, $%d::timestamp, $%d::text)", i*3+1, i*3+2, i*3+3)
+		query += fmt.Sprintf("($%d::bigint, $%d::timestamptz, $%d::text)", i*3+1, i*3+2, i*3+3)
 		args = append(args, cust.TelegramID, cust.ExpireAt, cust.SubscriptionLink)
 	}
 	query += ") AS c(telegram_id, expire_at, subscription_link) WHERE customer.telegram_id = c.telegram_id"
 
-	tx, err := cr.pool.Begin(ctx)
+	_, err := exec.Exec(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	_, err = tx.Exec(ctx, query, args...)
-	if err != nil {
-		_ = tx.Rollback(ctx)
 		return fmt.Errorf("failed to execute batch update: %w", err)
-	}
-
-	// If Commit fails, pgx automatically rolls back — calling Rollback after
-	// a failed Commit would operate on an already-terminated transaction.
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return nil
 }
 
 func (cr *CustomerRepository) DeleteByNotInTelegramIds(ctx context.Context, telegramIDs []int64) error {
+	return deleteByNotInTelegramIds(ctx, cr.pool, telegramIDs)
+}
+
+func (cr *CustomerRepository) DeleteByNotInTelegramIdsTx(ctx context.Context, tx pgx.Tx, telegramIDs []int64) error {
+	return deleteByNotInTelegramIds(ctx, tx, telegramIDs)
+}
+
+func deleteByNotInTelegramIds(ctx context.Context, exec customerBatchExecutor, telegramIDs []int64) error {
 	// Safety guard: refuse to delete ALL customers if the caller passes an empty slice.
 	// An empty slice most likely indicates a failed upstream fetch, not a genuine
 	// "no users exist" scenario. A full-table delete would be catastrophic.
@@ -371,7 +409,7 @@ func (cr *CustomerRepository) DeleteByNotInTelegramIds(ctx context.Context, tele
 		return fmt.Errorf("failed to build delete query: %w", err)
 	}
 
-	_, err = cr.pool.Exec(ctx, sqlStr, args...)
+	_, err = exec.Exec(ctx, sqlStr, args...)
 	if err != nil {
 		return fmt.Errorf("failed to delete customers: %w", err)
 	}

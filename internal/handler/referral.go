@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+
+	"remnawave-tg-shop-bot/internal/payment"
 )
 
 func (h Handler) ReferralCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -40,7 +42,7 @@ func (h Handler) ReferralCallbackHandler(ctx context.Context, b *bot.Bot, update
 	} else {
 		for _, ref := range referrals {
 			if ref.BonusGranted {
-				totalEarned += 1000
+				totalEarned += int(payment.ReferralBonusAmount)
 				historyLines = append(historyLines,
 					fmt.Sprintf(h.translation.GetText(langCode, "referral_history_item_done"),
 						maskID(ref.RefereeID),

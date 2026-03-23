@@ -59,7 +59,7 @@ func (j *Job) Run(ctx context.Context) {
 		return
 	}
 
-	invoices, err := j.cryptoPayClient.GetInvoices("", "", "", strings.Join(invoiceIDs, ","), 0, 0)
+	invoices, err := j.cryptoPayClient.GetInvoices(ctx, "", "", "", strings.Join(invoiceIDs, ","), 0, 0)
 	if err != nil {
 		slog.Error("Invoice checker: error fetching invoices from CryptoPay", "error", err)
 		return

@@ -75,6 +75,9 @@ func TrialRemnawaveTag() string {
 }
 
 func DefaultLanguage() string {
+	if conf.defaultLanguage == "" {
+		return "en"
+	}
 	return conf.defaultLanguage
 }
 
@@ -317,7 +320,7 @@ func InitConfig() {
 	conf.trialTrafficLimitResetStrategy = envStringDefault("TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY", "MONTH")
 	conf.trafficLimitResetStrategy = envStringDefault("TRAFFIC_LIMIT_RESET_STRATEGY", "MONTH")
 
-	conf.defaultLanguage = envStringDefault("DEFAULT_LANGUAGE", "ru")
+	conf.defaultLanguage = envStringDefault("DEFAULT_LANGUAGE", "en")
 
 	externalSquadUUIDStr := os.Getenv("EXTERNAL_SQUAD_UUID")
 	if externalSquadUUIDStr != "" {

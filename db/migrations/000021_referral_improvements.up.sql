@@ -7,8 +7,8 @@ ALTER TABLE referral ADD COLUMN referee_bonus_granted BOOLEAN NOT NULL DEFAULT F
 
 -- Extend wallet_transaction type to include referral bonuses
 ALTER TABLE wallet_transaction
-    DROP CONSTRAINT IF EXISTS wallet_transaction_type_check;
+    DROP CONSTRAINT IF EXISTS wallet_tx_type_valid;
 
 ALTER TABLE wallet_transaction
-    ADD CONSTRAINT wallet_transaction_type_check
+    ADD CONSTRAINT wallet_tx_type_valid
         CHECK (type IN ('topup', 'purchase', 'refund', 'referral'));

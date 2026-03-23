@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,6 +37,9 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return corsMiddleware(maxBodySize(authMiddleware(next), 1<<20)) // 1MB default
 	}
+	withUploadAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return corsMiddleware(maxBodySize(authMiddleware(next), 10<<20))
+	}
 	withAdmin := func(next http.HandlerFunc) http.HandlerFunc {
 		return corsMiddleware(maxBodySize(authMiddleware(adminMiddleware(next)), 1<<20))
 	}
@@ -45,7 +50,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/me", withAuth(handler.GetMe))
 	mux.HandleFunc("/api/plans", public(handler.GetPlans))
 	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
-	mux.HandleFunc("/api/upload_screenshot", withAuth(handler.UploadScreenshot))
+	mux.HandleFunc("/api/upload_screenshot", withUploadAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
@@ -77,8 +82,41 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 		// Extract the subscription URL from the deep link for copy fallback
 		subURL := strings.TrimPrefix(target, "happ://add/")
 
+		page, err := renderRedirectPage(target, subURL)
+		if err != nil {
+			http.Error(w, "Failed to render redirect page", http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<!DOCTYPE html>
+		_, _ = w.Write([]byte(page))
+	})
+
+	// Serve React Frontend (SPA support — serves index.html for unknown paths)
+	fs := http.FileServer(http.Dir("./web-app/dist"))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// If the requested file exists, serve it directly
+		path := "./web-app/dist" + r.URL.Path
+		if _, err := os.Stat(path); err == nil {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		// Otherwise serve index.html for SPA routing
+		http.ServeFile(w, r, "./web-app/dist/index.html")
+	})
+}
+
+func renderRedirectPage(target, subURL string) (string, error) {
+	deepLinkJSON, err := json.Marshal(target)
+	if err != nil {
+		return "", err
+	}
+	subURLJSON, err := json.Marshal(subURL)
+	if err != nil {
+		return "", err
+	}
+
+	tpl, err := template.New("redirect").Parse(`<!DOCTYPE html>
 <html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Open in Happ</title>
@@ -115,7 +153,7 @@ h1{font-size:20px;margin-bottom:8px;color:#fff}
     <div class="icon">📱</div>
     <h1>Happ Not Found</h1>
     <p class="sub">Install Happ to add your VPN config automatically</p>
-    <a id="btn-retry" href="%s" class="btn btn-retry">🔄 Try Again</a>
+    <a id="btn-retry" href="{{.Target}}" class="btn btn-retry">🔄 Try Again</a>
     <div class="divider">— install Happ —</div>
     <a id="btn-android" href="https://play.google.com/store/search?q=happ+vpn&c=apps" target="_blank" class="btn btn-android" style="display:none">▶️ Google Play Store</a>
     <a id="btn-ios" href="https://apps.apple.com/search?term=happ+vpn" target="_blank" class="btn btn-ios" style="display:none">🍎 App Store</a>
@@ -125,8 +163,8 @@ h1{font-size:20px;margin-bottom:8px;color:#fff}
   </div>
 </div>
 <script>
-var deepLink = %q;
-var subUrl = %q;
+var deepLink = {{.DeepLinkJSON}};
+var subUrl = {{.SubURLJSON}};
 
 // Detect platform
 var ua = navigator.userAgent || '';
@@ -176,21 +214,27 @@ function showCopied() {
   setTimeout(function() { el.classList.remove('show'); }, 2000);
 }
 </script>
-</body></html>`, target, target, subURL)
-	})
+</body></html>`)
+	if err != nil {
+		return "", err
+	}
 
-	// Serve React Frontend (SPA support — serves index.html for unknown paths)
-	fs := http.FileServer(http.Dir("./web-app/dist"))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// If the requested file exists, serve it directly
-		path := "./web-app/dist" + r.URL.Path
-		if _, err := os.Stat(path); err == nil {
-			fs.ServeHTTP(w, r)
-			return
-		}
-		// Otherwise serve index.html for SPA routing
-		http.ServeFile(w, r, "./web-app/dist/index.html")
-	})
+	data := struct {
+		Target       string
+		DeepLinkJSON template.JS
+		SubURLJSON   template.JS
+	}{
+		Target:       target,
+		DeepLinkJSON: template.JS(deepLinkJSON),
+		SubURLJSON:   template.JS(subURLJSON),
+	}
+
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, data); err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
 }
 
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
