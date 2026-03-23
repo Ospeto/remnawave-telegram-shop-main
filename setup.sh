@@ -175,6 +175,57 @@ env_set() {
     fi
 }
 
+# Escape single quotes for safe SQL literal usage.
+sql_escape() {
+    printf "%s" "$1" | sed "s/'/''/g"
+}
+
+# Sync provider-specific payment receivers into app_config if DB is running.
+sync_payment_receivers_to_db() {
+    local phone_kpay="$1"
+    local phone_wave="$2"
+    local phone_aya="$3"
+    local name_kpay="$4"
+    local name_wave="$5"
+    local name_aya="$6"
+
+    if ! docker ps --format '{{.Names}}' | grep -q '^remnawave-telegram-shop-db$'; then
+        print_info "DB container is not running; skipped app_config sync."
+        print_info "Start services (option 5) and run payment edit again to sync DB values."
+        return
+    fi
+
+    local pg_user pg_db
+    pg_user="$(env_get "POSTGRES_USER" "postgres")"
+    pg_db="$(env_get "POSTGRES_DB" "postgres")"
+
+    local e_phone_kpay e_phone_wave e_phone_aya
+    local e_name_kpay e_name_wave e_name_aya
+    e_phone_kpay="$(sql_escape "$phone_kpay")"
+    e_phone_wave="$(sql_escape "$phone_wave")"
+    e_phone_aya="$(sql_escape "$phone_aya")"
+    e_name_kpay="$(sql_escape "$name_kpay")"
+    e_name_wave="$(sql_escape "$name_wave")"
+    e_name_aya="$(sql_escape "$name_aya")"
+
+    if docker exec -i remnawave-telegram-shop-db psql -U "$pg_user" "$pg_db" >/dev/null <<SQL
+INSERT INTO app_config (key, value) VALUES
+('phone_kpay', '${e_phone_kpay}'),
+('phone_wavepay', '${e_phone_wave}'),
+('phone_ayapay', '${e_phone_aya}'),
+('name_kpay', '${e_name_kpay}'),
+('name_wavepay', '${e_name_wave}'),
+('name_ayapay', '${e_name_aya}')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+SQL
+    then
+        print_success "Provider phones/names synced to app_config."
+    else
+        print_error "Failed to sync payment providers to DB."
+        print_info "You can still update providers from Telegram admin commands (/setphone, /setname)."
+    fi
+}
+
 # ──── Ctrl-C trap ───────────────────────────────────────────
 cleanup() {
     echo ""
@@ -1220,6 +1271,14 @@ do_edit_payments() {
     env_set "MOBILE_BANKING_NAME_AYAPAY" "${CFG[MOBILE_BANKING_NAME_AYAPAY]}"
     env_set "GEMINI_API_KEY" "${CFG[GEMINI_API_KEY]}"
     env_set "GEMINI_MODEL" "${CFG[GEMINI_MODEL]}"
+
+    sync_payment_receivers_to_db \
+        "${CFG[MOBILE_BANKING_PHONE_KPAY]}" \
+        "${CFG[MOBILE_BANKING_PHONE_WAVEPAY]}" \
+        "${CFG[MOBILE_BANKING_PHONE_AYAPAY]}" \
+        "${CFG[MOBILE_BANKING_NAME_KPAY]}" \
+        "${CFG[MOBILE_BANKING_NAME_WAVEPAY]}" \
+        "${CFG[MOBILE_BANKING_NAME_AYAPAY]}"
 
     echo ""
     if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
