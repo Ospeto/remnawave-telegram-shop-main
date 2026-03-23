@@ -531,57 +531,6 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 // and it persists in the app_config database table.
 var ReferralBonusAmount float64 = 1000.0
 
-// Per-provider payment phone numbers. Configurable via /setphone admin command.
-// These are loaded from app_config on startup and updated at runtime.
-var (
-	PhoneKPay    string
-	PhoneWavePay string
-	PhoneAyaPay  string
-)
-
-// GetAllPaymentPhones returns a map of provider→phone for all configured providers.
-func GetAllPaymentPhones() map[string]string {
-	phones := make(map[string]string)
-	if PhoneKPay != "" {
-		phones["kpay"] = PhoneKPay
-	}
-	if PhoneWavePay != "" {
-		phones["wavepay"] = PhoneWavePay
-	}
-	if PhoneAyaPay != "" {
-		phones["ayapay"] = PhoneAyaPay
-	}
-	return phones
-}
-
-// GetFirstPaymentPhone returns the first non-empty phone (backward compat).
-func GetFirstPaymentPhone() string {
-	if PhoneKPay != "" {
-		return PhoneKPay
-	}
-	if PhoneWavePay != "" {
-		return PhoneWavePay
-	}
-	if PhoneAyaPay != "" {
-		return PhoneAyaPay
-	}
-	return ""
-}
-
-// AnyPhoneMatchesSuffix checks if actualPhone matches any of the configured provider phones.
-func AnyPhoneMatchesSuffix(actualPhone string, digits int) bool {
-	actual := normalizePhone(actualPhone)
-	for _, p := range []string{PhoneKPay, PhoneWavePay, PhoneAyaPay} {
-		if p == "" {
-			continue
-		}
-		if phoneMatchesSuffix(normalizePhone(p), actual, digits) {
-			return true
-		}
-	}
-	return false
-}
-
 // processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
 // the referee (new buyer) when the referee completes their first purchase.
 // This is intentionally non-fatal — errors are logged but never block the purchase flow.
@@ -887,6 +836,10 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 }
 
 func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+	if len(GetEnabledPaymentProviders()) == 0 {
+		return "", 0, fmt.Errorf("no mobile banking accounts configured")
+	}
+
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeMobileBanking,
 		Status:         database.PurchaseStatusPending,
@@ -1048,6 +1001,11 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
+	enabledProviders := GetEnabledPaymentProviders()
+	if len(enabledProviders) == 0 {
+		return &VerificationResult{Success: false, Reason: "No receiving accounts configured", ReasonKey: "mobile_pay_failed_generic"}, nil
+	}
+
 	purchase, err := s.purchaseRepository.FindById(ctx, purchaseID)
 	if err != nil {
 		return nil, fmt.Errorf("error finding purchase %d: %w", purchaseID, err)
@@ -1061,7 +1019,17 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
-	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType, GetAllPaymentPhones())
+	geminiProviders := make([]gemini.ConfiguredProvider, 0, len(enabledProviders))
+	for _, provider := range enabledProviders {
+		geminiProviders = append(geminiProviders, gemini.ConfiguredProvider{
+			Key:         provider.Key,
+			Label:       provider.Label,
+			Phone:       provider.Phone,
+			AccountName: provider.AccountName,
+		})
+	}
+
+	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType, geminiProviders)
 	if err != nil {
 		slog.Error("Gemini analysis failed", "error", err, "purchase_id", purchaseID)
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
@@ -1134,11 +1102,13 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: "mobile_pay_failed_duplicate"}, nil
 	}
 
-	// 3. Check phone number matches any configured receiving phone.
-	// Some banking apps mask part of the number, so we compare last 4 digits.
-	if !AnyPhoneMatchesSuffix(info.PhoneNumber, 4) {
-		slog.Warn("Phone mismatch", "got", info.PhoneNumber, "purchase_id", purchaseID)
-		return &VerificationResult{Success: false, Reason: "Wrong recipient phone number", ReasonKey: "mobile_pay_failed_phone"}, nil
+	// 3. Check the receipt matches one of the enabled providers.
+	// Phone suffix is preferred, but account name can also verify the receiver when
+	// different apps use different names/number formats.
+	matchedProvider, matchedBy, matched := MatchPaymentRecipient(NormalizeProviderKey(info.Provider), info.PhoneNumber, info.RecipientName, 4)
+	if !matched {
+		slog.Warn("Recipient mismatch", "provider", info.Provider, "phone", info.PhoneNumber, "recipient_name", info.RecipientName, "purchase_id", purchaseID)
+		return &VerificationResult{Success: false, Reason: "Wrong recipient details", ReasonKey: "mobile_pay_failed_phone"}, nil
 	}
 
 	// 4. Check note for forbidden keywords
@@ -1163,7 +1133,7 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
 		PurchaseID:    purchaseID,
 		TransactionID: info.TransactionID,
-		Provider:      info.Provider,
+		Provider:      matchedProvider.Key,
 		PhoneNumber:   info.PhoneNumber,
 		Amount:        info.Amount,
 		Note:          info.Note,
@@ -1188,12 +1158,12 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	now := time.Now()
 	_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
 		"transaction_id": info.TransactionID,
-		"payment_method": info.Provider,
+		"payment_method": matchedProvider.Key,
 		"payment_phone":  info.PhoneNumber,
 		"verified_at":    now,
 	})
 
-	slog.Info("Mobile payment verified and processed", "purchase_id", purchaseID, "txn_id", info.TransactionID, "provider", info.Provider)
+	slog.Info("Mobile payment verified and processed", "purchase_id", purchaseID, "txn_id", info.TransactionID, "provider", matchedProvider.Key, "matched_by", matchedBy)
 	return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
 }
 
@@ -1258,6 +1228,10 @@ func phoneMatchesSuffix(expected, actual string, n int) bool {
 }
 
 func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+	if len(GetEnabledPaymentProviders()) == 0 {
+		return "", 0, fmt.Errorf("no mobile banking accounts configured")
+	}
+
 	purchaseId, err = s.purchaseRepository.Create(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeWalletTopUp,
 		Status:         database.PurchaseStatusPending,

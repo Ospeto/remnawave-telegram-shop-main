@@ -8,10 +8,18 @@ import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 
+interface PaymentProvider {
+    key: string;
+    label: string;
+    phone: string;
+    account_name?: string;
+}
+
 interface PurchaseResponse {
     purchase_id: number;
     payment_phone: string;
     payment_phones?: Record<string, string>;
+    payment_providers?: PaymentProvider[];
     amount: number;
     currency: string;
     instructions: string;
@@ -59,6 +67,17 @@ export function Checkout() {
     const extendingKey = extendKeyId && userData?.keys
         ? userData.keys.find((key) => key.id === Number(extendKeyId))
         : undefined;
+    const fallbackProviderLabels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
+    const paymentProviders: PaymentProvider[] = purchase?.payment_providers && purchase.payment_providers.length > 0
+        ? purchase.payment_providers
+        : purchase?.payment_phones
+            ? Object.entries(purchase.payment_phones).map(([key, phone]) => ({
+                key,
+                label: fallbackProviderLabels[key] || key,
+                phone,
+            }))
+            : [];
+    const paymentMethodsText = paymentProviders.map((provider) => provider.label).join(' · ');
 
     const handleBack = useCallback(() => {
         navigate(backTarget);
@@ -89,6 +108,7 @@ export function Checkout() {
         setPurchaseError(null);
         setVerificationResult(null);
         setSelectedAction(null);
+        setSelectedProvider(null);
         setWalletPayError(null);
         setWalletBalance(null);
 
@@ -180,6 +200,10 @@ export function Checkout() {
 
             const data = await res.json();
             setPurchase(data);
+            const providerKeys = Array.isArray(data.payment_providers) && data.payment_providers.length > 0
+                ? data.payment_providers.map((provider: PaymentProvider) => provider.key)
+                : (data.payment_phones ? Object.keys(data.payment_phones) : []);
+            setSelectedProvider(providerKeys[0] || null);
 
             if (action === 'wallet') {
                 setVerificationResult({
@@ -478,7 +502,9 @@ export function Checkout() {
                         }}>1</div>
                         <div>
                             <div style={{ fontWeight: 600, fontSize: 14 }}>{t('guide_step_1')}</div>
-                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>{t('guide_step_1_hint')}</div>
+                            <div className="text-hint" style={{ fontSize: 12, marginTop: 2 }}>
+                                {t('guide_step_1_hint', { methods: paymentMethodsText || t('choose_payment_method') })}
+                            </div>
                         </div>
                     </div>
 
@@ -498,47 +524,45 @@ export function Checkout() {
                                     <span style={{ fontWeight: 800, fontSize: 22, letterSpacing: '-0.5px' }}>{(purchase?.amount || 0).toLocaleString()}</span>
                                     <span className="text-hint" style={{ fontSize: 13 }}>{purchase?.currency}</span>
                                 </div>
-                                {purchase?.payment_phones && Object.keys(purchase.payment_phones).length > 0 ? (() => {
-                                    const providers = Object.entries(purchase.payment_phones);
-                                    const labels: Record<string, string> = { kpay: 'KPay', wavepay: 'WavePay', ayapay: 'AYA Pay' };
-                                    const effectiveSelected = providers.length === 1 ? providers[0][0] : selectedProvider;
-                                    const selectedPhone = effectiveSelected ? purchase.payment_phones[effectiveSelected] : null;
+                                {paymentProviders.length > 0 ? (() => {
+                                    const effectiveSelected = selectedProvider ?? paymentProviders[0].key;
+                                    const selectedProviderConfig = paymentProviders.find((provider) => provider.key === effectiveSelected) || paymentProviders[0];
 
                                     return (
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                            {providers.length > 1 && (
+                                            {paymentProviders.length > 1 && (
                                                 <div style={{ display: 'flex', gap: 6 }}>
-                                                    {providers.map(([key]) => (
+                                                    {paymentProviders.map((provider) => (
                                                         <button
-                                                            key={key}
-                                                            onClick={() => { playClick(); setSelectedProvider(key); }}
+                                                            key={provider.key}
+                                                            onClick={() => { playClick(); setSelectedProvider(provider.key); }}
                                                             style={{
                                                                 flex: 1,
                                                                 padding: '8px 4px',
                                                                 borderRadius: 10,
-                                                                border: effectiveSelected === key ? '2px solid var(--accent-color)' : '1px solid var(--input-border)',
-                                                                background: effectiveSelected === key ? 'var(--accent-color)' : 'var(--input-bg)',
-                                                                color: effectiveSelected === key ? '#fff' : 'inherit',
+                                                                border: effectiveSelected === provider.key ? '2px solid var(--accent-color)' : '1px solid var(--input-border)',
+                                                                background: effectiveSelected === provider.key ? 'var(--accent-color)' : 'var(--input-bg)',
+                                                                color: effectiveSelected === provider.key ? '#fff' : 'inherit',
                                                                 fontWeight: 600,
                                                                 fontSize: 13,
                                                                 cursor: 'pointer',
                                                                 transition: 'all 0.15s ease'
                                                             }}
                                                         >
-                                                            {labels[key] || key}
+                                                            {provider.label}
                                                         </button>
                                                     ))}
                                                 </div>
                                             )}
-                                            {effectiveSelected && selectedPhone ? (
+                                            {selectedProviderConfig?.phone ? (
                                                 <div style={{ padding: '10px 12px', borderRadius: 12, background: 'var(--input-bg)', border: '1px solid var(--input-border)' }}>
-                                                    <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{labels[effectiveSelected] || effectiveSelected}</div>
+                                                    <div className="text-hint" style={{ fontSize: 11, marginBottom: 4 }}>{selectedProviderConfig.label}</div>
                                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
-                                                        <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{selectedPhone}</div>
+                                                        <div style={{ fontWeight: 700, fontSize: 18, fontFamily: 'monospace', letterSpacing: '0.5px' }}>{selectedProviderConfig.phone}</div>
                                                         <button
                                                             onClick={() => {
                                                                 playClick();
-                                                                copyToClipboard(selectedPhone);
+                                                                copyToClipboard(selectedProviderConfig.phone);
                                                                 setPhoneCopied(effectiveSelected);
                                                                 setTimeout(() => setPhoneCopied(null), 1500);
                                                             }}
@@ -549,8 +573,14 @@ export function Checkout() {
                                                             {phoneCopied === effectiveSelected ? '✓' : '📋'}
                                                         </button>
                                                     </div>
+                                                    {selectedProviderConfig.account_name && (
+                                                        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                            <span className="text-hint" style={{ fontSize: 11 }}>{t('label_account_name')}</span>
+                                                            <span style={{ fontWeight: 600, fontSize: 14 }}>{selectedProviderConfig.account_name}</span>
+                                                        </div>
+                                                    )}
                                                 </div>
-                                            ) : providers.length > 1 ? (
+                                            ) : paymentProviders.length > 1 ? (
                                                 <div className="text-hint" style={{ textAlign: 'center', padding: 8, fontSize: 13 }}>
                                                     {t('select_payment_method') || 'Select a payment method above'}
                                                 </div>

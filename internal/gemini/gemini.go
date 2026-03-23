@@ -18,10 +18,20 @@ type PaymentInfo struct {
 	Provider          string  `json:"provider"`
 	TransactionID     string  `json:"transaction_id"`
 	PhoneNumber       string  `json:"phone_number"`
+	RecipientName     string  `json:"recipient_name"`
 	Amount            float64 `json:"amount"`
 	Note              string  `json:"note"`
 	IsValid           bool    `json:"is_valid"`
 	TamperingDetected bool    `json:"tampering_detected"`
+}
+
+// ConfiguredProvider is the minimal receiver configuration Gemini needs to
+// analyze a payment screenshot accurately.
+type ConfiguredProvider struct {
+	Key         string
+	Label       string
+	Phone       string
+	AccountName string
 }
 
 // Client communicates with the Gemini REST API.
@@ -67,42 +77,56 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// BuildAnalysisPrompt creates the Gemini analysis prompt with current payment phone numbers.
-func BuildAnalysisPrompt(phones map[string]string) string {
-	var phoneLines []string
-	for provider, phone := range phones {
-		labels := map[string]string{"kpay": "KPay", "wavepay": "WavePay", "ayapay": "AYA Pay"}
-		label := labels[provider]
-		if label == "" {
-			label = provider
+// BuildAnalysisPrompt creates the Gemini analysis prompt with the current
+// enabled mobile banking providers.
+func BuildAnalysisPrompt(providers []ConfiguredProvider) string {
+	providerLabels := make([]string, 0, len(providers))
+	providerKeys := make([]string, 0, len(providers))
+	providerLines := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		providerLabels = append(providerLabels, provider.Label)
+		providerKeys = append(providerKeys, fmt.Sprintf("%q", provider.Key))
+
+		line := fmt.Sprintf("  - %s: phone %s", provider.Label, provider.Phone)
+		if strings.TrimSpace(provider.AccountName) != "" {
+			line += fmt.Sprintf(", account name %q", provider.AccountName)
 		}
-		phoneLines = append(phoneLines, fmt.Sprintf("  - %s: %s", label, phone))
-	}
-	phoneSection := ""
-	if len(phoneLines) > 0 {
-		phoneSection = fmt.Sprintf("\n\nOur configured receiving phone numbers are:\n%s\nThe recipient phone in the screenshot should match one of these numbers (some digits may be masked with asterisks).", strings.Join(phoneLines, "\n"))
+		providerLines = append(providerLines, line)
 	}
 
-	return fmt.Sprintf(`Analyze this mobile banking payment screenshot from Myanmar. 
-This is a screenshot from KPay, WavePay, or AyaPay.%s
+	providerSummary := "a Myanmar mobile banking app"
+	if len(providerLabels) > 0 {
+		providerSummary = strings.Join(providerLabels, ", ")
+	}
+
+	receiverSection := ""
+	if len(providerLines) > 0 {
+		receiverSection = fmt.Sprintf("\n\nOur configured receiving accounts are:\n%s\nThe receipt should match one of these providers. The phone number may be partially masked with asterisks. The recipient name may differ by provider, so extract the visible recipient/account name exactly as shown.", strings.Join(providerLines, "\n"))
+	}
+
+	return fmt.Sprintf(`Analyze this Myanmar mobile banking payment screenshot.
+This is a screenshot from one of these providers: %s.%s
 
 Extract the following fields and respond ONLY with valid JSON (no markdown, no code fences):
 
 {
-  "provider": "kpay" or "wavepay" or "ayapay",
+  "provider": "provider key or empty string if unclear",
   "transaction_id": "the unique transaction/reference ID string",
   "phone_number": "the recipient phone number who received the money (even if partially masked with asterisks, extract whatever is visible)",
+  "recipient_name": "the recipient/account holder name who received the money, empty string if not visible",
   "amount": numeric payment amount (no currency symbol, just the number),
   "note": "any note or remark text, empty string if none",
   "is_valid": true if this looks like a genuine payment confirmation screenshot, false otherwise
 }
 
 Important:
+- For provider, use one of: %s, or return an empty string if you cannot tell confidently.
 - For transaction_id, look for labels like "Transaction ID", "Reference No", "Ref No", etc.
 - For phone_number, look for the RECIPIENT/RECEIVER phone number. If partially masked (e.g. 09***2220), extract what is visible including asterisks.
+- For recipient_name, extract the visible recipient/account holder name tied to the transfer target. Keep Burmese or English text as shown.
 - For amount, extract only the numeric value of the FINAL PAID AMOUNT or TRANSFER AMOUNT. Ignore original price if discounted.
 - For is_valid, set to false if: the image is not a payment screenshot, appears to be a screenshot of another screenshot, is heavily blurred, or shows no payment information
-- Return ONLY the JSON object, nothing else`, phoneSection)
+- Return ONLY the JSON object, nothing else`, providerSummary, receiverSection, strings.Join(providerKeys, ", "))
 }
 
 // geminiRequest matches the Gemini REST API request body.
@@ -140,10 +164,10 @@ type geminiResponse struct {
 }
 
 // AnalyzePaymentScreenshot sends image bytes to Gemini and returns extracted payment info.
-func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, phones map[string]string) (*PaymentInfo, error) {
+func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, providers []ConfiguredProvider) (*PaymentInfo, error) {
 	b64Image := base64.StdEncoding.EncodeToString(imageBytes)
 
-	prompt := BuildAnalysisPrompt(phones)
+	prompt := BuildAnalysisPrompt(providers)
 
 	reqBody := geminiRequest{
 		Contents: []geminiContent{

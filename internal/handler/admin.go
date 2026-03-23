@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 	"time"
@@ -42,8 +43,10 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 <b>Settings</b>
 /setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)
 /setphone &lt;provider&gt; &lt;number&gt; — Set phone for a provider (e.g. /setphone kpay 09123456789)
+/setname &lt;provider&gt; &lt;name&gt; — Set account name for a provider (e.g. /setname wave Aung Aung)
 /disablephone &lt;provider&gt; — Disable a provider (e.g. /disablephone aya)
-/phones — Show all configured payment phones
+/disablename &lt;provider&gt; — Clear a provider account name (e.g. /disablename aya)
+/phones — Show all configured payment receivers
 
 <b>Transactions</b>
 /transactions — Last 10 paid transactions
@@ -65,6 +68,45 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 		Text:      helpText,
 		ParseMode: models.ParseModeHTML,
 	})
+}
+
+type providerConfig struct {
+	phoneKey string
+	nameKey  string
+	label    string
+	phonePtr *string
+	namePtr  *string
+}
+
+func resolveProviderConfig(provider string) (providerConfig, bool) {
+	switch payment.NormalizeProviderKey(provider) {
+	case "kpay":
+		return providerConfig{
+			phoneKey: "phone_kpay",
+			nameKey:  "name_kpay",
+			label:    "KPay",
+			phonePtr: &payment.PhoneKPay,
+			namePtr:  &payment.AccountNameKPay,
+		}, true
+	case "wavepay":
+		return providerConfig{
+			phoneKey: "phone_wavepay",
+			nameKey:  "name_wavepay",
+			label:    "WavePay",
+			phonePtr: &payment.PhoneWavePay,
+			namePtr:  &payment.AccountNameWave,
+		}, true
+	case "ayapay":
+		return providerConfig{
+			phoneKey: "phone_ayapay",
+			nameKey:  "name_ayapay",
+			label:    "AYA Pay",
+			phonePtr: &payment.PhoneAyaPay,
+			namePtr:  &payment.AccountNameAya,
+		}, true
+	default:
+		return providerConfig{}, false
+	}
 }
 
 // SetReferralBonusCommandHandler handles /setreferralbonus <amount>
@@ -277,22 +319,9 @@ func (h Handler) SetPhoneCommandHandler(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
-	provider := strings.ToLower(args[1])
 	phone := args[2]
-
-	var dbKey string
-	var label string
-	switch provider {
-	case "kpay", "kbzpay", "kbz":
-		dbKey = "phone_kpay"
-		label = "KPay"
-	case "wave", "wavepay":
-		dbKey = "phone_wavepay"
-		label = "WavePay"
-	case "aya", "ayapay":
-		dbKey = "phone_ayapay"
-		label = "AYA Pay"
-	default:
+	cfg, ok := resolveProviderConfig(args[1])
+	if !ok {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
@@ -301,7 +330,7 @@ func (h Handler) SetPhoneCommandHandler(ctx context.Context, b *bot.Bot, update 
 	}
 
 	// Save to database
-	if err := h.appConfigRepository.Set(ctx, dbKey, phone); err != nil {
+	if err := h.appConfigRepository.Set(ctx, cfg.phoneKey, phone); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
@@ -310,39 +339,87 @@ func (h Handler) SetPhoneCommandHandler(ctx context.Context, b *bot.Bot, update 
 	}
 
 	// Update in-memory
-	switch dbKey {
-	case "phone_kpay":
-		payment.PhoneKPay = phone
-	case "phone_wavepay":
-		payment.PhoneWavePay = phone
-	case "phone_ayapay":
-		payment.PhoneAyaPay = phone
-	}
+	*cfg.phonePtr = phone
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      fmt.Sprintf("✅ %s phone updated to <code>%s</code>", label, phone),
+		Text:      fmt.Sprintf("✅ %s phone updated to <code>%s</code>", cfg.label, html.EscapeString(phone)),
 		ParseMode: models.ParseModeHTML,
 	})
 }
 
-// PhonesCommandHandler handles /phones — shows all configured payment phones.
+// SetNameCommandHandler handles /setname <provider> <name>.
+func (h Handler) SetNameCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	args := strings.SplitN(strings.TrimSpace(update.Message.Text), " ", 3)
+	if len(args) != 3 || strings.TrimSpace(args[2]) == "" {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /setname <provider> <name>\nProviders: kpay, wave, aya\nExample: /setname wave Aung Aung",
+		})
+		return
+	}
+
+	cfg, ok := resolveProviderConfig(args[1])
+	if !ok {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
+
+	name := strings.TrimSpace(args[2])
+	if err := h.appConfigRepository.Set(ctx, cfg.nameKey, name); err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
+		})
+		return
+	}
+
+	*cfg.namePtr = name
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      fmt.Sprintf("✅ %s account name updated to <code>%s</code>", cfg.label, html.EscapeString(name)),
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+// PhonesCommandHandler handles /phones — shows all configured payment receivers.
 func (h Handler) PhonesCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.adminOnly(ctx, b, update) {
 		return
 	}
 
-	format := func(label, phone string) string {
-		if phone == "" {
-			return fmt.Sprintf("❌ %s: <i>disabled</i>", label)
+	formatValue := func(value string) string {
+		if strings.TrimSpace(value) == "" {
+			return "<i>not set</i>"
 		}
-		return fmt.Sprintf("✅ %s: <code>%s</code>", label, phone)
+		return fmt.Sprintf("<code>%s</code>", html.EscapeString(value))
 	}
 
-	text := fmt.Sprintf("📱 <b>Payment Phones</b>\n\n%s\n%s\n%s\n\nUse /setphone to enable, /disablephone to disable.",
-		format("KPay", payment.PhoneKPay),
-		format("WavePay", payment.PhoneWavePay),
-		format("AYA Pay", payment.PhoneAyaPay),
+	formatProvider := func(cfg providerConfig) string {
+		status := "❌ <i>disabled</i>"
+		if strings.TrimSpace(*cfg.phonePtr) != "" {
+			status = "✅ <i>enabled</i>"
+		}
+		return fmt.Sprintf("<b>%s</b> — %s\nPhone: %s\nName: %s",
+			cfg.label,
+			status,
+			formatValue(*cfg.phonePtr),
+			formatValue(*cfg.namePtr),
+		)
+	}
+
+	text := fmt.Sprintf("📱 <b>Payment Receivers</b>\n\n%s\n\n%s\n\n%s\n\nUse /setphone and /setname to update. Use /disablephone to hide a provider from checkout.",
+		formatProvider(providerConfig{label: "KPay", phonePtr: &payment.PhoneKPay, namePtr: &payment.AccountNameKPay}),
+		formatProvider(providerConfig{label: "WavePay", phonePtr: &payment.PhoneWavePay, namePtr: &payment.AccountNameWave}),
+		formatProvider(providerConfig{label: "AYA Pay", phonePtr: &payment.PhoneAyaPay, namePtr: &payment.AccountNameAya}),
 	)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -367,21 +444,8 @@ func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, upd
 		return
 	}
 
-	provider := strings.ToLower(args[1])
-
-	var dbKey string
-	var label string
-	switch provider {
-	case "kpay", "kbzpay", "kbz":
-		dbKey = "phone_kpay"
-		label = "KPay"
-	case "wave", "wavepay":
-		dbKey = "phone_wavepay"
-		label = "WavePay"
-	case "aya", "ayapay":
-		dbKey = "phone_ayapay"
-		label = "AYA Pay"
-	default:
+	cfg, ok := resolveProviderConfig(args[1])
+	if !ok {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
@@ -390,7 +454,7 @@ func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, upd
 	}
 
 	// Clear in database
-	if err := h.appConfigRepository.Set(ctx, dbKey, ""); err != nil {
+	if err := h.appConfigRepository.Set(ctx, cfg.phoneKey, ""); err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
@@ -399,18 +463,52 @@ func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, upd
 	}
 
 	// Clear in-memory
-	switch dbKey {
-	case "phone_kpay":
-		payment.PhoneKPay = ""
-	case "phone_wavepay":
-		payment.PhoneWavePay = ""
-	case "phone_ayapay":
-		payment.PhoneAyaPay = ""
-	}
+	*cfg.phonePtr = ""
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      fmt.Sprintf("✅ %s has been disabled and will no longer appear in checkout.", label),
+		Text:      fmt.Sprintf("✅ %s has been disabled and will no longer appear in checkout.", cfg.label),
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+// DisableNameCommandHandler handles /disablename <provider>.
+func (h Handler) DisableNameCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	args := strings.Fields(update.Message.Text)
+	if len(args) != 2 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /disablename <provider>\nProviders: kpay, wave, aya\nExample: /disablename aya",
+		})
+		return
+	}
+
+	cfg, ok := resolveProviderConfig(args[1])
+	if !ok {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
+
+	if err := h.appConfigRepository.Set(ctx, cfg.nameKey, ""); err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error saving to database: %v", err),
+		})
+		return
+	}
+
+	*cfg.namePtr = ""
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      fmt.Sprintf("✅ %s account name cleared.", cfg.label),
 		ParseMode: models.ParseModeHTML,
 	})
 }

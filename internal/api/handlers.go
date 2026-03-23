@@ -65,15 +65,16 @@ type CreatePurchaseRequest struct {
 }
 
 type CreatePurchaseResponse struct {
-	PurchaseID    int64             `json:"purchase_id"`
-	PaymentPhone  string            `json:"payment_phone,omitempty"`
-	PaymentPhones map[string]string `json:"payment_phones,omitempty"`
-	Amount        int               `json:"amount"`
-	Currency      string            `json:"currency"`
-	Instructions  string            `json:"instructions,omitempty"`
-	InvoiceType   string            `json:"invoice_type"`
-	BotURL        string            `json:"bot_url"`
-	HappLink      string            `json:"happ_link,omitempty"`
+	PurchaseID       int64                     `json:"purchase_id"`
+	PaymentPhone     string                    `json:"payment_phone,omitempty"`
+	PaymentPhones    map[string]string         `json:"payment_phones,omitempty"`
+	PaymentProviders []payment.PaymentProvider `json:"payment_providers,omitempty"`
+	Amount           int                       `json:"amount"`
+	Currency         string                    `json:"currency"`
+	Instructions     string                    `json:"instructions,omitempty"`
+	InvoiceType      string                    `json:"invoice_type"`
+	BotURL           string                    `json:"bot_url"`
+	HappLink         string                    `json:"happ_link,omitempty"`
 }
 
 // WalletServiceInterface defines the interface for wallet operations
@@ -313,14 +314,16 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	var instructions string
 	var mobileNumber string
 	var paymentPhones map[string]string
+	var paymentProviders []payment.PaymentProvider
 	if purchase.InvoiceType == database.InvoiceTypeMobileBanking || purchase.InvoiceType == database.InvoiceTypeWalletTopUp {
 		instructions = fmt.Sprintf(
 			h.translation.GetText(customer.Language, "mobile_pay_instructions"),
 			int(purchase.Amount),
-			payment.GetFirstPaymentPhone(),
+			payment.BuildPaymentReceiversHTML(),
 		)
 		mobileNumber = payment.GetFirstPaymentPhone()
 		paymentPhones = payment.GetAllPaymentPhones()
+		paymentProviders = payment.GetEnabledPaymentProviders()
 	}
 
 	happLink := ""
@@ -341,15 +344,16 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := CreatePurchaseResponse{
-		PurchaseID:    purchase.ID,
-		PaymentPhone:  mobileNumber,
-		PaymentPhones: paymentPhones,
-		Amount:        int(purchase.Amount),
-		Currency:      config.Currency(),
-		Instructions:  instructions,
-		InvoiceType:   string(purchase.InvoiceType),
-		BotURL:        config.BotURL(),
-		HappLink:      happLink,
+		PurchaseID:       purchase.ID,
+		PaymentPhone:     mobileNumber,
+		PaymentPhones:    paymentPhones,
+		PaymentProviders: paymentProviders,
+		Amount:           int(purchase.Amount),
+		Currency:         config.Currency(),
+		Instructions:     instructions,
+		InvoiceType:      string(purchase.InvoiceType),
+		BotURL:           config.BotURL(),
+		HappLink:         happLink,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -66,7 +66,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'btn_download': 'Download App',
         'how_it_works': 'How it works',
         'step_1': 'Choose a plan below',
-        'step_2': 'Pay via KPay, Wave, or AYA Pay',
+        'step_2': 'Pay via mobile banking',
         'step_3': 'Upload a screenshot — verified in seconds',
         'step_4': 'Your VPN key is ready!',
 
@@ -96,7 +96,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_extend_info': '✅ Extending adds more days and data on top of what you have left — nothing is lost. Your current key and settings stay the same.',
         'help_new_key_info': 'Each plan gives you a dedicated VPN key. Unlimited plans have no data cap. Limited plans cost less but have a monthly data limit — great for light use.',
         'help_filtered_plans': 'Showing {{type}} plans only — matches your current {{type_desc}} key type.',
-        'help_payments': '💳 Accepted: KPay · Wave · AYA Pay. After selecting a plan, you\'ll make a transfer and upload a screenshot for instant automated verification.',
+        'help_payments': '💳 Available mobile banking accounts are shown at checkout. Transfer the exact amount, then upload a screenshot for instant automated verification.',
 
         // ── Checkout ──
         'creating_purchase': 'Preparing your order...',
@@ -111,11 +111,12 @@ export const translations: Record<Language, Record<string, string>> = {
         // ── Checkout Guide Steps ──
         'guide_title': 'How to pay',
         'guide_step_1': 'Open your banking app',
-        'guide_step_1_hint': 'KPay, Wave Money, or AYA Pay',
+        'guide_step_1_hint': 'Available now: {{methods}}',
 
-        'guide_step_2': 'Transfer exact amount to this number',
+        'guide_step_2': 'Transfer exact amount to the selected account',
         'label_amount': 'Amount (MMK)',
         'label_phone': 'Phone',
+        'label_account_name': 'Account Name',
 
         'guide_step_3': 'In the note/remark, write only "Payment"',
         'guide_step_3_hint': 'Do NOT write VPN, Wavy, or anything else',
@@ -133,7 +134,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_new': 'Your new VPN key is live and ready to use. Tap below to add it to Happ.',
         'success_tip_extend': 'Go back to check your updated expiry date and remaining data.',
         'success_tip_new': 'Tap "Open in Happ Proxy" above to start using your VPN instantly, or copy the key link for any other VPN app.',
-        'verify_error_tip': '💡 Common fixes: make sure the amount and phone number match exactly, and that the screenshot clearly shows the transaction confirmation (not just a balance screen).',
+        'verify_error_tip': '💡 Common fixes: make sure the amount and receiver phone/account name match, and that the screenshot clearly shows the transaction confirmation (not just a balance screen).',
 
         // ── Wallet ──
         'wallet_title': 'Wavy Wallet',
@@ -179,7 +180,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'pay_with_wallet': '⚡ Pay with Wallet',
         'your_balance': 'Your balance:',
         'or_pay_manually': 'Or pay via mobile banking:',
-        'accepted_methods': 'KPay · Wave · AYA Pay',
+        'accepted_methods': '{{methods}}',
         'wallet_pay_success': 'Paid with Wallet',
         'check_home_for_key': 'Your key is active — go to My Keys to use it.',
         'funds_added': 'Funds added to your wallet successfully.',
@@ -268,7 +269,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'btn_download': 'App Download ရယူရန်',
         'how_it_works': 'အသုံးပြုနည်း',
         'step_1': 'အောက်ပါ Plan တစ်ခုကို ရွေးချယ်ပါ',
-        'step_2': 'KBZPay, WavePay သို့မဟုတ် AYA Pay ဖြင့် ငွေလွှဲပါ',
+        'step_2': 'Mobile Banking ဖြင့် ငွေလွှဲပါ',
         'step_3': 'Screenshot ပေးပို့ပါ — စက္ကန့်ပိုင်းအတွင်း အတည်ပြုပေးပါမည်',
         'step_4': 'VPN Key ကို စတင်အသုံးပြုနိုင်ပါပြီ!',
 
@@ -298,7 +299,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'help_extend_info': '✅ သက်တမ်းတိုးခြင်းသည် လက်ရှိ ကျန်ရှိနေသော ရက်နှင့် Data ပေါ်တွင် ထပ်မံပေါင်းထည့်ပေးသည် — ဆုံးရှုံးမှု မရှိပါ။ Key နှင့် Setting များမှာလည်း ပြောင်းလဲသွားမည် မဟုတ်ပါ။',
         'help_new_key_info': 'Plan ဝယ်ယူမှုတိုင်းအတွက် VPN Key အသစ်တစ်ခု ရရှိမည်ဖြစ်ပါသည်။ Unlimited Plan တွင် Data ကန့်သတ်ချက် လုံးဝမရှိပါ။ Limited Plan သည် ဈေးနှုန်းပိုမိုသက်သာသော်လည်း လစဉ် Data ကန့်သတ်ချက် ရှိပါသည်။',
         'help_filtered_plans': '{{type}} Plan များကိုသာ ဖော်ပြထားပါသည် — လူကြီးမင်း၏ လက်ရှိ {{type_desc}} Key အမျိုးအစားနှင့် ကိုက်ညီသောကြောင့် ဖြစ်ပါသည်။',
-        'help_payments': '💳 လက်ခံသော ငွေပေးချေမှုစနစ်များ: KBZPay · WavePay · AYA Pay — Plan ရွေးချယ်ပြီး ငွေလွှဲ၍ Screenshot တင်ပေးရုံဖြင့် ချက်ချင်း အတည်ပြုပေးပါသည်။',
+        'help_payments': '💳 Checkout တွင် လက်ရှိအသုံးပြုနိုင်သော mobile banking account များကို ပြပေးပါမည်။ ငွေပမာဏကို အတိအကျလွှဲပြီး Screenshot တင်ပေးရုံဖြင့် ချက်ချင်း အတည်ပြုပေးပါသည်။',
 
         // ── Checkout ──
         'creating_purchase': 'ကျေးဇူးပြု၍ ခေတ္တစောင့်ဆိုင်းပါ...',
@@ -313,11 +314,12 @@ export const translations: Record<Language, Record<string, string>> = {
         // ── Checkout Guide Steps ──
         'guide_title': 'ငွေပေးချေနည်း အဆင့်ဆင့်',
         'guide_step_1': 'Mobile Banking App အား ဖွင့်ပါ',
-        'guide_step_1_hint': 'KBZPay, WavePay သို့မဟုတ် AYA Pay',
+        'guide_step_1_hint': 'လက်ရှိအသုံးပြုနိုင်သော account များ: {{methods}}',
 
-        'guide_step_2': 'ဤဖုန်းနံပါတ်သို့ ငွေပမာဏကို အတိအကျ လွှဲပြောင်းပါ',
+        'guide_step_2': 'ရွေးချယ်ထားသော account သို့ ငွေပမာဏကို အတိအကျ လွှဲပြောင်းပါ',
         'label_amount': 'ငွေပမာဏ (ကျပ်)',
         'label_phone': 'ဖုန်းနံပါတ်',
+        'label_account_name': 'Account အမည်',
 
         'guide_step_3': 'မှတ်ချက် (Remark/Note) တွင် "Payment" ဟုသာ ရေးသားပါ',
         'guide_step_3_hint': 'VPN, Wavy, Outline အစရှိသည့် စကားလုံးများ လုံးဝ မထည့်သွင်းရပါ',
@@ -335,7 +337,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_new': 'သင်၏ VPN Key အသစ် အသင့်ဖြစ်ပါပြီ။ အောက်ပါခလုတ်ကို နှိပ်၍ Happ Proxy သို့ ထည့်သွင်းပါ။',
         'success_tip_extend': 'နောက်သို့ ပြန်ထွက်၍ Key ၏ သက်တမ်းကုန်ဆုံးရက်နှင့် ကျန်ရှိ Data ကို စစ်ဆေးနိုင်ပါသည်။',
         'success_tip_new': 'အောက်ပါ "Happ Proxy သို့ ဝင်ရောက်ရန်" ကို နှိပ်၍ VPN အား ချက်ချင်း စတင်ခလုပ်နှိပ်၍ အသုံးပြုနိုင်ပါသည်။ သို့မဟုတ် Key လင့်ခ်ကို အခြား VPN App တွင် ထည့်သွင်းအသုံးပြုနိုင်ပါသည်။',
-        'verify_error_tip': '💡 ဖြေရှင်းရန် အကြံပြုချက်: လွှဲပြောင်းသည့် ငွေပမာဏနှင့် ဖုန်းနံပါတ်တို့ တိကျမှန်ကန်မှု ရှိ/မရှိ စစ်ဆေးပါ။ ထို့ပြင် Screenshot သည် (လက်ကျန်ငွေပြသော ပုံမဟုတ်ဘဲ) Transaction အတည်ပြုပြေစာ ဖြစ်ရန် လိုအပ်ပါသည်။',
+        'verify_error_tip': '💡 ဖြေရှင်းရန် အကြံပြုချက်: လွှဲပြောင်းသည့် ငွေပမာဏနှင့် receiver ၏ ဖုန်းနံပါတ် သို့မဟုတ် account name တို့ကို စစ်ဆေးပါ။ ထို့ပြင် Screenshot သည် (လက်ကျန်ငွေပြသော ပုံမဟုတ်ဘဲ) Transaction အတည်ပြုပြေစာ ဖြစ်ရန် လိုအပ်ပါသည်။',
 
         // ── Wallet ──
         'wallet_title': 'Wavy Wallet',
@@ -381,7 +383,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'pay_with_wallet': '⚡ Wallet ဖြင့် ငွေပေးချေရန်',
         'your_balance': 'လူကြီးမင်း၏ လက်ကျန်ငွေ:',
         'or_pay_manually': 'သို့မဟုတ် Mobile Banking ဖြင့် ကိုယ်တိုင် ငွေလွှဲရန်:',
-        'accepted_methods': 'KBZPay · WavePay · AYA Pay',
+        'accepted_methods': '{{methods}}',
         'wallet_pay_success': 'Wallet ဖြင့် အောင်မြင်စွာ ပေးချေပြီးပါပြီ',
         'check_home_for_key': 'သင်၏ Key မှာ အသက်ဝင်နေပြီဖြစ်ပါသည်။ "ကျွန်ုပ်၏ Key များ" တွင် ဝင်ရောက်ကြည့်ရှုနိုင်ပါသည်။',
         'funds_added': 'Wallet အတွင်းသို့ ငွေဖြည့်သွင်းခြင်း အောင်မြင်ပါသည်။',

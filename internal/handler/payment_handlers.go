@@ -175,7 +175,7 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 	instructions := fmt.Sprintf(
 		h.translation.GetText(langCode, "mobile_pay_instructions"),
 		plan.Price,
-		payment.GetFirstPaymentPhone(),
+		payment.BuildPaymentReceiversHTML(),
 	)
 
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{

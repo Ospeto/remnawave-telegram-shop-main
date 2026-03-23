@@ -59,6 +59,106 @@ func TestPhoneMatchesSuffix(t *testing.T) {
 	}
 }
 
+func TestNormalizeRecipientName(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"english spaces", "Aung Aung", "aungaung"},
+		{"english punctuation", "Maung-Maung", "maungmaung"},
+		{"burmese spacing", "အောင် အောင်", "အောင်အောင်"},
+		{"mixed symbols", "  Mg. Mg / 123 ", "mgmg123"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeRecipientName(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeRecipientName(%q) = %q; want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchPaymentRecipient(t *testing.T) {
+	origPhoneKPay, origPhoneWavePay, origPhoneAyaPay := PhoneKPay, PhoneWavePay, PhoneAyaPay
+	origNameKPay, origNameWave, origNameAya := AccountNameKPay, AccountNameWave, AccountNameAya
+	t.Cleanup(func() {
+		PhoneKPay, PhoneWavePay, PhoneAyaPay = origPhoneKPay, origPhoneWavePay, origPhoneAyaPay
+		AccountNameKPay, AccountNameWave, AccountNameAya = origNameKPay, origNameWave, origNameAya
+	})
+
+	PhoneKPay = "09111111111"
+	PhoneWavePay = "09222222222"
+	PhoneAyaPay = ""
+	AccountNameKPay = "Maung Maung"
+	AccountNameWave = "Aung Aung"
+	AccountNameAya = "Aya Receiver"
+
+	tests := []struct {
+		name          string
+		provider      string
+		phone         string
+		recipient     string
+		wantKey       string
+		wantMatched   bool
+		wantMatchedBy string
+	}{
+		{
+			name:          "match wave by provider-specific name",
+			provider:      "wavepay",
+			phone:         "",
+			recipient:     "AungAung",
+			wantKey:       "wavepay",
+			wantMatched:   true,
+			wantMatchedBy: "name",
+		},
+		{
+			name:          "match kpay by phone suffix even if provider alias used",
+			provider:      "kbzpay",
+			phone:         "09***1111",
+			recipient:     "",
+			wantKey:       "kpay",
+			wantMatched:   true,
+			wantMatchedBy: "phone",
+		},
+		{
+			name:          "fall back to any enabled provider",
+			provider:      "",
+			phone:         "09***2222",
+			recipient:     "",
+			wantKey:       "wavepay",
+			wantMatched:   true,
+			wantMatchedBy: "phone",
+		},
+		{
+			name:          "disabled aya is ignored",
+			provider:      "ayapay",
+			phone:         "",
+			recipient:     "Aya Receiver",
+			wantKey:       "",
+			wantMatched:   false,
+			wantMatchedBy: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider, matchedBy, matched := MatchPaymentRecipient(tt.provider, tt.phone, tt.recipient, 4)
+			if matched != tt.wantMatched {
+				t.Fatalf("MatchPaymentRecipient() matched = %v; want %v", matched, tt.wantMatched)
+			}
+			if provider.Key != tt.wantKey {
+				t.Errorf("MatchPaymentRecipient() provider = %q; want %q", provider.Key, tt.wantKey)
+			}
+			if matchedBy != tt.wantMatchedBy {
+				t.Errorf("MatchPaymentRecipient() matchedBy = %q; want %q", matchedBy, tt.wantMatchedBy)
+			}
+		})
+	}
+}
+
 // --- GetTestTransactionID ---
 
 func TestGetTestTransactionID(t *testing.T) {

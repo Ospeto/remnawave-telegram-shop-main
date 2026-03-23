@@ -39,6 +39,15 @@ var (
 	BuildDate = "unknown"
 )
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -141,30 +150,65 @@ func main() {
 		appConfigRepo.Set(ctx, "referral_bonus_amount", "1000")
 	}
 
-	// Load per-provider payment phones from DB, falling back to MOBILE_BANKING_PHONE env var
-	fallbackPhone := ""
+	// Load per-provider payment receivers from DB.
+	// Legacy MOBILE_BANKING_PHONE still seeds KPay/WavePay for backward compatibility,
+	// but AyaPay must now be configured explicitly.
+	legacyFallbackPhone := ""
 	if config.IsMobileBankingEnabled() {
-		fallbackPhone = config.MobileBankingPhone()
+		legacyFallbackPhone = config.MobileBankingPhone()
 	}
 	for _, entry := range []struct {
-		dbKey string
-		ptr   *string
+		phoneKey      string
+		nameKey       string
+		phonePtr      *string
+		namePtr       *string
+		phoneFallback string
+		nameFallback  string
 	}{
-		{"phone_kpay", &payment.PhoneKPay},
-		{"phone_wavepay", &payment.PhoneWavePay},
-		{"phone_ayapay", &payment.PhoneAyaPay},
+		{
+			phoneKey:      "phone_kpay",
+			nameKey:       "name_kpay",
+			phonePtr:      &payment.PhoneKPay,
+			namePtr:       &payment.AccountNameKPay,
+			phoneFallback: firstNonEmpty(os.Getenv("MOBILE_BANKING_PHONE_KPAY"), legacyFallbackPhone),
+			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_KPAY"),
+		},
+		{
+			phoneKey:      "phone_wavepay",
+			nameKey:       "name_wavepay",
+			phonePtr:      &payment.PhoneWavePay,
+			namePtr:       &payment.AccountNameWave,
+			phoneFallback: firstNonEmpty(os.Getenv("MOBILE_BANKING_PHONE_WAVEPAY"), legacyFallbackPhone),
+			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_WAVEPAY"),
+		},
+		{
+			phoneKey:      "phone_ayapay",
+			nameKey:       "name_ayapay",
+			phonePtr:      &payment.PhoneAyaPay,
+			namePtr:       &payment.AccountNameAya,
+			phoneFallback: os.Getenv("MOBILE_BANKING_PHONE_AYAPAY"),
+			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_AYAPAY"),
+		},
 	} {
-		v, loadErr := appConfigRepo.Get(ctx, entry.dbKey)
+		v, loadErr := appConfigRepo.Get(ctx, entry.phoneKey)
 		if loadErr == nil {
 			// Key exists in DB — use its value (empty = disabled)
-			*entry.ptr = v
-		} else if fallbackPhone != "" {
+			*entry.phonePtr = v
+		} else if entry.phoneFallback != "" {
 			// Key not in DB yet — seed with fallback
-			*entry.ptr = fallbackPhone
-			appConfigRepo.Set(ctx, entry.dbKey, fallbackPhone)
+			*entry.phonePtr = entry.phoneFallback
+			appConfigRepo.Set(ctx, entry.phoneKey, entry.phoneFallback)
+		}
+
+		name, nameErr := appConfigRepo.Get(ctx, entry.nameKey)
+		if nameErr == nil {
+			*entry.namePtr = name
+		} else if entry.nameFallback != "" {
+			*entry.namePtr = entry.nameFallback
+			appConfigRepo.Set(ctx, entry.nameKey, entry.nameFallback)
 		}
 	}
-	slog.Info("Payment phones loaded", "kpay", payment.PhoneKPay, "wavepay", payment.PhoneWavePay, "ayapay", payment.PhoneAyaPay)
+	slog.Info("Payment receivers loaded", "providers", payment.GetAcceptedProviderText(", "))
 
 	mobilePayCache := cache.NewCache(1 * time.Hour)
 	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
@@ -218,7 +262,9 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setphone", bot.MatchTypePrefix, h.SetPhoneCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/setname", bot.MatchTypePrefix, h.SetNameCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/disablephone", bot.MatchTypePrefix, h.DisablePhoneCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/disablename", bot.MatchTypePrefix, h.DisableNameCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/phones", bot.MatchTypeExact, h.PhonesCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/revenue", bot.MatchTypeExact, h.RevenueCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
