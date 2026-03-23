@@ -145,6 +145,36 @@ ask_reset_strategy() {
     done
 }
 
+# Read key from .env with fallback default. Usage: env_get "KEY" "default"
+env_get() {
+    local key="$1"
+    local fallback="${2:-}"
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        echo "$fallback"
+        return
+    fi
+
+    if grep -qE "^${key}=" "$ENV_FILE"; then
+        local line
+        line=$({ grep -E "^${key}=" "$ENV_FILE" || true; } | head -n1)
+        echo "${line#*=}"
+    else
+        echo "$fallback"
+    fi
+}
+
+# Insert or update key in .env.
+env_set() {
+    local key="$1"
+    local value="$2"
+    if grep -qE "^${key}=" "$ENV_FILE"; then
+        awk -v k="$key" -v v="$value" 'BEGIN{FS=OFS="="} $1==k{$0=k"="v}1' "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
+    else
+        echo "${key}=${value}" >> "$ENV_FILE"
+    fi
+}
+
 # ──── Ctrl-C trap ───────────────────────────────────────────
 cleanup() {
     echo ""
@@ -331,13 +361,14 @@ show_menu() {
     echo -e "    ${GREEN}1${NC})  🚀  Fresh Install ${DIM}(guided wizard)${NC}"
     echo -e "    ${GREEN}2${NC})  ✏️   Edit Configuration"
     echo -e "    ${GREEN}3${NC})  💰  Edit Pricing"
-    echo -e "    ${GREEN}4${NC})  ▶️   Start / Restart Services"
-    echo -e "    ${GREEN}5${NC})  ⏹   Stop Services"
-    echo -e "    ${GREEN}6${NC})  📋  View Logs"
-    echo -e "    ${GREEN}7${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
-    echo -e "    ${GREEN}8${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
-    echo -e "    ${GREEN}9${NC})  💾  Backup ${DIM}(db + config + certs)${NC}"
-    echo -e "    ${GREEN}10${NC}) ♻️   Restore ${DIM}(from backup)${NC}"
+    echo -e "    ${GREEN}4${NC})  💳  Edit Payment Settings"
+    echo -e "    ${GREEN}5${NC})  ▶️   Start / Restart Services"
+    echo -e "    ${GREEN}6${NC})  ⏹   Stop Services"
+    echo -e "    ${GREEN}7${NC})  📋  View Logs"
+    echo -e "    ${GREEN}8${NC})  🔄  Update ${DIM}(rebuild from source)${NC}"
+    echo -e "    ${GREEN}9${NC})  🗑   Uninstall ${DIM}(remove containers + data)${NC}"
+    echo -e "    ${GREEN}10${NC}) 💾  Backup ${DIM}(db + config + certs)${NC}"
+    echo -e "    ${GREEN}11${NC}) ♻️   Restore ${DIM}(from backup)${NC}"
     echo ""
     echo -e "    ${RED}0${NC})  🚪  Exit"
     echo ""
@@ -487,11 +518,25 @@ wizard() {
     print_section "5/11  Payment — Mobile Banking (KPay/WavePay/AyaPay)"
     ask_bool "Enable Mobile Banking?" "false" "MOBILE_BANKING_ENABLED"
     if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
-        ask_required "Receiving Phone Number" "" "MOBILE_BANKING_PHONE"
+        ask "Default Receiving Phone Number (legacy fallback)" "" "MOBILE_BANKING_PHONE"
+        print_info "Provider phones below can be configured separately."
+        print_info "Leave any provider phone empty to disable that provider."
+        ask "KPay Phone (empty = OFF)" "${CFG[MOBILE_BANKING_PHONE]}" "MOBILE_BANKING_PHONE_KPAY"
+        ask "KPay Account Name (optional)" "" "MOBILE_BANKING_NAME_KPAY"
+        ask "WavePay Phone (empty = OFF)" "${CFG[MOBILE_BANKING_PHONE]}" "MOBILE_BANKING_PHONE_WAVEPAY"
+        ask "WavePay Account Name (optional)" "" "MOBILE_BANKING_NAME_WAVEPAY"
+        ask "AyaPay Phone (empty = OFF)" "" "MOBILE_BANKING_PHONE_AYAPAY"
+        ask "AyaPay Account Name (optional)" "" "MOBILE_BANKING_NAME_AYAPAY"
         ask_required "Gemini API Key" "" "GEMINI_API_KEY"
         ask "Gemini Model" "gemini-2.5-flash" "GEMINI_MODEL"
     else
         CFG[MOBILE_BANKING_PHONE]=""
+        CFG[MOBILE_BANKING_PHONE_KPAY]=""
+        CFG[MOBILE_BANKING_PHONE_WAVEPAY]=""
+        CFG[MOBILE_BANKING_PHONE_AYAPAY]=""
+        CFG[MOBILE_BANKING_NAME_KPAY]=""
+        CFG[MOBILE_BANKING_NAME_WAVEPAY]=""
+        CFG[MOBILE_BANKING_NAME_AYAPAY]=""
         CFG[GEMINI_API_KEY]=""
         CFG[GEMINI_MODEL]="gemini-2.5-flash"
         print_info "Mobile Banking disabled — skipping."
@@ -599,6 +644,12 @@ CRYPTO_PAY_URL=${CFG[CRYPTO_PAY_URL]}
 # ── Payment — Mobile Banking ────────────────────────────────
 MOBILE_BANKING_ENABLED=${CFG[MOBILE_BANKING_ENABLED]}
 MOBILE_BANKING_PHONE=${CFG[MOBILE_BANKING_PHONE]}
+MOBILE_BANKING_PHONE_KPAY=${CFG[MOBILE_BANKING_PHONE_KPAY]}
+MOBILE_BANKING_PHONE_WAVEPAY=${CFG[MOBILE_BANKING_PHONE_WAVEPAY]}
+MOBILE_BANKING_PHONE_AYAPAY=${CFG[MOBILE_BANKING_PHONE_AYAPAY]}
+MOBILE_BANKING_NAME_KPAY=${CFG[MOBILE_BANKING_NAME_KPAY]}
+MOBILE_BANKING_NAME_WAVEPAY=${CFG[MOBILE_BANKING_NAME_WAVEPAY]}
+MOBILE_BANKING_NAME_AYAPAY=${CFG[MOBILE_BANKING_NAME_AYAPAY]}
 GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
 GEMINI_MODEL=${CFG[GEMINI_MODEL]}
 
@@ -662,7 +713,7 @@ ENVEOF
     if [[ "$start_now" == "y" || "$start_now" == "Y" ]]; then
         do_start
     else
-        print_info "You can start services later from the main menu (option 3)."
+        print_info "You can start services later from the main menu (option 5)."
     fi
 
     # Offer Mini App setup
@@ -713,7 +764,7 @@ do_start() {
     (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build)
     echo ""
     print_success "Services are running!"
-    print_info "Use option 5 to view logs."
+    print_info "Use option 7 to view logs."
 }
 
 # ──── Stop ──────────────────────────────────────────────────
@@ -812,7 +863,7 @@ do_backup() {
             return
         fi
     else
-        print_error "Database container not running. Start services first (option 4)."
+        print_error "Database container not running. Start services first (option 5)."
         rm -rf "$temp_dir"
         return
     fi
@@ -1106,6 +1157,94 @@ do_edit_pricing() {
     fi
 }
 
+# ──── Edit Payment Settings Only ────────────────────────────
+do_edit_payments() {
+    if [[ ! -f "$ENV_FILE" ]]; then
+        print_error "No .env file found. Run 'Fresh Install' first (option 1)."
+        return
+    fi
+
+    local cur_enabled cur_legacy cur_gemini_key cur_gemini_model
+    local cur_phone_kpay cur_phone_wave cur_phone_aya
+    local cur_name_kpay cur_name_wave cur_name_aya
+
+    cur_enabled="$(env_get "MOBILE_BANKING_ENABLED" "false")"
+    cur_legacy="$(env_get "MOBILE_BANKING_PHONE" "")"
+    cur_gemini_key="$(env_get "GEMINI_API_KEY" "")"
+    cur_gemini_model="$(env_get "GEMINI_MODEL" "gemini-2.5-flash")"
+
+    cur_phone_kpay="$(env_get "MOBILE_BANKING_PHONE_KPAY" "$cur_legacy")"
+    cur_phone_wave="$(env_get "MOBILE_BANKING_PHONE_WAVEPAY" "$cur_legacy")"
+    cur_phone_aya="$(env_get "MOBILE_BANKING_PHONE_AYAPAY" "")"
+    cur_name_kpay="$(env_get "MOBILE_BANKING_NAME_KPAY" "")"
+    cur_name_wave="$(env_get "MOBILE_BANKING_NAME_WAVEPAY" "")"
+    cur_name_aya="$(env_get "MOBILE_BANKING_NAME_AYAPAY" "")"
+
+    print_section "Edit Payment Settings"
+    print_info "Leave provider phone empty to disable that provider."
+    echo ""
+
+    declare -A CFG
+    ask_bool "Enable Mobile Banking?" "$cur_enabled" "MOBILE_BANKING_ENABLED"
+
+    if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
+        ask "Default Receiving Phone Number (legacy fallback)" "$cur_legacy" "MOBILE_BANKING_PHONE"
+        ask "KPay Phone (empty = OFF)" "$cur_phone_kpay" "MOBILE_BANKING_PHONE_KPAY"
+        ask "KPay Account Name (optional)" "$cur_name_kpay" "MOBILE_BANKING_NAME_KPAY"
+        ask "WavePay Phone (empty = OFF)" "$cur_phone_wave" "MOBILE_BANKING_PHONE_WAVEPAY"
+        ask "WavePay Account Name (optional)" "$cur_name_wave" "MOBILE_BANKING_NAME_WAVEPAY"
+        ask "AyaPay Phone (empty = OFF)" "$cur_phone_aya" "MOBILE_BANKING_PHONE_AYAPAY"
+        ask "AyaPay Account Name (optional)" "$cur_name_aya" "MOBILE_BANKING_NAME_AYAPAY"
+        ask_required "Gemini API Key" "$cur_gemini_key" "GEMINI_API_KEY"
+        ask "Gemini Model" "$cur_gemini_model" "GEMINI_MODEL"
+    else
+        CFG[MOBILE_BANKING_PHONE]="$cur_legacy"
+        CFG[MOBILE_BANKING_PHONE_KPAY]="$cur_phone_kpay"
+        CFG[MOBILE_BANKING_PHONE_WAVEPAY]="$cur_phone_wave"
+        CFG[MOBILE_BANKING_PHONE_AYAPAY]="$cur_phone_aya"
+        CFG[MOBILE_BANKING_NAME_KPAY]="$cur_name_kpay"
+        CFG[MOBILE_BANKING_NAME_WAVEPAY]="$cur_name_wave"
+        CFG[MOBILE_BANKING_NAME_AYAPAY]="$cur_name_aya"
+        CFG[GEMINI_API_KEY]="$cur_gemini_key"
+        CFG[GEMINI_MODEL]="$cur_gemini_model"
+        print_info "Mobile banking disabled globally. Provider values were kept for later reuse."
+    fi
+
+    env_set "MOBILE_BANKING_ENABLED" "${CFG[MOBILE_BANKING_ENABLED]}"
+    env_set "MOBILE_BANKING_PHONE" "${CFG[MOBILE_BANKING_PHONE]}"
+    env_set "MOBILE_BANKING_PHONE_KPAY" "${CFG[MOBILE_BANKING_PHONE_KPAY]}"
+    env_set "MOBILE_BANKING_PHONE_WAVEPAY" "${CFG[MOBILE_BANKING_PHONE_WAVEPAY]}"
+    env_set "MOBILE_BANKING_PHONE_AYAPAY" "${CFG[MOBILE_BANKING_PHONE_AYAPAY]}"
+    env_set "MOBILE_BANKING_NAME_KPAY" "${CFG[MOBILE_BANKING_NAME_KPAY]}"
+    env_set "MOBILE_BANKING_NAME_WAVEPAY" "${CFG[MOBILE_BANKING_NAME_WAVEPAY]}"
+    env_set "MOBILE_BANKING_NAME_AYAPAY" "${CFG[MOBILE_BANKING_NAME_AYAPAY]}"
+    env_set "GEMINI_API_KEY" "${CFG[GEMINI_API_KEY]}"
+    env_set "GEMINI_MODEL" "${CFG[GEMINI_MODEL]}"
+
+    echo ""
+    if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
+        local enabled_list=""
+        [[ -n "${CFG[MOBILE_BANKING_PHONE_KPAY]}" ]] && enabled_list="KPay"
+        [[ -n "${CFG[MOBILE_BANKING_PHONE_WAVEPAY]}" ]] && enabled_list="${enabled_list:+$enabled_list, }WavePay"
+        [[ -n "${CFG[MOBILE_BANKING_PHONE_AYAPAY]}" ]] && enabled_list="${enabled_list:+$enabled_list, }AyaPay"
+        if [[ -n "$enabled_list" ]]; then
+            print_success "Payment settings updated. Enabled providers: ${enabled_list}"
+        else
+            print_info "Mobile banking is enabled, but all providers are OFF (no phone numbers set)."
+        fi
+    else
+        print_success "Payment settings updated. Mobile banking is globally OFF."
+    fi
+
+    echo -ne "  ${ARROW}  Restart services now? ${DIM}(y/n)${NC} [y]: "
+    local restart
+    read -r restart
+    restart="${restart:-y}"
+    if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+        do_start
+    fi
+}
+
 # ──── Setup Mini App ────────────────────────────────────────
 do_setup_miniapp() {
     print_header "📱 Mini App Setup"
@@ -1177,7 +1316,7 @@ do_setup_miniapp() {
     if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
         do_start
     else
-        print_info "Remember to restart services (option 4) for changes to take effect."
+        print_info "Remember to restart services (option 5) for changes to take effect."
     fi
 
     # ── Done ────────────────────────────────────────────────
@@ -1216,13 +1355,14 @@ main() {
             1) wizard ;;
             2) do_edit ;;
             3) do_edit_pricing ;;
-            4) do_start ;;
-            5) do_stop ;;
-            6) do_logs ;;
-            7) do_update ;;
-            8) do_uninstall ;;
-            9) do_backup ;;
-            10) do_restore ;;
+            4) do_edit_payments ;;
+            5) do_start ;;
+            6) do_stop ;;
+            7) do_logs ;;
+            8) do_update ;;
+            9) do_uninstall ;;
+            10) do_backup ;;
+            11) do_restore ;;
             0) exit 0 ;;
             *)
                 print_error "Invalid choice. Please try again."
