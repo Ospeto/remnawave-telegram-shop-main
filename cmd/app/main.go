@@ -426,9 +426,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	backupCron := cron.New(cron.WithLocation(backupLocation))
+	backupCron := cron.New(
+		cron.WithLocation(backupLocation),
+		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+	)
 	_, err = backupCron.AddFunc("* * * * *", func() {
-		cronCtx, cronCancel := context.WithTimeout(newCronContext("backup_scheduler"), time.Duration(config.BackupJobTimeoutSeconds())*time.Second)
+		cronCtx, cronCancel := newCronContext(ctx, "backup_scheduler", time.Duration(config.BackupJobTimeoutSeconds())*time.Second)
 		defer cronCancel()
 		if err := backupService.RunScheduledBackupIfDue(cronCtx, b, config.GetAdminTelegramId()); err != nil {
 			slog.Error("Scheduled backup job failed", "error", err)
