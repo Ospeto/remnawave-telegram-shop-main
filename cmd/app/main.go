@@ -26,6 +26,7 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -51,7 +52,11 @@ func firstNonEmpty(values ...string) string {
 }
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	if len(os.Args) > 1 && os.Args[1] == "--health" {
+		os.Exit(runHealthProbe())
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	config.InitConfig()
@@ -128,9 +133,13 @@ func main() {
 
 	if config.IsCryptoPayEnabled() {
 		invoiceJob := invoicechecker.New(purchaseRepository, cryptoPayClient, paymentService)
-		cryptoInvoiceCron := cron.New(cron.WithSeconds())
+		cryptoInvoiceCron := cron.New(
+			cron.WithSeconds(),
+			cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+		)
 		_, err = cryptoInvoiceCron.AddFunc("*/5 * * * * *", func() {
-			cronCtx := newCronContext("invoice_checker")
+			cronCtx, cronCancel := newCronContext(ctx, "invoice_checker", 4*time.Second)
+			defer cronCancel()
 			invoiceJob.Run(cronCtx)
 		})
 		if err != nil {
@@ -142,14 +151,17 @@ func main() {
 
 	subService := notification.NewSubscriptionService(subKeyRepo, customerRepository, b, tm)
 
-	subscriptionNotificationCronScheduler := subscriptionChecker(subService)
+	subscriptionNotificationCronScheduler := subscriptionChecker(ctx, subService)
 	subscriptionNotificationCronScheduler.Start()
 	defer subscriptionNotificationCronScheduler.Stop()
 
 	autoRenewJob := autorenew.New(subKeyRepo, customerRepository, walletService, tm, b)
-	autoRenewCron := cron.New()
+	autoRenewCron := cron.New(
+		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+	)
 	_, err = autoRenewCron.AddFunc("0 9 * * *", func() {
-		cronCtx := newCronContext("auto_renew")
+		cronCtx, cronCancel := newCronContext(ctx, "auto_renew", 2*time.Minute)
+		defer cronCancel()
 		autoRenewJob.Run(cronCtx)
 	})
 	if err != nil {
@@ -354,9 +366,12 @@ func main() {
 
 	// Daily revenue report cron job — runs at midnight Myanmar time (UTC+6:30)
 	mmtZone := time.FixedZone("MMT", 6*3600+30*60)
-	c := cron.New(cron.WithLocation(mmtZone))
+	c := cron.New(
+		cron.WithLocation(mmtZone),
+		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+	)
 	c.AddFunc("0 0 * * *", func() {
-		cronCtx, cronCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cronCtx, cronCancel := newCronContext(ctx, "daily_revenue_report", 30*time.Second)
 		defer cronCancel()
 
 		rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
@@ -436,13 +451,38 @@ func main() {
 	}
 }
 
-// newCronContext creates a background context with a unique request ID for
-// structured log correlation across cron job runs.
-func newCronContext(jobName string) context.Context {
+// newCronContext creates a derived context with timeout and a unique request ID
+// for structured log correlation across cron job runs.
+func newCronContext(parent context.Context, jobName string, timeout time.Duration) (context.Context, context.CancelFunc) {
 	type cronJobKey struct{}
 	type requestIDKey struct{}
-	ctx := context.WithValue(context.Background(), cronJobKey{}, jobName)
-	return context.WithValue(ctx, requestIDKey{}, uuid.New().String())
+	ctx := context.WithValue(parent, cronJobKey{}, jobName)
+	ctx = context.WithValue(ctx, requestIDKey{}, uuid.New().String())
+	return context.WithTimeout(ctx, timeout)
+}
+
+func runHealthProbe() int {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(healthProbeURL())
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest {
+		return 0
+	}
+	return 1
+}
+
+func healthProbeURL() string {
+	port := 8080
+	if raw := strings.TrimSpace(os.Getenv("HEALTH_CHECK_PORT")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			port = parsed
+		}
+	}
+	return fmt.Sprintf("http://127.0.0.1:%d/healthcheck", port)
 }
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
@@ -531,11 +571,15 @@ func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	}
 }
 
-func subscriptionChecker(subService *notification.SubscriptionService) *cron.Cron {
-	c := cron.New()
+func subscriptionChecker(parent context.Context, subService *notification.SubscriptionService) *cron.Cron {
+	c := cron.New(
+		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+	)
 
 	_, err := c.AddFunc("0 16 * * *", func() {
-		err := subService.ProcessSubscriptionExpiration()
+		cronCtx, cronCancel := newCronContext(parent, "subscription_expiration", 2*time.Minute)
+		defer cronCancel()
+		err := subService.ProcessSubscriptionExpirationWithContext(cronCtx)
 		if err != nil {
 			slog.Error("Error sending subscription notifications", "error", err)
 		}

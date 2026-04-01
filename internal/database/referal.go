@@ -163,3 +163,31 @@ func (r *ReferralRepository) MarkRefereeBonusGranted(ctx context.Context, referr
 	}
 	return nil
 }
+
+// TryMarkBonusGrantedTx atomically claims the referrer bonus in an existing transaction.
+// Returns true only for the first claimant.
+func (r *ReferralRepository) TryMarkBonusGrantedTx(ctx context.Context, tx pgx.Tx, referralID int64) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE referral
+		SET bonus_granted = TRUE
+		WHERE id = $1 AND bonus_granted = FALSE
+	`, referralID)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim referrer bonus: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// TryMarkRefereeBonusGrantedTx atomically claims the referee bonus in an existing transaction.
+// Returns true only for the first claimant.
+func (r *ReferralRepository) TryMarkRefereeBonusGrantedTx(ctx context.Context, tx pgx.Tx, referralID int64) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE referral
+		SET referee_bonus_granted = TRUE
+		WHERE id = $1 AND referee_bonus_granted = FALSE
+	`, referralID)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim referee bonus: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}

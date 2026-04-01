@@ -387,21 +387,19 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	var keys []KeyResponse
 	const bytesInGB = 1073741824.0
 
-	// Sync keys with Remnawave to get fresh stats and filter deleted keys.
-	// SyncKeys updates the local DB (marks deleted, updates expiry/status).
-	syncedKeys, syncErr := h.paymentService.SyncKeys(r.Context(), customer.ID, customer.TelegramID)
-
-	// Track if user has any keys in the new system (even deleted ones)
+	// Track if user has any keys in the new system (even deleted ones).
 	hasMigratedKeys := false
 
-	if syncErr == nil && syncedKeys != nil && h.subKeyRepo != nil {
-		// Build stats lookup from synced data
-		statsMap := make(map[int64]payment.KeyStats, len(syncedKeys))
-		for _, sk := range syncedKeys {
-			statsMap[sk.ID] = sk
-		}
+	cachedStats, hasCachedStats := h.paymentService.GetCachedSyncKeys(customer.ID)
+	if !hasCachedStats {
+		h.paymentService.TriggerSyncKeysAsync(r.Context(), customer.ID, customer.TelegramID)
+	}
+	statsMap := make(map[int64]payment.KeyStats, len(cachedStats))
+	for _, sk := range cachedStats {
+		statsMap[sk.ID] = sk
+	}
 
-		// Single DB query after sync to get labels/URLs with updated statuses
+	if h.subKeyRepo != nil {
 		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 		if len(localKeys) > 0 {
 			hasMigratedKeys = true
@@ -420,6 +418,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 			if stat, ok := statsMap[k.ID]; ok {
 				usedGB = stat.TrafficUsedBytes / bytesInGB
 				limitGB = float64(stat.TrafficLimitBytes) / bytesInGB
+			} else if k.TrafficLimitGB > 0 {
+				limitGB = float64(k.TrafficLimitGB)
 			}
 
 			keys = append(keys, KeyResponse{
@@ -433,32 +433,6 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				Status:          k.Status,
 				TrafficUsedGB:   usedGB,
 				TrafficLimitGB:  limitGB,
-				AutoRenew:       k.AutoRenew,
-			})
-		}
-	} else if h.subKeyRepo != nil {
-		// Fallback: sync unavailable, use local DB only
-		subKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-		if len(subKeys) > 0 {
-			hasMigratedKeys = true
-		}
-		for _, k := range subKeys {
-			if k.Status == "deleted" {
-				continue
-			}
-			kDays := 0
-			if k.ExpireAt != nil && k.ExpireAt.After(time.Now()) {
-				kDays = int(time.Until(*k.ExpireAt).Hours() / 24)
-			}
-			keys = append(keys, KeyResponse{
-				ID:              k.ID,
-				Label:           k.Label,
-				Username:        k.Username,
-				SubscriptionURL: k.SubscriptionURL,
-				HappLink:        "happ://add/" + k.SubscriptionURL,
-				ExpireAt:        k.ExpireAt,
-				DaysRemaining:   kDays,
-				Status:          k.Status,
 				AutoRenew:       k.AutoRenew,
 			})
 		}
@@ -481,8 +455,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Determine trial eligibility: trial enabled + no subscription ever created
-	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0
+	// Determine trial eligibility: trial enabled + no subscription history.
+	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0 && !hasMigratedKeys
 
 	// Fetch referral summary for the home chip (non-fatal)
 	referralCount := 0
@@ -547,6 +521,17 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 	if customer.SubscriptionLink != nil {
 		http.Error(w, "Trial already used", http.StatusConflict)
 		return
+	}
+	if h.subKeyRepo != nil {
+		keys, keyErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		if keyErr != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
+		if len(keys) > 0 {
+			http.Error(w, "Trial already used", http.StatusConflict)
+			return
+		}
 	}
 
 	// Use actual username if available, otherwise stringified ID. Ideally this logic belongs in service layer.

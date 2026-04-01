@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,11 +90,45 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 func getIP(r *http.Request) string {
-	// Only trust the socket peer. X-Forwarded-For is client-controlled unless a
-	// trusted proxy explicitly strips/sets it, and this service has no proxy allowlist.
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	peerIP := r.RemoteAddr
+	if ip, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		peerIP = ip
 	}
-	return ip
+
+	// Trust forwarded headers only when traffic comes from loopback/private
+	// networks (reverse proxy sidecars / same Docker network).
+	if parsedPeer := net.ParseIP(peerIP); parsedPeer != nil && isTrustedProxyIP(parsedPeer) {
+		if forwarded := firstForwardedIP(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+			return forwarded
+		}
+		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
+			if parsedForwarded := net.ParseIP(xrip); parsedForwarded != nil {
+				return parsedForwarded.String()
+			}
+		}
+	}
+
+	return peerIP
+}
+
+func firstForwardedIP(xff string) string {
+	if xff == "" {
+		return ""
+	}
+
+	parts := strings.Split(xff, ",")
+	for _, part := range parts {
+		candidate := strings.TrimSpace(part)
+		if candidate == "" {
+			continue
+		}
+		if parsed := net.ParseIP(candidate); parsed != nil {
+			return parsed.String()
+		}
+	}
+	return ""
+}
+
+func isTrustedProxyIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate()
 }
