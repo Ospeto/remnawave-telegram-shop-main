@@ -260,6 +260,43 @@ func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Contex
 	return keys, rows.Err()
 }
 
+// TryClaimAutoRenew atomically claims a key for processing by setting
+// last_auto_renewed_at=NOW() only if it still has the expected previous value.
+// Returns (claimedAt, true, nil) when claim succeeds.
+func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error) {
+	var claimedAt time.Time
+	err := r.pool.QueryRow(ctx, `
+		UPDATE subscription_key
+		SET last_auto_renewed_at = NOW()
+		WHERE id = $1
+		  AND auto_renew = TRUE
+		  AND status = 'active'
+		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
+		RETURNING last_auto_renewed_at
+	`, keyID, expectedLast).Scan(&claimedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to claim key auto-renew: %w", err)
+	}
+	return &claimedAt, true, nil
+}
+
+// RestoreAutoRenewClaim rolls back a previous claim when renewal fails.
+// It only restores if the row still has the claim timestamp we set.
+func (r *SubscriptionKeyRepository) RestoreAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time, previous *time.Time) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE subscription_key
+		SET last_auto_renewed_at = $1
+		WHERE id = $2 AND last_auto_renewed_at = $3
+	`, previous, keyID, claimedAt)
+	if err != nil {
+		return fmt.Errorf("failed to restore auto-renew claim: %w", err)
+	}
+	return nil
+}
+
 // FindExpiringKeys returns all active keys whose expire_at is between startDate and endDate.
 func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]SubscriptionKey, error) {
 	query := sq.Select(subKeyColumns...).

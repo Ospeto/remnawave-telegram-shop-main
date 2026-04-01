@@ -45,7 +45,11 @@ func NewSubscriptionService(
 }
 
 func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
-	keys, err := s.getExpiringSubscriptions()
+	return s.ProcessSubscriptionExpirationWithContext(context.Background())
+}
+
+func (s *SubscriptionService) ProcessSubscriptionExpirationWithContext(ctx context.Context) error {
+	keys, err := s.getExpiringSubscriptions(ctx)
 	if err != nil {
 		slog.Error("Failed to get expiring subscription keys", "error", err)
 		return err
@@ -64,7 +68,6 @@ func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
 			continue
 		}
 
-		ctx := context.Background()
 		customer, err := s.customerRepository.FindById(ctx, key.CustomerID)
 		if err != nil || customer == nil {
 			slog.Error("Customer not found for expiring key", "key_id", key.ID, "customer_id", key.CustomerID)
@@ -95,7 +98,7 @@ func (s *SubscriptionService) ProcessSubscriptionExpiration() error {
 	return nil
 }
 
-func (s *SubscriptionService) getExpiringSubscriptions() ([]database.SubscriptionKey, error) {
+func (s *SubscriptionService) getExpiringSubscriptions(ctx context.Context) ([]database.SubscriptionKey, error) {
 	now := time.Now()
 
 	// Notify strictly for keys expiring exactly between 2 and 3 days from now
@@ -103,7 +106,7 @@ func (s *SubscriptionService) getExpiringSubscriptions() ([]database.Subscriptio
 	startDate := now.Add(2 * 24 * time.Hour)
 	endDate := now.Add(3 * 24 * time.Hour)
 
-	return s.subKeyRepo.FindExpiringKeys(context.Background(), startDate, endDate)
+	return s.subKeyRepo.FindExpiringKeys(ctx, startDate, endDate)
 }
 
 func (s *SubscriptionService) SendNotification(ctx context.Context, key database.SubscriptionKey, customer database.Customer) error {

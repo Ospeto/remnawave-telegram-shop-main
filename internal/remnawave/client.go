@@ -46,6 +46,7 @@ func NewClient(baseURL, token, mode string) *Client {
 	headers := config.RemnawaveHeaders()
 
 	client := &http.Client{
+		Timeout: 15 * time.Second,
 		Transport: &headerTransport{
 			base:    http.DefaultTransport,
 			local:   local,
@@ -377,22 +378,39 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 }
 
 // generateUsername creates a subscription key name.
-// Format: wavy_{last4_txnID}_{telegramId}
-// Examples: wavy_A1B2_987654321, wavy_0001_987654321
+// Format: wavy_{txnToken}_{telegramId}[_keyIndex]
+// txnToken keeps up to the last 8 alphanumeric characters to reduce collisions.
+// Examples: wavy_AB12CD34_987654321, wavy_00010001_987654321
 func generateUsername(tgUsername string, customerId int64, telegramId int64, keyIndex int, txnID string) string {
-	var mid string
-	if len(txnID) >= 4 {
-		mid = txnID[len(txnID)-4:]
-	} else if len(txnID) > 0 {
-		mid = fmt.Sprintf("%04s", txnID)
-	} else {
-		mid = fmt.Sprintf("%04d", customerId%10000)
-	}
+	mid := transactionToken(txnID, customerId)
 	base := fmt.Sprintf("wavy_%s_%d", mid, telegramId)
 	if keyIndex > 1 {
 		base = fmt.Sprintf("%s_%d", base, keyIndex)
 	}
 	return base
+}
+
+func transactionToken(txnID string, customerID int64) string {
+	normalized := strings.ToUpper(strings.TrimSpace(txnID))
+	if normalized == "" {
+		normalized = fmt.Sprintf("CUS%d", customerID)
+	}
+
+	var filtered strings.Builder
+	for _, ch := range normalized {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			filtered.WriteRune(ch)
+		}
+	}
+
+	token := filtered.String()
+	if token == "" {
+		token = fmt.Sprintf("CUS%d", customerID)
+	}
+	if len(token) > 8 {
+		token = token[len(token)-8:]
+	}
+	return token
 }
 
 // sanitizeUsername makes a Telegram username safe for use as a subscription key part.

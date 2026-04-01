@@ -97,6 +97,30 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 		}
 	}
 
+	// ── Cross-replica claim guard ─────────────────────────────────────────────
+	// Claim this key atomically before charging wallet balance so two replicas
+	// cannot renew the same key at the same time.
+	claimedAt, claimed, err := j.subKeyRepo.TryClaimAutoRenew(ctx, key.ID, key.LastAutoRenewedAt)
+	if err != nil {
+		log.Error("Auto-renew: failed to claim key", "error", err)
+		return
+	}
+	if !claimed {
+		log.Info("Auto-renew: skipping — key already claimed by another worker")
+		return
+	}
+
+	claimFinalized := false
+	defer func() {
+		if claimFinalized || claimedAt == nil {
+			return
+		}
+		restoreCtx := context.WithoutCancel(ctx)
+		if err := j.subKeyRepo.RestoreAutoRenewClaim(restoreCtx, key.ID, *claimedAt, key.LastAutoRenewedAt); err != nil {
+			log.Error("Auto-renew: failed to release claim after error", "error", err)
+		}
+	}()
+
 	// ── Find the best affordable plan ─────────────────────────────────────────
 	// findAffordablePlan prefers the most expensive plan the user can afford
 	// (best value), falling back to cheaper options of the same traffic type.
@@ -122,11 +146,7 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 			j.tm.GetText(customer.Language, "auto_renew_failed"))
 		return
 	}
-
-	// Stamp key so the cron won't charge it again this cycle.
-	if err := j.subKeyRepo.MarkKeyAutoRenewed(ctx, key.ID); err != nil {
-		log.Error("Auto-renew: failed to stamp last_auto_renewed_at (non-fatal)", "error", err)
-	}
+	claimFinalized = true
 
 	log.Info("Auto-renew: key extended successfully", "is_fallback", isFallback)
 

@@ -56,6 +56,7 @@ type PaymentService struct {
 	testMode            bool
 	testModeMu          sync.RWMutex
 	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
+	syncInFlight        sync.Map // key: customerID int64, value: struct{}
 }
 
 func NewPaymentService(
@@ -156,10 +157,14 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		return nil, err
 	}
 
-	// Create a map of remote users for easy lookup
+	// Create maps for lookup/reconciliation.
 	remoteMap := make(map[string]remapi.User)
 	for _, u := range users {
 		remoteMap[u.UUID.String()] = u
+	}
+	localMap := make(map[string]database.SubscriptionKey, len(localKeys))
+	for _, localKey := range localKeys {
+		localMap[localKey.RemnawaveUUID.String()] = localKey
 	}
 
 	var result []KeyStats
@@ -207,6 +212,67 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		result = append(result, stats)
 	}
 
+	// Reconcile remote-only users into local DB so downstream features
+	// (key listing, auto-renew, notifications) do not lose track of paid keys.
+	for _, remoteUser := range users {
+		if _, exists := localMap[remoteUser.UUID.String()]; exists {
+			continue
+		}
+
+		newStatus := "active"
+		if remoteUser.ExpireAt.Before(time.Now()) {
+			newStatus = "expired"
+		}
+
+		limitBytes := 0
+		if remoteUser.TrafficLimitBytes.IsSet() {
+			limitBytes = remoteUser.TrafficLimitBytes.Value
+		}
+		trafficLimitGB := 0
+		if limitBytes > 0 {
+			trafficLimitGB = int(math.Ceil(float64(limitBytes) / 1073741824.0))
+		}
+
+		expireAt := remoteUser.ExpireAt
+		label := remoteUser.Username
+		if label == "" {
+			label = fmt.Sprintf("key_%s", remoteUser.UUID.String()[:8])
+		}
+
+		createdID, createErr := s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
+			CustomerID:      customerID,
+			RemnawaveUUID:   remoteUser.UUID,
+			Username:        remoteUser.Username,
+			SubscriptionURL: remoteUser.SubscriptionUrl,
+			ExpireAt:        &expireAt,
+			Status:          newStatus,
+			Label:           label,
+			TrafficLimitGB:  trafficLimitGB,
+		})
+		if createErr != nil {
+			// Another worker may have inserted it concurrently.
+			existing, findErr := s.subKeyRepo.FindByRemnawaveUUID(ctx, remoteUser.UUID)
+			if findErr != nil || existing == nil {
+				slog.Error("Failed to reconcile remote-only subscription key",
+					"customer_id", customerID,
+					"uuid", remoteUser.UUID.String(),
+					"create_error", createErr,
+					"find_error", findErr,
+				)
+				continue
+			}
+			createdID = existing.ID
+		}
+
+		result = append(result, KeyStats{
+			ID:                createdID,
+			TrafficUsedBytes:  remoteUser.UserTraffic.UsedTrafficBytes,
+			TrafficLimitBytes: limitBytes,
+			ExpireAt:          remoteUser.ExpireAt,
+			Status:            newStatus,
+		})
+	}
+
 	// Cache the result in the sync cache
 	s.syncCache.Store(customerID, syncCacheEntry{
 		keys:      result,
@@ -214,6 +280,41 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	})
 
 	return result, nil
+}
+
+// GetCachedSyncKeys returns fresh cached key stats when available.
+func (s *PaymentService) GetCachedSyncKeys(customerID int64) ([]KeyStats, bool) {
+	v, ok := s.syncCache.Load(customerID)
+	if !ok {
+		return nil, false
+	}
+
+	entry, ok := v.(syncCacheEntry)
+	if !ok || time.Now().After(entry.expiresAt) {
+		return nil, false
+	}
+
+	copied := make([]KeyStats, len(entry.keys))
+	copy(copied, entry.keys)
+	return copied, true
+}
+
+// TriggerSyncKeysAsync refreshes key stats in the background (deduplicated per customer).
+func (s *PaymentService) TriggerSyncKeysAsync(ctx context.Context, customerID int64, telegramID int64) {
+	if _, loaded := s.syncInFlight.LoadOrStore(customerID, struct{}{}); loaded {
+		return
+	}
+
+	go func() {
+		defer s.syncInFlight.Delete(customerID)
+
+		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+
+		if _, err := s.SyncKeys(syncCtx, customerID, telegramID); err != nil {
+			slog.Warn("Background key sync failed", "customer_id", customerID, "error", err)
+		}
+	}()
 }
 
 type KeyStats struct {
@@ -439,14 +540,18 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		}
 	} else {
 		// CREATE new key — always creates a fresh Remnawave user
-		keyCount, _ := s.subKeyRepo.CountByCustomerID(ctx, customer.ID)
-		keyIndex := int(keyCount) + 1
+		usernameSeed := purchase.TransactionID
+		if usernameSeed != "" {
+			usernameSeed = fmt.Sprintf("%s_%d", usernameSeed, purchase.ID)
+		} else {
+			usernameSeed = fmt.Sprintf("PURCHASE_%d", purchase.ID)
+		}
 
 		// Build user description
 		userDesc := buildUserDescription(purchase.PaymentMethod, purchase.PlanLabel, purchase.Days, purchase.TrafficLimitGB, customer.TelegramID, purchase.TransactionID)
 		ctx = context.WithValue(ctx, "description", userDesc)
 
-		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, keyIndex, purchase.TransactionID)
+		remnawaveUser, err := s.remnawaveClient.ForceCreateNewUser(ctx, customer.ID, customer.TelegramID, purchase.TrafficLimitGB*bytesInGB, purchase.Days, 0, usernameSeed)
 		if err != nil {
 			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
 			return err
@@ -475,7 +580,8 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			if err != nil {
 				slog.Error("CRITICAL: Failed to save subscription key to DB. Key EXISTS on Remnawave but NOT in local DB.",
 					"purchase_id", purchaseId, "username", remnawaveUser.Username, "error", err)
-				// Continue — key exists remotely. SyncKeys will recover it later.
+				// Continue — key exists remotely. SyncKeys now reconciles missing
+				// local rows from Remnawave and will recover this mismatch.
 			}
 		}
 		// Update customer
@@ -578,39 +684,62 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			"bonus_amount", ReferralBonusAmount,
 		)
 
-		if err := s.customerRepository.AddBalance(ctxRef, referrerCustomer.ID, ReferralBonusAmount); err != nil {
-			slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referrer balance (non-fatal)", "error", err)
+		dbTx, err := s.customerRepository.BeginTx(ctxRef)
+		if err != nil {
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to begin referrer bonus transaction (non-fatal)", "error", err)
 			return
 		}
-		slog.Info("[REFERRAL-DEBUG] Referrer balance credited successfully")
+		referrerTxDone := false
+		defer func() {
+			if !referrerTxDone {
+				_ = dbTx.Rollback(ctxRef)
+			}
+		}()
 
-		if s.walletTxRepo != nil {
-			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
-				CustomerID:  referrerCustomer.ID,
-				Amount:      ReferralBonusAmount,
-				Type:        database.WalletTransactionTypeReferral,
-				Description: "Referral bonus — friend made their first purchase",
-			}); err != nil {
-				slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referrer wallet transaction (non-fatal)", "error", err)
-			} else {
+		claimed, err := s.referralRepository.TryMarkBonusGrantedTx(ctxRef, dbTx, referral.ID)
+		if err != nil {
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to claim referrer bonus (non-fatal)", "error", err)
+			return
+		}
+		if !claimed {
+			_ = dbTx.Rollback(ctxRef)
+			referrerTxDone = true
+			slog.Info("[REFERRAL-DEBUG] Referrer bonus already claimed by another worker, skipping")
+		} else {
+			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, referrerCustomer.ID, ReferralBonusAmount); err != nil {
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referrer balance (non-fatal)", "error", err)
+				return
+			}
+			slog.Info("[REFERRAL-DEBUG] Referrer balance credited successfully")
+
+			if s.walletTxRepo != nil {
+				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
+					CustomerID:  referrerCustomer.ID,
+					Amount:      ReferralBonusAmount,
+					Type:        database.WalletTransactionTypeReferral,
+					Description: "Referral bonus — friend made their first purchase",
+				}); err != nil {
+					slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referrer wallet transaction (non-fatal)", "error", err)
+					return
+				}
 				slog.Info("[REFERRAL-DEBUG] Referrer wallet transaction logged")
 			}
-		}
 
-		if err := s.referralRepository.MarkBonusGranted(ctxRef, referral.ID); err != nil {
-			slog.Error("[REFERRAL-DEBUG] FAILED: failed to mark bonus_granted (non-fatal)", "error", err)
-		} else {
-			slog.Info("[REFERRAL-DEBUG] bonus_granted flag set to true")
-		}
+			if err := dbTx.Commit(ctxRef); err != nil {
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to commit referrer bonus transaction (non-fatal)", "error", err)
+				return
+			}
+			referrerTxDone = true
 
-		slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer", "referrer_id", referrerCustomer.ID, "amount", ReferralBonusAmount)
+			slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer", "referrer_id", referrerCustomer.ID, "amount", ReferralBonusAmount)
 
-		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
-			ChatID:    referrerCustomer.TelegramID,
-			ParseMode: models.ParseModeHTML,
-			Text:      s.translation.GetText(referrerCustomer.Language, "referral_bonus_granted"),
-		}); err != nil {
-			slog.Error("[REFERRAL-DEBUG] Referrer notification failed (non-fatal)", "error", err)
+			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+				ChatID:    referrerCustomer.TelegramID,
+				ParseMode: models.ParseModeHTML,
+				Text:      s.translation.GetText(referrerCustomer.Language, "referral_bonus_granted"),
+			}); err != nil {
+				slog.Error("[REFERRAL-DEBUG] Referrer notification failed (non-fatal)", "error", err)
+			}
 		}
 	} else {
 		slog.Info("[REFERRAL-DEBUG] Referrer bonus already granted, skipping")
@@ -620,39 +749,62 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	if !referral.RefereeBonusGranted {
 		slog.Info("[REFERRAL-DEBUG] Crediting REFEREE...")
 
-		if err := s.customerRepository.AddBalance(ctxRef, customer.ID, ReferralBonusAmount); err != nil {
-			slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referee balance (non-fatal)", "error", err)
+		dbTx, err := s.customerRepository.BeginTx(ctxRef)
+		if err != nil {
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to begin referee bonus transaction (non-fatal)", "error", err)
 			return
 		}
-		slog.Info("[REFERRAL-DEBUG] Referee balance credited successfully")
+		refereeTxDone := false
+		defer func() {
+			if !refereeTxDone {
+				_ = dbTx.Rollback(ctxRef)
+			}
+		}()
 
-		if s.walletTxRepo != nil {
-			if _, err := s.walletTxRepo.Create(ctxRef, &database.WalletTransaction{
-				CustomerID:  customer.ID,
-				Amount:      ReferralBonusAmount,
-				Type:        database.WalletTransactionTypeReferral,
-				Description: "Welcome bonus — joined via referral link",
-			}); err != nil {
-				slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referee wallet transaction (non-fatal)", "error", err)
-			} else {
+		claimed, err := s.referralRepository.TryMarkRefereeBonusGrantedTx(ctxRef, dbTx, referral.ID)
+		if err != nil {
+			slog.Error("[REFERRAL-DEBUG] FAILED: failed to claim referee bonus (non-fatal)", "error", err)
+			return
+		}
+		if !claimed {
+			_ = dbTx.Rollback(ctxRef)
+			refereeTxDone = true
+			slog.Info("[REFERRAL-DEBUG] Referee bonus already claimed by another worker, skipping")
+		} else {
+			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, customer.ID, ReferralBonusAmount); err != nil {
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referee balance (non-fatal)", "error", err)
+				return
+			}
+			slog.Info("[REFERRAL-DEBUG] Referee balance credited successfully")
+
+			if s.walletTxRepo != nil {
+				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
+					CustomerID:  customer.ID,
+					Amount:      ReferralBonusAmount,
+					Type:        database.WalletTransactionTypeReferral,
+					Description: "Welcome bonus — joined via referral link",
+				}); err != nil {
+					slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referee wallet transaction (non-fatal)", "error", err)
+					return
+				}
 				slog.Info("[REFERRAL-DEBUG] Referee wallet transaction logged")
 			}
-		}
 
-		if err := s.referralRepository.MarkRefereeBonusGranted(ctxRef, referral.ID); err != nil {
-			slog.Error("[REFERRAL-DEBUG] FAILED: failed to mark referee_bonus_granted (non-fatal)", "error", err)
-		} else {
-			slog.Info("[REFERRAL-DEBUG] referee_bonus_granted flag set to true")
-		}
+			if err := dbTx.Commit(ctxRef); err != nil {
+				slog.Error("[REFERRAL-DEBUG] FAILED: failed to commit referee bonus transaction (non-fatal)", "error", err)
+				return
+			}
+			refereeTxDone = true
 
-		slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee", "referee_id", customer.ID, "amount", ReferralBonusAmount)
+			slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee", "referee_id", customer.ID, "amount", ReferralBonusAmount)
 
-		if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
-			ChatID:    customer.TelegramID,
-			ParseMode: models.ParseModeHTML,
-			Text:      s.translation.GetText(customer.Language, "referee_bonus_granted"),
-		}); err != nil {
-			slog.Error("[REFERRAL-DEBUG] Referee notification failed (non-fatal)", "error", err)
+			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
+				ChatID:    customer.TelegramID,
+				ParseMode: models.ParseModeHTML,
+				Text:      s.translation.GetText(customer.Language, "referee_bonus_granted"),
+			}); err != nil {
+				slog.Error("[REFERRAL-DEBUG] Referee notification failed (non-fatal)", "error", err)
+			}
 		}
 	} else {
 		slog.Info("[REFERRAL-DEBUG] Referee bonus already granted, skipping")
@@ -706,6 +858,16 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 	}()
 
 	if amount <= 0 {
+		if promoID != nil && !promoClaimed && s.promoCodeRepository != nil {
+			claimed, claimErr := s.promoCodeRepository.IncrementUsageAtomic(ctx, *promoID)
+			if claimErr != nil {
+				return "", 0, fmt.Errorf("failed to claim promo usage for free purchase: %w", claimErr)
+			}
+			if !claimed {
+				return "", 0, fmt.Errorf("promo code is no longer available")
+			}
+			promoClaimed = true
+		}
 		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoID)
 	}
 
