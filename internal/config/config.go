@@ -58,6 +58,17 @@ type config struct {
 	geminiAPIKey                                              string
 	geminiModel                                               string
 	currency                                                  string
+	backupEnabled                                             bool
+	backupScheduleCron                                        string
+	backupTimezone                                            string
+	backupDir                                                 string
+	backupRetentionDays                                       int
+	backupMaxLocalFiles                                       int
+	backupSendToTelegram                                      bool
+	backupRestoreEnabled                                      bool
+	backupConfirmTTLMinutes                                   int
+	backupJobTimeoutSeconds                                   int
+	backupRestoreTimeoutSeconds                               int
 	botURLMu                                                  sync.RWMutex
 }
 
@@ -223,6 +234,50 @@ func GeminiModel() string {
 
 func Currency() string {
 	return conf.currency
+}
+
+func BackupEnabled() bool {
+	return conf.backupEnabled
+}
+
+func BackupScheduleCron() string {
+	return conf.backupScheduleCron
+}
+
+func BackupTimezone() string {
+	return conf.backupTimezone
+}
+
+func BackupDir() string {
+	return conf.backupDir
+}
+
+func BackupRetentionDays() int {
+	return conf.backupRetentionDays
+}
+
+func BackupMaxLocalFiles() int {
+	return conf.backupMaxLocalFiles
+}
+
+func BackupSendToTelegram() bool {
+	return conf.backupSendToTelegram
+}
+
+func BackupRestoreEnabled() bool {
+	return conf.backupRestoreEnabled
+}
+
+func BackupConfirmTTLMinutes() int {
+	return conf.backupConfirmTTLMinutes
+}
+
+func BackupJobTimeoutSeconds() int {
+	return conf.backupJobTimeoutSeconds
+}
+
+func BackupRestoreTimeoutSeconds() int {
+	return conf.backupRestoreTimeoutSeconds
 }
 
 func IsCryptoPayEnabled() bool {
@@ -557,4 +612,20 @@ func InitConfig() {
 	}
 
 	conf.currency = envStringDefault("CURRENCY", "MMK")
+	conf.backupEnabled = envBool("BACKUP_ENABLED")
+	conf.backupScheduleCron = envStringDefault("BACKUP_SCHEDULE_CRON", "10 0 * * *")
+	conf.backupTimezone = envStringDefault("BACKUP_TIMEZONE", "Asia/Rangoon")
+	conf.backupDir = envStringDefault("BACKUP_DIR", "/backups")
+	conf.backupRetentionDays = envIntDefault("BACKUP_RETENTION_DAYS", 7)
+	conf.backupMaxLocalFiles = envIntDefault("BACKUP_MAX_LOCAL_FILES", 7)
+	conf.backupSendToTelegram = func() bool {
+		if os.Getenv("BACKUP_SEND_TO_TELEGRAM") == "" {
+			return true
+		}
+		return envBool("BACKUP_SEND_TO_TELEGRAM")
+	}()
+	conf.backupRestoreEnabled = envBool("BACKUP_RESTORE_ENABLED")
+	conf.backupConfirmTTLMinutes = envIntDefault("BACKUP_CONFIRM_TTL_MINUTES", 10)
+	conf.backupJobTimeoutSeconds = envIntDefault("BACKUP_JOB_TIMEOUT_SECONDS", 900)
+	conf.backupRestoreTimeoutSeconds = envIntDefault("BACKUP_RESTORE_TIMEOUT_SECONDS", 1800)
 }

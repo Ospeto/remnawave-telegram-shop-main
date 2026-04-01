@@ -118,6 +118,40 @@ Key variables used in `.env`:
 | `PLANS` | Config string for subscription plans |
 | `DOMAIN_NAME` | Your domain for Caddy (SSL) |
 
+### Backup And Restore Configuration
+
+Bot-managed DB backup/restore uses PostgreSQL client tools inside the bot container and stores local backup artifacts in the `/backups` volume.
+
+Recommended backup-related variables:
+
+| Variable | Description |
+| :--- | :--- |
+| `BACKUP_ENABLED` | Enable or disable scheduled daily DB backups |
+| `BACKUP_SCHEDULE_CRON` | Daily backup cron expression |
+| `BACKUP_TIMEZONE` | Timezone for backup schedule, e.g. `Asia/Rangoon` |
+| `BACKUP_DIR` | In-container backup directory, default `/backups` |
+| `BACKUP_RETENTION_DAYS` | Retention window for local backup files |
+| `BACKUP_MAX_LOCAL_FILES` | Max number of local backups to keep |
+| `BACKUP_SEND_TO_TELEGRAM` | Send successful backups to `ADMIN_TELEGRAM_ID` |
+| `BACKUP_RESTORE_ENABLED` | Enable restore commands |
+| `BACKUP_CONFIRM_TTL_MINUTES` | Confirmation-token lifetime for restore |
+| `BACKUP_JOB_TIMEOUT_SECONDS` | Timeout for dump/compress/send jobs |
+| `BACKUP_RESTORE_TIMEOUT_SECONDS` | Timeout for restore jobs |
+
+### Admin Backup Commands
+
+The backup/restore feature is operated from the admin Telegram account:
+
+- `/backup now`: Create a DB backup immediately and send it to admin chat.
+- `/backup status`: Show last successful backup, retention, and next run.
+- `/backup list`: List local backup artifacts available for restore.
+- `/backup enable` / `/backup disable`: Turn scheduled backups on or off.
+- `/backup schedule` or `/backup schedule HH:MM`: Show or update the daily schedule.
+- `/restore list`: Show local backup files that can be restored.
+- `/restore latest` or `/restore file <name>`: Start guarded restore flow.
+- `/restore confirm <token>`: Confirm destructive restore action.
+- `/restore cancel`: Cancel a pending restore request.
+
 ## Backup & Restore
 
 The `setup.sh` script includes built-in tools for migration:
@@ -125,9 +159,13 @@ The `setup.sh` script includes built-in tools for migration:
 -   **Backup**: `./setup.sh` -> Option 9. Creates a tarball of DB, Config, and Certs.
 -   **Restore**: `./setup.sh` -> Option 10. Restores a system from a backup tarball.
 
+For bot-managed operations, the runtime now includes PostgreSQL client tooling and the compose stack mounts a persistent `bot_backups` volume at `/backups`. The bot backup feature is DB-only; full-system backup of certs, translations, and `.env` remains a `setup.sh` workflow.
+
 ## Troubleshooting
 
 -   **Bot not responding?** Check logs: `docker-compose logs -f bot`
+-   **Backup commands fail with missing binaries?** Rebuild the bot image so the updated runtime layer with PostgreSQL client tools is applied: `docker-compose up -d --build bot`
+-   **Backup file was not sent to Telegram?** Check bot logs and confirm the backup still exists in the local `/backups` volume.
 -   **Database crashed?** Use `fix_db_crash.sh` or reset via setup wizard.
 -   **Mini App Blank Screen?** Ensure `MINI_APP_URL` is set correctly and HTTPS is working.
 

@@ -10,10 +10,17 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/service/backup"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 )
+
+var backupService *backup.Service
+
+func SetBackupService(service *backup.Service) {
+	backupService = service
+}
 
 // adminOnly is a helper that sends an unauthorized message and returns false if not admin.
 func (h Handler) adminOnly(ctx context.Context, b *bot.Bot, update *models.Update) bool {
@@ -52,6 +59,17 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 /transactions — Last 10 paid transactions
 /transactions 25 — Last N paid transactions (max 50)
 /revenue — Revenue summary (today + last 7 days)
+/backup now — Create DB backup and send it to admin chat
+/backup status — Show backup scheduler and last backup status
+/backup list — Show recent local backup files
+/backup enable — Enable scheduled backups
+/backup disable — Disable scheduled backups
+/backup schedule [HH:MM] — Show or set daily backup time
+/restore list — Show restorable backup files
+/restore latest — Prepare restore using latest local backup
+/restore file &lt;name&gt; — Prepare restore using a named local backup
+/restore confirm &lt;token&gt; — Confirm pending restore
+/restore cancel — Cancel pending restore
 
 <b>Promo Codes</b>
 /addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
@@ -643,4 +661,307 @@ func addCommas(s string) string {
 		result = append(result, byte(ch))
 	}
 	return neg + string(result)
+}
+
+func (h Handler) BackupCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+	if backupService == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Backup service is not configured.",
+		})
+		return
+	}
+
+	args := strings.Fields(strings.TrimSpace(update.Message.Text))
+	if len(args) < 2 {
+		h.sendBackupStatus(ctx, b, update)
+		return
+	}
+
+	switch strings.ToLower(args[1]) {
+	case "now":
+		result, err := backupService.CreateBackup(ctx, "manual")
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Backup failed: %v", err),
+			})
+			return
+		}
+		if err := backupService.SendBackupDocument(ctx, b, update.Message.Chat.ID, result, "Manual backup complete"); err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("⚠️ Backup created but upload failed: %v\nLocal file: %s", err, result.File.Name),
+			})
+			return
+		}
+	case "status":
+		h.sendBackupStatus(ctx, b, update)
+	case "list":
+		backups, err := backupService.ListBackups()
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Failed to list backups: %v", err),
+			})
+			return
+		}
+		if len(backups) == 0 {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   "📭 No local backups found.",
+			})
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString("🗃 <b>Local Backups</b>\n\n")
+		for i, file := range backups {
+			if i == 10 {
+				break
+			}
+			sb.WriteString(fmt.Sprintf("%d. <code>%s</code>\n   %s | %s\n",
+				i+1,
+				html.EscapeString(file.Name),
+				file.ModTime.Format("2006-01-02 15:04"),
+				formatNumber(float64(file.Size))+" B",
+			))
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    update.Message.Chat.ID,
+			Text:      sb.String(),
+			ParseMode: models.ParseModeHTML,
+		})
+	case "enable":
+		if err := backupService.SetEnabled(ctx, true); err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Failed to enable backups: %v", err),
+			})
+			return
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "✅ Scheduled backups enabled.",
+		})
+	case "disable":
+		if err := backupService.SetEnabled(ctx, false); err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Failed to disable backups: %v", err),
+			})
+			return
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "✅ Scheduled backups disabled.",
+		})
+	case "schedule":
+		if len(args) == 2 {
+			h.sendBackupStatus(ctx, b, update)
+			return
+		}
+		if err := backupService.SetScheduleTime(ctx, args[2]); err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Invalid schedule: %v", err),
+			})
+			return
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("✅ Backup schedule updated to %s (%s).", args[2], config.BackupTimezone()),
+		})
+	default:
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /backup now|status|list|enable|disable|schedule [HH:MM]",
+		})
+	}
+}
+
+func (h Handler) RestoreCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+	if backupService == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Backup service is not configured.",
+		})
+		return
+	}
+
+	args := strings.Fields(strings.TrimSpace(update.Message.Text))
+	if len(args) < 2 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /restore list|latest|file <name>|confirm <token>|cancel",
+		})
+		return
+	}
+
+	switch strings.ToLower(args[1]) {
+	case "list":
+		backups, err := backupService.ListBackups()
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Failed to list backups: %v", err),
+			})
+			return
+		}
+		if len(backups) == 0 {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   "📭 No local backups available for restore.",
+			})
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString("♻️ <b>Restorable Backups</b>\n\n")
+		for i, file := range backups {
+			if i == 10 {
+				break
+			}
+			sb.WriteString(fmt.Sprintf("%d. <code>%s</code>\n", i+1, html.EscapeString(file.Name)))
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    update.Message.Chat.ID,
+			Text:      sb.String(),
+			ParseMode: models.ParseModeHTML,
+		})
+	case "latest":
+		pending, err := backupService.PrepareRestoreLatest(ctx)
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Restore preparation failed: %v", err),
+			})
+			return
+		}
+		h.sendRestoreConfirmation(ctx, b, update, pending)
+	case "file":
+		if len(args) < 3 {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   "Usage: /restore file <name>",
+			})
+			return
+		}
+		fileName := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/restore file"))
+		pending, err := backupService.PrepareRestoreFile(ctx, strings.TrimSpace(fileName))
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Restore preparation failed: %v", err),
+			})
+			return
+		}
+		h.sendRestoreConfirmation(ctx, b, update, pending)
+	case "confirm":
+		if len(args) != 3 {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   "Usage: /restore confirm <token>",
+			})
+			return
+		}
+		result, err := backupService.ConfirmRestore(ctx, args[2])
+		if err != nil {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Restore failed: %v", err),
+			})
+			return
+		}
+		text := fmt.Sprintf("✅ Restore complete.\nSource: <code>%s</code>", html.EscapeString(result.Target.Name))
+		if result.SafetyBackup != nil {
+			text += fmt.Sprintf("\nSafety backup: <code>%s</code>", html.EscapeString(result.SafetyBackup.Name))
+		}
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    update.Message.Chat.ID,
+			Text:      text,
+			ParseMode: models.ParseModeHTML,
+		})
+	case "cancel":
+		backupService.CancelPendingRestore()
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "✅ Pending restore cancelled.",
+		})
+	default:
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Usage: /restore list|latest|file <name>|confirm <token>|cancel",
+		})
+	}
+}
+
+func (h Handler) sendBackupStatus(ctx context.Context, b *bot.Bot, update *models.Update) {
+	status, err := backupService.Status(ctx)
+	if err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Failed to load backup status: %v", err),
+		})
+		return
+	}
+
+	enabledText := "disabled"
+	if status.Enabled {
+		enabledText = "enabled"
+	}
+	sendText := "disabled"
+	if status.SendToTelegram {
+		sendText = "enabled"
+	}
+	restoreText := "disabled"
+	if status.RestoreEnabled {
+		restoreText = "enabled"
+	}
+	lastSuccess := "<i>never</i>"
+	if status.LastSuccessAt != nil {
+		lastSuccess = status.LastSuccessAt.Format("2006-01-02 15:04")
+	}
+
+	text := fmt.Sprintf(
+		"💾 <b>Backup Status</b>\n\nEnabled: <b>%s</b>\nTelegram delivery: <b>%s</b>\nRestore: <b>%s</b>\nSchedule: <code>%s</code> (%s)\nNext run: %s\nLast success: %s\nLast file: <code>%s</code>\nBackups on disk: %d",
+		enabledText,
+		sendText,
+		restoreText,
+		status.ScheduleTime,
+		html.EscapeString(status.Timezone),
+		status.NextRunAt.Format("2006-01-02 15:04"),
+		lastSuccess,
+		html.EscapeString(status.LastFile),
+		status.BackupCount,
+	)
+	if status.LastError != "" {
+		text += fmt.Sprintf("\nLast error: <code>%s</code>", html.EscapeString(status.LastError))
+	}
+	if status.OperationRunning {
+		text += "\n\n⚠️ A backup or restore operation is currently running."
+	}
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      text,
+		ParseMode: models.ParseModeHTML,
+	})
+}
+
+func (h Handler) sendRestoreConfirmation(ctx context.Context, b *bot.Bot, update *models.Update, pending *backup.PendingRestore) {
+	text := fmt.Sprintf(
+		"⚠️ This will overwrite the current database.\nA safety backup will be created first.\n\nSource: <code>%s</code>\nConfirm before: %s\nRun: <code>/restore confirm %s</code>",
+		html.EscapeString(pending.File.Name),
+		pending.ExpiresAt.Format("2006-01-02 15:04"),
+		html.EscapeString(pending.Token),
+	)
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    update.Message.Chat.ID,
+		Text:      text,
+		ParseMode: models.ParseModeHTML,
+	})
 }

@@ -12,6 +12,7 @@ services:
         condition: service_healthy
     volumes:
       - ./translations:/translations
+      - bot_backups:/backups
     healthcheck:
       test: [ "CMD", "/app/app", "--health" ]
       interval: 30s
@@ -62,5 +63,7 @@ volumes:
     driver: local
     external: false
     name: remnawave-telegram-shop-db-data
+  bot_backups:
+    driver: local
   caddy_data:
   caddy_config:

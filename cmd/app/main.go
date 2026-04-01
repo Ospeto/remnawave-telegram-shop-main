@@ -18,6 +18,7 @@ import (
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/service/autorenew"
+	"remnawave-tg-shop-bot/internal/service/backup"
 	"remnawave-tg-shop-bot/internal/service/invoicechecker"
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
@@ -210,8 +211,28 @@ func main() {
 	}
 	slog.Info("Payment receivers loaded", "providers", payment.GetAcceptedProviderText(", "))
 
+	backupScheduleTime, err := parseDailyScheduleTime(config.BackupScheduleCron())
+	if err != nil {
+		panic(err)
+	}
+	backupService := backup.NewService(appConfigRepo, backup.Options{
+		DatabaseURL:         config.DatabaseUrl(),
+		BackupDir:           config.BackupDir(),
+		Timezone:            config.BackupTimezone(),
+		DefaultScheduleTime: backupScheduleTime,
+		Enabled:             config.BackupEnabled(),
+		SendToTelegram:      config.BackupSendToTelegram(),
+		RestoreEnabled:      config.BackupRestoreEnabled(),
+		RetentionDays:       config.BackupRetentionDays(),
+		MaxLocalFiles:       config.BackupMaxLocalFiles(),
+		ConfirmTTL:          time.Duration(config.BackupConfirmTTLMinutes()) * time.Minute,
+		JobTimeout:          time.Duration(config.BackupJobTimeoutSeconds()) * time.Second,
+		RestoreTimeout:      time.Duration(config.BackupRestoreTimeoutSeconds()) * time.Second,
+	})
+
 	mobilePayCache := cache.NewCache(1 * time.Hour)
 	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
+	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)
 	if err != nil {
@@ -267,6 +288,8 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/disablename", bot.MatchTypePrefix, h.DisableNameCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/phones", bot.MatchTypeExact, h.PhonesCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/revenue", bot.MatchTypeExact, h.RevenueCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/backup", bot.MatchTypePrefix, h.BackupCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/restore", bot.MatchTypePrefix, h.RestoreCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
@@ -362,6 +385,24 @@ func main() {
 	})
 	c.Start()
 	defer c.Stop()
+
+	backupLocation, err := time.LoadLocation(config.BackupTimezone())
+	if err != nil {
+		panic(err)
+	}
+	backupCron := cron.New(cron.WithLocation(backupLocation))
+	_, err = backupCron.AddFunc("* * * * *", func() {
+		cronCtx, cronCancel := context.WithTimeout(newCronContext("backup_scheduler"), time.Duration(config.BackupJobTimeoutSeconds())*time.Second)
+		defer cronCancel()
+		if err := backupService.RunScheduledBackupIfDue(cronCtx, b, config.GetAdminTelegramId()); err != nil {
+			slog.Error("Scheduled backup job failed", "error", err)
+		}
+	})
+	if err != nil {
+		panic(err)
+	}
+	backupCron.Start()
+	defer backupCron.Stop()
 
 	slog.Info("Bot is starting...")
 	b.Start(ctx)
@@ -480,4 +521,21 @@ func initDatabase(ctx context.Context, connString string) (*pgxpool.Pool, error)
 	config.MinConns = 5
 
 	return pgxpool.ConnectConfig(ctx, config)
+}
+
+func parseDailyScheduleTime(expr string) (string, error) {
+	parts := strings.Fields(strings.TrimSpace(expr))
+	if len(parts) != 5 {
+		return "", fmt.Errorf("invalid BACKUP_SCHEDULE_CRON %q, expected 5 fields", expr)
+	}
+
+	minute, err := strconv.Atoi(parts[0])
+	if err != nil || minute < 0 || minute > 59 {
+		return "", fmt.Errorf("invalid backup cron minute in %q", expr)
+	}
+	hour, err := strconv.Atoi(parts[1])
+	if err != nil || hour < 0 || hour > 23 {
+		return "", fmt.Errorf("invalid backup cron hour in %q", expr)
+	}
+	return fmt.Sprintf("%02d:%02d", hour, minute), nil
 }

@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -o /bin/app ./cmd/app
 
 # ── Final image ─────────────────────────────────────────────
-FROM scratch
+FROM alpine:3.22
 
 ARG VERSION
 ARG COMMIT
@@ -43,8 +43,11 @@ LABEL org.opencontainers.image.source="https://github.com/${GITHUB_REPOSITORY}"
 LABEL org.opencontainers.image.description="Remnawave Telegram Shop Bot"
 LABEL org.opencontainers.image.licenses="MIT"
 
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN apk add --no-cache ca-certificates tzdata postgresql17-client gzip \
+    && addgroup -S app \
+    && adduser -S -D -H -h /app -s /sbin/nologin -G app app \
+    && mkdir -p /app /translations /web-app/dist /backups \
+    && chown -R app:app /app /translations /web-app /backups
 
 COPY --from=builder /bin/app /app/app
 
@@ -54,7 +57,7 @@ COPY --from=builder /app/translations /translations
 # Include the built frontend
 COPY --from=frontend /frontend/dist /web-app/dist
 
-USER 1000
+USER app
 
 ENV DISABLE_ENV_FILE=true
 
