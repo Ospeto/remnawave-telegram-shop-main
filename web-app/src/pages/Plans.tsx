@@ -278,16 +278,24 @@ export function Plans() {
             {/* Plan / Top-up cards */}
             <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
-                    const originalIdx = isWalletTopup ? -1 : plans.findIndex(p => p.label === item.label && p.days === item.days);
+                    const originalIdx = plans.findIndex(p => p.label === item.label && p.days === item.days);
                     const price = item.discountedPrice || item.price;
                     const hasDiscount = item.discountedPrice !== undefined && item.discountedPrice < item.price;
+                    const checkoutParams = new URLSearchParams();
 
-                    let checkoutUrl = `/checkout/${originalIdx}?`;
-                    if (isExtend) checkoutUrl += `extend=${extendKeyId}&`;
-                    if (isWalletTopup) {
-                        checkoutUrl += `walletTopup=true&amount=${item.price}&`;
+                    if (isExtend && extendKeyId) {
+                        checkoutParams.set('extend', extendKeyId);
                     }
-                    if (appliedPromoCode) checkoutUrl += `promo=${encodeURIComponent(appliedPromoCode)}`;
+                    if (isWalletTopup) {
+                        checkoutParams.set('walletTopup', 'true');
+                        checkoutParams.set('amount', String(item.price));
+                    }
+                    if (!isWalletTopup && appliedPromoCode) {
+                        checkoutParams.set('promo', appliedPromoCode);
+                    }
+
+                    const checkoutPath = isWalletTopup ? '/checkout' : `/checkout/${originalIdx}`;
+                    const checkoutUrl = `${checkoutPath}${checkoutParams.toString() ? `?${checkoutParams.toString()}` : ''}`;
 
                     return (
                         <Link

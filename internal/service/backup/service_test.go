@@ -282,6 +282,9 @@ func TestRunScheduledBackupIfDueFailureNotification(t *testing.T) {
 	if !strings.Contains(strings.ToLower(tg.LastMessage()), "failed") {
 		t.Fatalf("unexpected failure notification text: %q", tg.LastMessage())
 	}
+	if _, ok := store.values[keyBackupLastScheduledDate]; ok {
+		t.Fatal("scheduled date should not be persisted when backup creation fails")
+	}
 }
 
 func TestBackupFileIsGzipped(t *testing.T) {

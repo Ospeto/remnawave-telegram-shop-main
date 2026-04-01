@@ -43,6 +43,8 @@ export function Checkout() {
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
     const amountParam = searchParams.get('amount');
     const parsedPlanIndex = Number(planIndex);
+    const parsedTopUpAmount = Number(amountParam);
+    const hasValidTopUpAmount = isWalletTopup && Number.isFinite(parsedTopUpAmount) && parsedTopUpAmount > 0;
     const backTarget = `/plans${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
 
     const [plans, setPlans] = useState<Plan[]>([]);
@@ -96,7 +98,13 @@ export function Checkout() {
             return;
         }
 
-        if (!planIndex || Number.isNaN(parsedPlanIndex) || parsedPlanIndex < 0) {
+        if (isWalletTopup && !hasValidTopUpAmount) {
+            setLoadError(t('invalid_plan_selected'));
+            setLoading(false);
+            return;
+        }
+
+        if (!isWalletTopup && (!planIndex || Number.isNaN(parsedPlanIndex) || parsedPlanIndex < 0)) {
             setLoadError(t('invalid_plan_selected'));
             setLoading(false);
             return;
@@ -149,7 +157,7 @@ export function Checkout() {
         } finally {
             setLoading(false);
         }
-    }, [initData, parsedPlanIndex, planIndex, t]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, parsedPlanIndex, planIndex, t]);
 
     useEffect(() => {
         void loadCheckoutData();
@@ -164,9 +172,7 @@ export function Checkout() {
         setWalletPayError(null);
 
         try {
-            const body: Record<string, unknown> = {
-                plan_index: parsedPlanIndex,
-            };
+            const body: Record<string, unknown> = {};
 
             if (extendKeyId) {
                 body.extend_key_id = Number(extendKeyId);
@@ -174,13 +180,16 @@ export function Checkout() {
             if (promoCode) {
                 body.promo_code = promoCode;
             }
+            if (!isWalletTopup) {
+                body.plan_index = parsedPlanIndex;
+            }
             if (action === 'wallet') {
                 body.payment_method = 'wallet';
             }
             if (action === 'topup') {
                 body.payment_method = 'wallet_topup';
-                if (amountParam) {
-                    body.amount = Number(amountParam);
+                if (hasValidTopUpAmount) {
+                    body.amount = parsedTopUpAmount;
                 }
             }
 
@@ -223,7 +232,7 @@ export function Checkout() {
         } finally {
             setCreatingPurchase(false);
         }
-    }, [amountParam, creatingPurchase, extendKeyId, initData, parsedPlanIndex, promoCode, t]);
+    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedPlanIndex, parsedTopUpAmount, promoCode, t]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -388,7 +397,7 @@ export function Checkout() {
 
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= selectedPlan.price;
     const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
-    const topUpAmount = isWalletTopup ? Number(amountParam || selectedPlan?.price || 0) : 0;
+    const topUpAmount = isWalletTopup && hasValidTopUpAmount ? parsedTopUpAmount : 0;
     const targetAmount = isWalletTopup ? topUpAmount : selectedPlan?.price ?? 0;
     const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
 

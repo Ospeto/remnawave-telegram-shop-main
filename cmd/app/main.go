@@ -333,6 +333,10 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
 
