@@ -57,6 +57,11 @@ type config struct {
 	mobileBankingPhone                                        string
 	geminiAPIKey                                              string
 	geminiModel                                               string
+	openRouterAPIKey                                          string
+	openRouterModel                                           string
+	visionProviderFallback                                    string
+	visionRetryAttempts                                       int
+	visionMaxAttempts                                         int
 	currency                                                  string
 	backupEnabled                                             bool
 	backupScheduleCron                                        string
@@ -232,6 +237,26 @@ func GeminiModel() string {
 	return conf.geminiModel
 }
 
+func OpenRouterAPIKey() string {
+	return conf.openRouterAPIKey
+}
+
+func OpenRouterModel() string {
+	return conf.openRouterModel
+}
+
+func VisionProviderFallback() string {
+	return conf.visionProviderFallback
+}
+
+func VisionRetryAttempts() int {
+	return conf.visionRetryAttempts
+}
+
+func VisionMaxAttempts() int {
+	return conf.visionMaxAttempts
+}
+
 func Currency() string {
 	return conf.currency
 }
@@ -345,6 +370,30 @@ func envStringDefault(key string, def string) string {
 
 func envBool(key string) bool {
 	return os.Getenv(key) == "true"
+}
+
+func envOptionalInt(key string) (int, bool) {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return 0, false
+	}
+
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		log.Panicf("invalid int in %q: %v", key, err)
+	}
+	return i, true
+}
+
+func normalizeVisionProvider(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "openrouter":
+		return "openrouter"
+	default:
+		panic(fmt.Sprintf("unsupported VISION_PROVIDER_FALLBACK %q", value))
+	}
 }
 
 func InitConfig() {
@@ -609,6 +658,33 @@ func InitConfig() {
 		conf.mobileBankingPhone = mustEnv("MOBILE_BANKING_PHONE")
 		conf.geminiAPIKey = mustEnv("GEMINI_API_KEY")
 		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
+		conf.openRouterAPIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
+		conf.openRouterModel = envStringDefault("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
+		if fallbackRaw, isSet := os.LookupEnv("VISION_PROVIDER_FALLBACK"); isSet {
+			conf.visionProviderFallback = normalizeVisionProvider(fallbackRaw)
+		} else if conf.openRouterAPIKey != "" {
+			conf.visionProviderFallback = "openrouter"
+		}
+		conf.visionRetryAttempts = envIntDefault("VISION_RETRY_ATTEMPTS", 1)
+		if conf.visionRetryAttempts < 0 {
+			panic("VISION_RETRY_ATTEMPTS must be >= 0")
+		}
+		explicitMaxAttempts, ok := envOptionalInt("VISION_RETRY_MAX_ATTEMPTS")
+		if !ok {
+			explicitMaxAttempts, ok = envOptionalInt("VISION_MAX_ATTEMPTS")
+		}
+		if ok {
+			if explicitMaxAttempts < 1 {
+				panic("VISION_RETRY_MAX_ATTEMPTS/VISION_MAX_ATTEMPTS must be >= 1")
+			}
+			conf.visionMaxAttempts = explicitMaxAttempts
+		} else {
+			providerCount := 1
+			if conf.visionProviderFallback == "openrouter" && conf.openRouterAPIKey != "" {
+				providerCount++
+			}
+			conf.visionMaxAttempts = providerCount * (conf.visionRetryAttempts + 1)
+		}
 	}
 
 	conf.currency = envStringDefault("CURRENCY", "MMK")

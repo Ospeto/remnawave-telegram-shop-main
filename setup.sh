@@ -580,6 +580,17 @@ wizard() {
         ask "AyaPay Account Name (optional)" "" "MOBILE_BANKING_NAME_AYAPAY"
         ask_required "Gemini API Key" "" "GEMINI_API_KEY"
         ask "Gemini Model" "gemini-2.5-flash" "GEMINI_MODEL"
+        print_info "Gemini stays primary. OpenRouter is optional fallback for retriable provider failures."
+        ask "OpenRouter API Key (optional; empty = Gemini-only mode)" "" "OPENROUTER_API_KEY"
+        if [[ -n "${CFG[OPENROUTER_API_KEY]}" ]]; then
+            ask "OpenRouter Model" "openai/gpt-4.1-mini" "OPENROUTER_MODEL"
+            ask "Fallback Provider (openrouter or empty)" "openrouter" "VISION_PROVIDER_FALLBACK"
+        else
+            CFG[OPENROUTER_MODEL]="openai/gpt-4.1-mini"
+            CFG[VISION_PROVIDER_FALLBACK]=""
+        fi
+        ask_number "Retries per provider before failover" "1" "VISION_RETRY_ATTEMPTS"
+        ask_number "Max screenshot analysis attempts (total)" "3" "VISION_RETRY_MAX_ATTEMPTS"
     else
         CFG[MOBILE_BANKING_PHONE]=""
         CFG[MOBILE_BANKING_PHONE_KPAY]=""
@@ -590,6 +601,11 @@ wizard() {
         CFG[MOBILE_BANKING_NAME_AYAPAY]=""
         CFG[GEMINI_API_KEY]=""
         CFG[GEMINI_MODEL]="gemini-2.5-flash"
+        CFG[OPENROUTER_API_KEY]=""
+        CFG[OPENROUTER_MODEL]="openai/gpt-4.1-mini"
+        CFG[VISION_PROVIDER_FALLBACK]=""
+        CFG[VISION_RETRY_ATTEMPTS]="1"
+        CFG[VISION_RETRY_MAX_ATTEMPTS]="3"
         print_info "Mobile Banking disabled — skipping."
     fi
 
@@ -703,6 +719,11 @@ MOBILE_BANKING_NAME_WAVEPAY=${CFG[MOBILE_BANKING_NAME_WAVEPAY]}
 MOBILE_BANKING_NAME_AYAPAY=${CFG[MOBILE_BANKING_NAME_AYAPAY]}
 GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
 GEMINI_MODEL=${CFG[GEMINI_MODEL]}
+OPENROUTER_API_KEY=${CFG[OPENROUTER_API_KEY]}
+OPENROUTER_MODEL=${CFG[OPENROUTER_MODEL]}
+VISION_PROVIDER_FALLBACK=${CFG[VISION_PROVIDER_FALLBACK]}
+VISION_RETRY_ATTEMPTS=${CFG[VISION_RETRY_ATTEMPTS]}
+VISION_RETRY_MAX_ATTEMPTS=${CFG[VISION_RETRY_MAX_ATTEMPTS]}
 
 # ── Traffic & Referral ──────────────────────────────────────
 TRAFFIC_LIMIT_RESET_STRATEGY=${CFG[TRAFFIC_LIMIT_RESET_STRATEGY]}
@@ -1216,6 +1237,7 @@ do_edit_payments() {
     fi
 
     local cur_enabled cur_legacy cur_gemini_key cur_gemini_model
+    local cur_openrouter_key cur_openrouter_model cur_fallback_provider cur_retry_attempts cur_retry_max_attempts
     local cur_phone_kpay cur_phone_wave cur_phone_aya
     local cur_name_kpay cur_name_wave cur_name_aya
 
@@ -1223,6 +1245,11 @@ do_edit_payments() {
     cur_legacy="$(env_get "MOBILE_BANKING_PHONE" "")"
     cur_gemini_key="$(env_get "GEMINI_API_KEY" "")"
     cur_gemini_model="$(env_get "GEMINI_MODEL" "gemini-2.5-flash")"
+    cur_openrouter_key="$(env_get "OPENROUTER_API_KEY" "")"
+    cur_openrouter_model="$(env_get "OPENROUTER_MODEL" "openai/gpt-4.1-mini")"
+    cur_fallback_provider="$(env_get "VISION_PROVIDER_FALLBACK" "")"
+    cur_retry_attempts="$(env_get "VISION_RETRY_ATTEMPTS" "1")"
+    cur_retry_max_attempts="$(env_get "VISION_RETRY_MAX_ATTEMPTS" "3")"
 
     cur_phone_kpay="$(env_get "MOBILE_BANKING_PHONE_KPAY" "$cur_legacy")"
     cur_phone_wave="$(env_get "MOBILE_BANKING_PHONE_WAVEPAY" "$cur_legacy")"
@@ -1233,6 +1260,7 @@ do_edit_payments() {
 
     print_section "Edit Payment Settings"
     print_info "Leave provider phone empty to disable that provider."
+    print_info "Leave OpenRouter API key empty to keep Gemini-only screenshot verification."
     echo ""
 
     declare -A CFG
@@ -1248,6 +1276,16 @@ do_edit_payments() {
         ask "AyaPay Account Name (optional)" "$cur_name_aya" "MOBILE_BANKING_NAME_AYAPAY"
         ask_required "Gemini API Key" "$cur_gemini_key" "GEMINI_API_KEY"
         ask "Gemini Model" "$cur_gemini_model" "GEMINI_MODEL"
+        ask "OpenRouter API Key (optional; empty = Gemini-only mode)" "$cur_openrouter_key" "OPENROUTER_API_KEY"
+        if [[ -n "${CFG[OPENROUTER_API_KEY]}" ]]; then
+            ask "OpenRouter Model" "$cur_openrouter_model" "OPENROUTER_MODEL"
+            ask "Fallback Provider (openrouter or empty)" "${cur_fallback_provider:-openrouter}" "VISION_PROVIDER_FALLBACK"
+        else
+            CFG[OPENROUTER_MODEL]="$cur_openrouter_model"
+            CFG[VISION_PROVIDER_FALLBACK]=""
+        fi
+        ask_number "Retries per provider before failover" "$cur_retry_attempts" "VISION_RETRY_ATTEMPTS"
+        ask_number "Max screenshot analysis attempts (total)" "$cur_retry_max_attempts" "VISION_RETRY_MAX_ATTEMPTS"
     else
         CFG[MOBILE_BANKING_PHONE]="$cur_legacy"
         CFG[MOBILE_BANKING_PHONE_KPAY]="$cur_phone_kpay"
@@ -1258,6 +1296,11 @@ do_edit_payments() {
         CFG[MOBILE_BANKING_NAME_AYAPAY]="$cur_name_aya"
         CFG[GEMINI_API_KEY]="$cur_gemini_key"
         CFG[GEMINI_MODEL]="$cur_gemini_model"
+        CFG[OPENROUTER_API_KEY]="$cur_openrouter_key"
+        CFG[OPENROUTER_MODEL]="$cur_openrouter_model"
+        CFG[VISION_PROVIDER_FALLBACK]="$cur_fallback_provider"
+        CFG[VISION_RETRY_ATTEMPTS]="$cur_retry_attempts"
+        CFG[VISION_RETRY_MAX_ATTEMPTS]="$cur_retry_max_attempts"
         print_info "Mobile banking disabled globally. Provider values were kept for later reuse."
     fi
 
@@ -1271,6 +1314,11 @@ do_edit_payments() {
     env_set "MOBILE_BANKING_NAME_AYAPAY" "${CFG[MOBILE_BANKING_NAME_AYAPAY]}"
     env_set "GEMINI_API_KEY" "${CFG[GEMINI_API_KEY]}"
     env_set "GEMINI_MODEL" "${CFG[GEMINI_MODEL]}"
+    env_set "OPENROUTER_API_KEY" "${CFG[OPENROUTER_API_KEY]}"
+    env_set "OPENROUTER_MODEL" "${CFG[OPENROUTER_MODEL]}"
+    env_set "VISION_PROVIDER_FALLBACK" "${CFG[VISION_PROVIDER_FALLBACK]}"
+    env_set "VISION_RETRY_ATTEMPTS" "${CFG[VISION_RETRY_ATTEMPTS]}"
+    env_set "VISION_RETRY_MAX_ATTEMPTS" "${CFG[VISION_RETRY_MAX_ATTEMPTS]}"
 
     sync_payment_receivers_to_db \
         "${CFG[MOBILE_BANKING_PHONE_KPAY]}" \
@@ -1290,6 +1338,11 @@ do_edit_payments() {
             print_success "Payment settings updated. Enabled providers: ${enabled_list}"
         else
             print_info "Mobile banking is enabled, but all providers are OFF (no phone numbers set)."
+        fi
+        if [[ -n "${CFG[VISION_PROVIDER_FALLBACK]}" && -n "${CFG[OPENROUTER_API_KEY]}" ]]; then
+            print_info "Screenshot verification: Gemini primary, OpenRouter fallback, retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}."
+        else
+            print_info "Screenshot verification: Gemini-only mode, retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}."
         fi
     else
         print_success "Payment settings updated. Mobile banking is globally OFF."

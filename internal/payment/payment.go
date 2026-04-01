@@ -48,7 +48,7 @@ type PaymentService struct {
 	cryptoPayClient     *cryptopay.Client
 	referralRepository  *database.ReferralRepository
 	cache               *cache.Cache
-	geminiClient        *gemini.Client
+	paymentAnalyzer     gemini.Analyzer
 	mobilePaymentRepo   *database.MobilePaymentRepository
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
@@ -67,7 +67,7 @@ func NewPaymentService(
 	cryptoPayClient *cryptopay.Client,
 	referralRepository *database.ReferralRepository,
 	cache *cache.Cache,
-	geminiClient *gemini.Client,
+	paymentAnalyzer gemini.Analyzer,
 	mobilePaymentRepo *database.MobilePaymentRepository,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
@@ -82,7 +82,7 @@ func NewPaymentService(
 		cryptoPayClient:     cryptoPayClient,
 		referralRepository:  referralRepository,
 		cache:               cache,
-		geminiClient:        geminiClient,
+		paymentAnalyzer:     paymentAnalyzer,
 		mobilePaymentRepo:   mobilePaymentRepo,
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
@@ -997,7 +997,7 @@ type VerificationResult struct {
 }
 
 func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
-	if s.geminiClient == nil {
+	if s.paymentAnalyzer == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
@@ -1029,14 +1029,36 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		})
 	}
 
-	info, err := s.geminiClient.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType, geminiProviders)
+	info, err := s.paymentAnalyzer.AnalyzePaymentScreenshot(ctx, imageBytes, mimeType, geminiProviders)
 	if err != nil {
-		slog.Error("Gemini analysis failed", "error", err, "purchase_id", purchaseID)
+		logAttrs := []any{
+			"purchase_id", purchaseID,
+			"error", err,
+		}
+		if providerErr, ok := gemini.AsProviderError(err); ok {
+			logAttrs = append(logAttrs,
+				"provider", providerErr.Provider,
+				"error_class", providerErr.Class,
+				"status_code", providerErr.StatusCode,
+			)
+		}
+		slog.Error("Mobile payment analysis failed", logAttrs...)
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
+	slog.Info("Mobile payment analyzer outcome",
+		"purchase_id", purchaseID,
+		"provider", info.Provider,
+		"is_valid", info.IsValid,
+		"has_transaction_id", strings.TrimSpace(info.TransactionID) != "",
+	)
+
 	if !info.IsValid {
-		slog.Warn("Gemini flagged screenshot as invalid", "purchase_id", purchaseID)
+		slog.Warn("Mobile payment screenshot rejected by analyzer",
+			"purchase_id", purchaseID,
+			"provider", info.Provider,
+			"outcome", "semantic_negative",
+		)
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 

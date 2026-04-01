@@ -29,6 +29,7 @@ A complete, self-hosted Telegram Shop Bot for selling digital goods (subscriptio
 -   A **Remnawave Panel** URL and API Token (for key generation).
 -   *(Optional)* **CryptoPay** API Token for crypto payments.
 -   *(Optional)* **Gemini API Key** for AI verification of payment screenshots.
+-   *(Optional)* **OpenRouter API Key** if you want screenshot verification fallback when Gemini has provider-side failures.
 
 ## Getting Started
 
@@ -117,6 +118,30 @@ Key variables used in `.env`:
 | `DATABASE_URL` | Connection string `postgres://user:pass@host:5432/db` |
 | `PLANS` | Config string for subscription plans |
 | `DOMAIN_NAME` | Your domain for Caddy (SSL) |
+
+### Mobile Banking Screenshot Verification
+
+Mobile banking screenshot checks stay Gemini-first by default. If you do nothing beyond `GEMINI_API_KEY` and `GEMINI_MODEL`, the app keeps the current Gemini-only behavior.
+
+To enable fallback, add an OpenRouter key/model and set the fallback provider:
+
+| Variable | Description |
+| :--- | :--- |
+| `GEMINI_API_KEY` | Required when mobile banking is enabled; primary screenshot-analysis provider |
+| `GEMINI_MODEL` | Gemini model used for primary screenshot analysis |
+| `OPENROUTER_API_KEY` | Optional fallback provider key; leave empty for Gemini-only mode |
+| `OPENROUTER_MODEL` | OpenRouter model to use when fallback is enabled |
+| `VISION_PROVIDER_FALLBACK` | Set to `openrouter` to allow fallback after retriable provider failures |
+| `VISION_RETRY_ATTEMPTS` | Retries per provider before failover to the fallback provider |
+| `VISION_RETRY_MAX_ATTEMPTS` | Total screenshot-analysis attempts per upload, including retries and fallback attempts |
+
+Practical notes for operators:
+
+-   Gemini stays the primary provider.
+-   OpenRouter fallback is only meant for provider-side failures such as timeouts, rate limits, or upstream API errors.
+-   A screenshot that fails business validation does not become valid just because fallback is configured.
+-   To return to Gemini-only mode, clear `OPENROUTER_API_KEY` or leave `VISION_PROVIDER_FALLBACK` empty.
+-   `./setup.sh` fresh install and `Edit Payment Settings` both expose these values directly.
 
 ### Backup And Restore Configuration
 

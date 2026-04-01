@@ -5,12 +5,18 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
+)
+
+const (
+	defaultGeminiModel    = "gemini-2.5-flash"
+	defaultRequestTimeout = 60 * time.Second
 )
 
 // PaymentInfo holds the fields extracted from a mobile banking screenshot.
@@ -25,8 +31,8 @@ type PaymentInfo struct {
 	TamperingDetected bool    `json:"tampering_detected"`
 }
 
-// ConfiguredProvider is the minimal receiver configuration Gemini needs to
-// analyze a payment screenshot accurately.
+// ConfiguredProvider is the minimal receiver configuration the analyzer needs
+// to validate screenshot recipients accurately.
 type ConfiguredProvider struct {
 	Key         string
 	Label       string
@@ -34,25 +40,106 @@ type ConfiguredProvider struct {
 	AccountName string
 }
 
-// Client communicates with the Gemini REST API.
+// Analyzer is the provider-neutral screenshot analysis contract used by the
+// payment flow.
+type Analyzer interface {
+	AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, providers []ConfiguredProvider) (*PaymentInfo, error)
+	Readiness(ctx context.Context) AnalyzerReadiness
+}
+
+type Provider interface {
+	Name() string
+	AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, providers []ConfiguredProvider) (*PaymentInfo, error)
+	Ping(ctx context.Context) error
+}
+
+type ErrorClass string
+
+const (
+	ErrorClassTimeout           ErrorClass = "timeout"
+	ErrorClassCanceled          ErrorClass = "canceled"
+	ErrorClassTransport         ErrorClass = "transport"
+	ErrorClassAuth              ErrorClass = "auth"
+	ErrorClassRateLimit         ErrorClass = "rate_limit"
+	ErrorClassServer            ErrorClass = "server"
+	ErrorClassMalformedResponse ErrorClass = "malformed_response"
+	ErrorClassClient            ErrorClass = "client"
+	ErrorClassUnknown           ErrorClass = "unknown"
+)
+
+type ProviderError struct {
+	Provider   string
+	Class      ErrorClass
+	Message    string
+	StatusCode int
+	Err        error
+}
+
+func (e *ProviderError) Error() string {
+	base := strings.TrimSpace(e.Message)
+	if base == "" && e.Err != nil {
+		base = e.Err.Error()
+	}
+	if base == "" {
+		base = "provider request failed"
+	}
+	if e.Provider == "" {
+		return base
+	}
+	return fmt.Sprintf("%s: %s", e.Provider, base)
+}
+
+func (e *ProviderError) Unwrap() error {
+	return e.Err
+}
+
+func (e *ProviderError) AllowsRetry() bool {
+	switch e.Class {
+	case ErrorClassTimeout, ErrorClassTransport, ErrorClassRateLimit, ErrorClassServer:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *ProviderError) AllowsFailover() bool {
+	switch e.Class {
+	case ErrorClassTimeout, ErrorClassTransport, ErrorClassAuth, ErrorClassRateLimit, ErrorClassServer, ErrorClassMalformedResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+type AnalyzerReadiness struct {
+	Status    string            `json:"status"`
+	Primary   string            `json:"primary"`
+	Fallback  string            `json:"fallback,omitempty"`
+	Providers map[string]string `json:"providers"`
+}
+
 type Client struct {
 	apiKey     string
 	model      string
 	httpClient *http.Client
 }
 
-// NewClient creates a Gemini REST client.
+// NewClient creates a Gemini REST provider client.
 func NewClient(apiKey, model string) *Client {
 	if model == "" {
-		model = "gemini-2.5-flash"
+		model = defaultGeminiModel
 	}
 	return &Client{
 		apiKey: apiKey,
 		model:  model,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: defaultRequestTimeout,
 		},
 	}
+}
+
+func (c *Client) Name() string {
+	return "gemini"
 }
 
 // Ping verifies the Gemini API key is valid by listing models.
@@ -67,17 +154,17 @@ func (c *Client) Ping(ctx context.Context) error {
 	pingClient := &http.Client{Timeout: 10 * time.Second}
 	resp, err := pingClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("gemini ping failed: %w", err)
+		return classifyProviderError(c.Name(), 0, err, "ping request failed")
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("gemini ping returned status %d", resp.StatusCode)
+		return classifyProviderError(c.Name(), resp.StatusCode, nil, fmt.Sprintf("ping returned status %d", resp.StatusCode))
 	}
 	return nil
 }
 
-// BuildAnalysisPrompt creates the Gemini analysis prompt with the current
+// BuildAnalysisPrompt creates the shared analysis prompt with the current
 // enabled mobile banking providers.
 func BuildAnalysisPrompt(providers []ConfiguredProvider) string {
 	providerLabels := make([]string, 0, len(providers))
@@ -129,7 +216,6 @@ Important:
 - Return ONLY the JSON object, nothing else`, providerSummary, receiverSection, strings.Join(providerKeys, ", "))
 }
 
-// geminiRequest matches the Gemini REST API request body.
 type geminiRequest struct {
 	Contents []geminiContent `json:"contents"`
 }
@@ -148,7 +234,6 @@ type inlineData struct {
 	Data     string `json:"data"`
 }
 
-// geminiResponse matches the relevant portion of the Gemini REST API response.
 type geminiResponse struct {
 	Candidates []struct {
 		Content struct {
@@ -167,8 +252,6 @@ type geminiResponse struct {
 func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte, mimeType string, providers []ConfiguredProvider) (*PaymentInfo, error) {
 	b64Image := base64.StdEncoding.EncodeToString(imageBytes)
 
-	prompt := BuildAnalysisPrompt(providers)
-
 	reqBody := geminiRequest{
 		Contents: []geminiContent{
 			{
@@ -180,7 +263,7 @@ func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte
 						},
 					},
 					{
-						Text: prompt,
+						Text: BuildAnalysisPrompt(providers),
 					},
 				},
 			},
@@ -189,64 +272,150 @@ func (c *Client) AnalyzePaymentScreenshot(ctx context.Context, imageBytes []byte
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, classifyProviderError(c.Name(), 0, err, "failed to marshal request")
 	}
 
-	url := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent",
-		c.model,
-	)
-
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", c.model)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, classifyProviderError(c.Name(), 0, err, "failed to create request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-goog-api-key", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("gemini API request failed: %w", err)
+		return nil, classifyProviderError(c.Name(), 0, err, "request failed")
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, classifyProviderError(c.Name(), 0, err, "failed to read response")
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("Gemini API error", "status", resp.StatusCode, "body", string(respBody))
-		return nil, fmt.Errorf("gemini API returned status %d: %s", resp.StatusCode, string(respBody))
+		return nil, classifyProviderError(c.Name(), resp.StatusCode, nil, providerErrorMessage(resp.StatusCode, respBody))
 	}
 
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
-		return nil, fmt.Errorf("failed to parse gemini response: %w", err)
+		return nil, classifyProviderError(c.Name(), http.StatusOK, err, "failed to parse response")
 	}
 
 	if geminiResp.Error != nil {
-		return nil, fmt.Errorf("gemini API error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+		return nil, classifyProviderError(c.Name(), geminiResp.Error.Code, nil, geminiResp.Error.Message)
 	}
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return nil, fmt.Errorf("gemini returned empty response")
+		return nil, classifyProviderError(c.Name(), http.StatusOK, nil, "empty response")
 	}
 
-	rawText := geminiResp.Candidates[0].Content.Parts[0].Text
-	rawText = strings.TrimSpace(rawText)
+	return parsePaymentInfo(c.Name(), geminiResp.Candidates[0].Content.Parts[0].Text)
+}
 
-	// Strip markdown code fences if present
-	rawText = strings.TrimPrefix(rawText, "```json")
-	rawText = strings.TrimPrefix(rawText, "```")
-	rawText = strings.TrimSuffix(rawText, "```")
-	rawText = strings.TrimSpace(rawText)
+func stripJSONFences(raw string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	return strings.TrimSpace(raw)
+}
+
+func parsePaymentInfo(providerName, rawText string) (*PaymentInfo, error) {
+	rawText = stripJSONFences(rawText)
 
 	var info PaymentInfo
 	if err := json.Unmarshal([]byte(rawText), &info); err != nil {
-		slog.Error("Failed to parse Gemini JSON output", "raw", rawText, "error", err)
-		return nil, fmt.Errorf("failed to parse payment info from Gemini: %w", err)
+		return nil, classifyProviderError(providerName, http.StatusOK, err, "failed to parse payment info JSON")
 	}
 
 	return &info, nil
+}
+
+func providerErrorMessage(statusCode int, respBody []byte) string {
+	type errorEnvelope struct {
+		Error *struct {
+			Code    any    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	var envelope errorEnvelope
+	if err := json.Unmarshal(respBody, &envelope); err == nil && envelope.Error != nil && strings.TrimSpace(envelope.Error.Message) != "" {
+		return envelope.Error.Message
+	}
+	return fmt.Sprintf("status %d", statusCode)
+}
+
+func classifyProviderError(provider string, statusCode int, err error, message string) error {
+	if providerErr := newProviderError(provider, statusCode, err, message); providerErr != nil {
+		return providerErr
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", provider, err)
+	}
+	return fmt.Errorf("%s: %s", provider, strings.TrimSpace(message))
+}
+
+func newProviderError(provider string, statusCode int, err error, message string) *ProviderError {
+	class := ErrorClassUnknown
+	switch {
+	case errors.Is(err, context.Canceled):
+		class = ErrorClassCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		class = ErrorClassTimeout
+	default:
+		var netErr net.Error
+		if errors.As(err, &netErr) {
+			if netErr.Timeout() {
+				class = ErrorClassTimeout
+			} else {
+				class = ErrorClassTransport
+			}
+		}
+	}
+
+	if class == ErrorClassUnknown {
+		switch {
+		case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+			class = ErrorClassAuth
+		case statusCode == http.StatusTooManyRequests || statusCode == http.StatusPaymentRequired:
+			class = ErrorClassRateLimit
+		case statusCode >= http.StatusInternalServerError:
+			class = ErrorClassServer
+		case statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError:
+			class = ErrorClassClient
+		case err != nil && strings.Contains(strings.ToLower(err.Error()), "parse"):
+			class = ErrorClassMalformedResponse
+		case strings.Contains(strings.ToLower(message), "parse"):
+			class = ErrorClassMalformedResponse
+		case strings.Contains(strings.ToLower(message), "empty response"):
+			class = ErrorClassMalformedResponse
+		}
+	}
+
+	if class == ErrorClassUnknown {
+		class = ErrorClassTransport
+	}
+
+	return &ProviderError{
+		Provider:   provider,
+		Class:      class,
+		Message:    strings.TrimSpace(message),
+		StatusCode: statusCode,
+		Err:        err,
+	}
+}
+
+func AsProviderError(err error) (*ProviderError, bool) {
+	if err == nil {
+		return nil, false
+	}
+
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) {
+		return providerErr, true
+	}
+	return nil, false
 }

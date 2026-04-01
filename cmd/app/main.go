@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -85,13 +86,33 @@ func main() {
 	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
 	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
 
-	// Mobile banking / Gemini
-	var geminiClient *gemini.Client
+	// Mobile banking / screenshot analyzer
+	var paymentAnalyzer gemini.Analyzer
 	var mobilePaymentRepo *database.MobilePaymentRepository
 	if config.IsMobileBankingEnabled() {
-		geminiClient = gemini.NewClient(config.GeminiAPIKey(), config.GeminiModel())
+		primaryProvider := gemini.NewClient(config.GeminiAPIKey(), config.GeminiModel())
+		var fallbackProvider gemini.Provider
+		if config.VisionProviderFallback() == "openrouter" {
+			if config.OpenRouterAPIKey() != "" {
+				fallbackProvider = gemini.NewOpenRouterClient(config.OpenRouterAPIKey(), config.OpenRouterModel())
+			} else {
+				slog.Warn("Vision fallback requested but OpenRouter API key is not configured", "fallback_provider", config.VisionProviderFallback())
+			}
+		}
+		paymentAnalyzer = gemini.NewAnalyzer(gemini.AnalyzerOptions{
+			Primary:       primaryProvider,
+			Fallback:      fallbackProvider,
+			RetryAttempts: config.VisionRetryAttempts(),
+			MaxAttempts:   config.VisionMaxAttempts(),
+		})
 		mobilePaymentRepo = database.NewMobilePaymentRepository(pool)
-		slog.Info("Mobile banking enabled", "phone", config.MobileBankingPhone())
+		slog.Info("Mobile banking enabled",
+			"phone", config.MobileBankingPhone(),
+			"vision_primary", primaryProvider.Name(),
+			"vision_fallback", config.VisionProviderFallback(),
+			"vision_retry_attempts", config.VisionRetryAttempts(),
+			"vision_max_attempts", config.VisionMaxAttempts(),
+		)
 	}
 
 	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
@@ -100,7 +121,7 @@ func main() {
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, geminiClient, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
 
 	// Initialize WalletService second (depends on PaymentService)
 	walletService := wallet.NewWalletService(paymentService, customerRepository, purchaseRepository, remnawaveClient, b, tm, subKeyRepo, walletTxRepo)
@@ -312,7 +333,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, geminiClient))
+	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
 
 	// Rate Limiter: 10 req/s, burst 20
@@ -424,17 +445,19 @@ func newCronContext(jobName string) context.Context {
 	return context.WithValue(ctx, requestIDKey{}, uuid.New().String())
 }
 
-func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, gc *gemini.Client) http.Handler {
+func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		status := map[string]string{
-			"status":    "ok",
-			"db":        "ok",
-			"rw":        "ok",
-			"gemini":    "ok",
-			"time":      time.Now().Format(time.RFC3339),
-			"version":   Version,
-			"commit":    Commit,
-			"buildDate": BuildDate,
+		status := map[string]any{
+			"status":           "ok",
+			"db":               "ok",
+			"rw":               "ok",
+			"gemini":           "ok",
+			"vision_analyzer":  "ok",
+			"vision_providers": map[string]string{},
+			"time":             time.Now().Format(time.RFC3339),
+			"version":          Version,
+			"commit":           Commit,
+			"buildDate":        BuildDate,
 		}
 
 		dbCtx, dbCancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -451,15 +474,27 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, gc *gemini.Clie
 			status["rw"] = "error: " + err.Error()
 		}
 
-		// Gemini health check (non-blocking — doesn't affect overall status)
-		if gc != nil {
+		// Analyzer health check is non-blocking and does not affect overall status.
+		if analyzer != nil {
 			gCtx, gCancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer gCancel()
-			if err := gc.Ping(gCtx); err != nil {
-				status["gemini"] = "error: " + err.Error()
+			readiness := analyzer.Readiness(gCtx)
+			status["vision_analyzer"] = readiness.Status
+			status["vision_providers"] = readiness.Providers
+			if geminiStatus, ok := readiness.Providers["gemini"]; ok {
+				status["gemini"] = geminiStatus
+			} else {
+				status["gemini"] = "disabled"
+			}
+			if readiness.Primary != "" {
+				status["vision_primary"] = readiness.Primary
+			}
+			if readiness.Fallback != "" {
+				status["vision_fallback"] = readiness.Fallback
 			}
 		} else {
 			status["gemini"] = "disabled"
+			status["vision_analyzer"] = "disabled"
 		}
 
 		// Set Content-Type before WriteHeader so it is actually sent.
@@ -469,8 +504,9 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, gc *gemini.Clie
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		fmt.Fprintf(w, `{"status":"%s","db":"%s","remnawave":"%s","gemini":"%s","time":"%s","version":"%s","commit":"%s","buildDate":"%s"}`,
-			status["status"], status["db"], status["rw"], status["gemini"], status["time"], Version, Commit, BuildDate)
+		status["remnawave"] = status["rw"]
+		delete(status, "rw")
+		_ = json.NewEncoder(w).Encode(status)
 	})
 }
 
