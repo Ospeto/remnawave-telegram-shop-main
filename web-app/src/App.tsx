@@ -14,6 +14,7 @@ function App() {
                     <Route path="/" element={<Home />} />
                     <Route path="/plans" element={<Plans />} />
                     <Route path="/wallet" element={<Wallet />} />
+                    <Route path="/checkout" element={<Checkout />} />
                     <Route path="/checkout/:planIndex" element={<Checkout />} />
                 </Routes>
             </MemoryRouter>

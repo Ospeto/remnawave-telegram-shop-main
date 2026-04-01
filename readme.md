@@ -145,7 +145,7 @@ Practical notes for operators:
 
 ### Backup And Restore Configuration
 
-Bot-managed DB backup/restore uses PostgreSQL client tools inside the bot container and stores local backup artifacts in the `/backups` volume.
+Bot-managed DB backup uses PostgreSQL client tools inside the bot container and stores local backup artifacts in the `/backups` volume. Live restore execution through the running bot is disabled for safety and must be performed offline/manual while the app is stopped.
 
 Recommended backup-related variables:
 
@@ -158,7 +158,7 @@ Recommended backup-related variables:
 | `BACKUP_RETENTION_DAYS` | Retention window for local backup files |
 | `BACKUP_MAX_LOCAL_FILES` | Max number of local backups to keep |
 | `BACKUP_SEND_TO_TELEGRAM` | Send successful backups to `ADMIN_TELEGRAM_ID` |
-| `BACKUP_RESTORE_ENABLED` | Enable restore commands |
+| `BACKUP_RESTORE_ENABLED` | Controls restore-related settings and offline recovery workflows; live restore execution remains disabled in the running bot |
 | `BACKUP_CONFIRM_TTL_MINUTES` | Confirmation-token lifetime for restore |
 | `BACKUP_JOB_TIMEOUT_SECONDS` | Timeout for dump/compress/send jobs |
 | `BACKUP_RESTORE_TIMEOUT_SECONDS` | Timeout for restore jobs |
@@ -172,10 +172,8 @@ The backup/restore feature is operated from the admin Telegram account:
 - `/backup list`: List local backup artifacts available for restore.
 - `/backup enable` / `/backup disable`: Turn scheduled backups on or off.
 - `/backup schedule` or `/backup schedule HH:MM`: Show or update the daily schedule.
-- `/restore list`: Show local backup files that can be restored.
-- `/restore latest` or `/restore file <name>`: Start guarded restore flow.
-- `/restore confirm <token>`: Confirm destructive restore action.
-- `/restore cancel`: Cancel a pending restore request.
+- `/restore list`: Show local backup files available for offline/manual restore.
+- `/restore latest`, `/restore file <name>`, `/restore confirm <token>`, `/restore cancel`: Disabled in the live runtime; stop the app and use an offline/manual restore workflow instead.
 
 ## Backup & Restore
 
@@ -184,7 +182,7 @@ The `setup.sh` script includes built-in tools for migration:
 -   **Backup**: `./setup.sh` -> Option 9. Creates a tarball of DB, Config, and Certs.
 -   **Restore**: `./setup.sh` -> Option 10. Restores a system from a backup tarball.
 
-For bot-managed operations, the runtime now includes PostgreSQL client tooling and the compose stack mounts a persistent `bot_backups` volume at `/backups`. The bot backup feature is DB-only; full-system backup of certs, translations, and `.env` remains a `setup.sh` workflow.
+For bot-managed operations, the runtime now includes PostgreSQL client tooling and the compose stack mounts a persistent `bot_backups` volume at `/backups`. The bot backup feature is DB-only; full-system backup of certs, translations, and `.env` remains a `setup.sh` workflow. Restores must be performed offline/manual while the app is stopped.
 
 ## Troubleshooting
 

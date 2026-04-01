@@ -185,14 +185,14 @@ func (s *Service) RunScheduledBackupIfDue(ctx context.Context, tg TelegramClient
 	if lastRunDate == todayKey {
 		return nil
 	}
-	if err := s.setValue(ctx, keyBackupLastScheduledDate, todayKey); err != nil {
-		slog.Warn("backup: failed to persist scheduled date", "error", err)
-	}
 
 	result, backupErr := s.CreateBackup(ctx, "scheduled")
 	if backupErr != nil {
 		s.notifyFailure(ctx, tg, chatID, "Scheduled backup failed", backupErr)
 		return backupErr
+	}
+	if err := s.setValue(ctx, keyBackupLastScheduledDate, todayKey); err != nil {
+		slog.Warn("backup: failed to persist scheduled date", "error", err)
 	}
 
 	if settings.SendToTelegram {

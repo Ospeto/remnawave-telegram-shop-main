@@ -20,6 +20,7 @@ import (
 	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/jackc/pgx/v4"
 )
 
 // testTransactionID is the magic bypass transaction ID used only in test mode.
@@ -37,6 +38,54 @@ var UsernameCtxKey = ctxKey{}
 type syncCacheEntry struct {
 	keys      []KeyStats
 	expiresAt time.Time
+}
+
+type walletTopUpTx interface {
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+}
+
+type walletTopUpStore interface {
+	BeginTx(ctx context.Context) (walletTopUpTx, error)
+	AddBalance(ctx context.Context, tx walletTopUpTx, customerID int64, amount float64) error
+	LogTopUp(ctx context.Context, tx walletTopUpTx, purchaseID int64, customerID int64, amount float64) error
+}
+
+type repositoryWalletTopUpStore struct {
+	customerRepo *database.CustomerRepository
+	walletTxRepo *database.WalletTransactionRepository
+}
+
+func (s repositoryWalletTopUpStore) BeginTx(ctx context.Context) (walletTopUpTx, error) {
+	return s.customerRepo.BeginTx(ctx)
+}
+
+func (s repositoryWalletTopUpStore) AddBalance(ctx context.Context, tx walletTopUpTx, customerID int64, amount float64) error {
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet top-up transaction has unexpected type %T", tx)
+	}
+	return s.customerRepo.AddBalanceTx(ctx, pgxTx, customerID, amount)
+}
+
+func (s repositoryWalletTopUpStore) LogTopUp(ctx context.Context, tx walletTopUpTx, purchaseID int64, customerID int64, amount float64) error {
+	if s.walletTxRepo == nil {
+		return nil
+	}
+
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet top-up transaction has unexpected type %T", tx)
+	}
+
+	_, err := s.walletTxRepo.CreateTx(ctx, pgxTx, &database.WalletTransaction{
+		CustomerID:  customerID,
+		Amount:      amount,
+		Type:        database.WalletTransactionTypeTopup,
+		PurchaseID:  &purchaseID,
+		Description: "Wallet Top-up",
+	})
+	return err
 }
 
 type PaymentService struct {
@@ -126,6 +175,42 @@ func (s *PaymentService) GetTestTransactionID() string {
 }
 
 const syncCacheTTL = 2 * time.Minute
+
+func settleWalletTopUp(
+	ctx context.Context,
+	store walletTopUpStore,
+	purchaseID int64,
+	customerID int64,
+	amount float64,
+	originalStatus database.PurchaseStatus,
+	restore func(context.Context, int64, database.PurchaseStatus),
+) error {
+	dbTx, err := store.BeginTx(ctx)
+	if err != nil {
+		restore(ctx, purchaseID, originalStatus)
+		return fmt.Errorf("failed to begin wallet top-up transaction: %w", err)
+	}
+	defer func() {
+		_ = dbTx.Rollback(ctx)
+	}()
+
+	if err := store.AddBalance(ctx, dbTx, customerID, amount); err != nil {
+		restore(ctx, purchaseID, originalStatus)
+		return err
+	}
+
+	if err := store.LogTopUp(ctx, dbTx, purchaseID, customerID, amount); err != nil {
+		restore(ctx, purchaseID, originalStatus)
+		return err
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		restore(ctx, purchaseID, originalStatus)
+		return fmt.Errorf("failed to commit wallet top-up: %w", err)
+	}
+
+	return nil
+}
 
 // SyncKeys fetches fresh key stats from Remnawave and syncs local DB.
 // Results are cached for syncCacheTTL to avoid hammering the external API
@@ -471,38 +556,17 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 
 	if purchase.InvoiceType == database.InvoiceTypeWalletTopUp {
 		// WALLET TOP-UP — balance credit and transaction log must be atomic.
-		dbTx, err := s.customerRepository.BeginTx(ctx)
-		if err != nil {
-			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
-			return fmt.Errorf("failed to begin wallet top-up transaction: %w", err)
-		}
-		defer func() {
-			_ = dbTx.Rollback(ctx)
-		}()
-
-		if err := s.customerRepository.AddBalanceTx(ctx, dbTx, customer.ID, purchase.Amount); err != nil {
-			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+		if err := settleWalletTopUp(
+			ctx,
+			repositoryWalletTopUpStore{customerRepo: s.customerRepository, walletTxRepo: s.walletTxRepo},
+			purchase.ID,
+			customer.ID,
+			purchase.Amount,
+			originalStatus,
+			s.restorePurchaseState,
+		); err != nil {
 			slog.Error("CRITICAL: Failed to add balance for wallet top-up", "purchase_id", purchaseId, "error", err)
 			return err
-		}
-
-		if s.walletTxRepo != nil {
-			if _, err := s.walletTxRepo.CreateTx(ctx, dbTx, &database.WalletTransaction{
-				CustomerID:  customer.ID,
-				Amount:      purchase.Amount,
-				Type:        database.WalletTransactionTypeTopup,
-				PurchaseID:  &purchaseId,
-				Description: "Wallet Top-up",
-			}); err != nil {
-				s.restorePurchaseState(ctx, purchase.ID, originalStatus)
-				slog.Error("CRITICAL: Failed to log wallet top-up transaction", "purchase_id", purchaseId, "error", err)
-				return err
-			}
-		}
-
-		if err := dbTx.Commit(ctx); err != nil {
-			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
-			return fmt.Errorf("failed to commit wallet top-up: %w", err)
 		}
 		slog.Info("Wallet top-up successful", "purchase_id", purchaseId, "amount", purchase.Amount, "customer_id", customer.ID)
 	} else if purchase.ExtendKeyID != nil {

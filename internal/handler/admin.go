@@ -22,6 +22,8 @@ func SetBackupService(service *backup.Service) {
 	backupService = service
 }
 
+const runtimeRestoreGuidance = "⚠️ Runtime restore is disabled in the live bot process.\nUse /restore list to identify a backup, then stop the app and run the restore offline/manual from the backup volume."
+
 // adminOnly is a helper that sends an unauthorized message and returns false if not admin.
 func (h Handler) adminOnly(ctx context.Context, b *bot.Bot, update *models.Update) bool {
 	if update.Message.From.ID != config.GetAdminTelegramId() {
@@ -65,11 +67,11 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 /backup enable — Enable scheduled backups
 /backup disable — Disable scheduled backups
 /backup schedule [HH:MM] — Show or set daily backup time
-/restore list — Show restorable backup files
-/restore latest — Prepare restore using latest local backup
-/restore file &lt;name&gt; — Prepare restore using a named local backup
-/restore confirm &lt;token&gt; — Confirm pending restore
-/restore cancel — Cancel pending restore
+/restore list — Show local backup files for offline/manual restore
+/restore latest — Disabled in live runtime; use offline/manual restore
+/restore file &lt;name&gt; — Disabled in live runtime; use offline/manual restore
+/restore confirm &lt;token&gt; — Disabled in live runtime; use offline/manual restore
+/restore cancel — Disabled in live runtime; use offline/manual restore
 
 <b>Promo Codes</b>
 /addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
@@ -798,7 +800,7 @@ func (h Handler) RestoreCommandHandler(ctx context.Context, b *bot.Bot, update *
 	if len(args) < 2 {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   "Usage: /restore list|latest|file <name>|confirm <token>|cancel",
+			Text:   "Usage: /restore list\n\n" + runtimeRestoreGuidance,
 		})
 		return
 	}
@@ -821,7 +823,8 @@ func (h Handler) RestoreCommandHandler(ctx context.Context, b *bot.Bot, update *
 			return
 		}
 		var sb strings.Builder
-		sb.WriteString("♻️ <b>Restorable Backups</b>\n\n")
+		sb.WriteString("♻️ <b>Local Backups</b>\n")
+		sb.WriteString("<i>Runtime restore is disabled; use these files for offline/manual restore.</i>\n\n")
 		for i, file := range backups {
 			if i == 10 {
 				break
@@ -834,68 +837,17 @@ func (h Handler) RestoreCommandHandler(ctx context.Context, b *bot.Bot, update *
 			ParseMode: models.ParseModeHTML,
 		})
 	case "latest":
-		pending, err := backupService.PrepareRestoreLatest(ctx)
-		if err != nil {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   fmt.Sprintf("❌ Restore preparation failed: %v", err),
-			})
-			return
-		}
-		h.sendRestoreConfirmation(ctx, b, update, pending)
+		h.sendRestoreRuntimeDisabled(ctx, b, update)
 	case "file":
-		if len(args) < 3 {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "Usage: /restore file <name>",
-			})
-			return
-		}
-		fileName := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/restore file"))
-		pending, err := backupService.PrepareRestoreFile(ctx, strings.TrimSpace(fileName))
-		if err != nil {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   fmt.Sprintf("❌ Restore preparation failed: %v", err),
-			})
-			return
-		}
-		h.sendRestoreConfirmation(ctx, b, update, pending)
+		h.sendRestoreRuntimeDisabled(ctx, b, update)
 	case "confirm":
-		if len(args) != 3 {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "Usage: /restore confirm <token>",
-			})
-			return
-		}
-		result, err := backupService.ConfirmRestore(ctx, args[2])
-		if err != nil {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   fmt.Sprintf("❌ Restore failed: %v", err),
-			})
-			return
-		}
-		text := fmt.Sprintf("✅ Restore complete.\nSource: <code>%s</code>", html.EscapeString(result.Target.Name))
-		if result.SafetyBackup != nil {
-			text += fmt.Sprintf("\nSafety backup: <code>%s</code>", html.EscapeString(result.SafetyBackup.Name))
-		}
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    update.Message.Chat.ID,
-			Text:      text,
-			ParseMode: models.ParseModeHTML,
-		})
+		h.sendRestoreRuntimeDisabled(ctx, b, update)
 	case "cancel":
-		backupService.CancelPendingRestore()
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "✅ Pending restore cancelled.",
-		})
+		h.sendRestoreRuntimeDisabled(ctx, b, update)
 	default:
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   "Usage: /restore list|latest|file <name>|confirm <token>|cancel",
+			Text:   "Usage: /restore list\n\n" + runtimeRestoreGuidance,
 		})
 	}
 }
@@ -918,20 +870,15 @@ func (h Handler) sendBackupStatus(ctx context.Context, b *bot.Bot, update *model
 	if status.SendToTelegram {
 		sendText = "enabled"
 	}
-	restoreText := "disabled"
-	if status.RestoreEnabled {
-		restoreText = "enabled"
-	}
 	lastSuccess := "<i>never</i>"
 	if status.LastSuccessAt != nil {
 		lastSuccess = status.LastSuccessAt.Format("2006-01-02 15:04")
 	}
 
 	text := fmt.Sprintf(
-		"💾 <b>Backup Status</b>\n\nEnabled: <b>%s</b>\nTelegram delivery: <b>%s</b>\nRestore: <b>%s</b>\nSchedule: <code>%s</code> (%s)\nNext run: %s\nLast success: %s\nLast file: <code>%s</code>\nBackups on disk: %d",
+		"💾 <b>Backup Status</b>\n\nEnabled: <b>%s</b>\nTelegram delivery: <b>%s</b>\nRestore workflow: <b>offline/manual only</b>\nSchedule: <code>%s</code> (%s)\nNext run: %s\nLast success: %s\nLast file: <code>%s</code>\nBackups on disk: %d",
 		enabledText,
 		sendText,
-		restoreText,
 		status.ScheduleTime,
 		html.EscapeString(status.Timezone),
 		status.NextRunAt.Format("2006-01-02 15:04"),
@@ -949,6 +896,13 @@ func (h Handler) sendBackupStatus(ctx context.Context, b *bot.Bot, update *model
 		ChatID:    update.Message.Chat.ID,
 		Text:      text,
 		ParseMode: models.ParseModeHTML,
+	})
+}
+
+func (h Handler) sendRestoreRuntimeDisabled(ctx context.Context, b *bot.Bot, update *models.Update) {
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   runtimeRestoreGuidance,
 	})
 }
 

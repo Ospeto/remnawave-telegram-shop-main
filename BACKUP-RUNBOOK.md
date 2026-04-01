@@ -1,6 +1,6 @@
 # Bot Backup Runbook
 
-This deployment supports bot-managed PostgreSQL backup and restore operations.
+This deployment supports bot-managed PostgreSQL backup operations. Live restore execution through the running bot is disabled for safety.
 
 ## Runtime Requirements
 
@@ -24,7 +24,7 @@ BACKUP_DIR=/backups
 BACKUP_RETENTION_DAYS=7
 BACKUP_MAX_LOCAL_FILES=7
 BACKUP_SEND_TO_TELEGRAM=true
-BACKUP_RESTORE_ENABLED=true
+BACKUP_RESTORE_ENABLED=false
 BACKUP_CONFIRM_TTL_MINUTES=10
 BACKUP_JOB_TIMEOUT_SECONDS=900
 BACKUP_RESTORE_TIMEOUT_SECONDS=1800
@@ -40,16 +40,13 @@ BACKUP_RESTORE_TIMEOUT_SECONDS=1800
 - `/backup schedule`
 - `/backup schedule HH:MM`
 - `/restore list`
-- `/restore latest`
-- `/restore file <name>`
-- `/restore confirm <token>`
-- `/restore cancel`
+- `/restore latest`, `/restore file <name>`, `/restore confirm <token>`, `/restore cancel` return guidance to use an offline/manual restore workflow while the app is stopped.
 
 ## Operational Notes
 
 - Backup artifacts are DB-only and stored in `/backups`.
 - Telegram delivery is convenience distribution, not the only retention layer.
-- Restore should be treated as destructive even with pre-restore safety backup.
+- Restore should be treated as destructive even with pre-restore safety backup and must be performed offline/manual while the app is stopped.
 - If Telegram upload fails, verify whether the backup file still exists locally and inspect bot logs.
 
 ## Quick Checks

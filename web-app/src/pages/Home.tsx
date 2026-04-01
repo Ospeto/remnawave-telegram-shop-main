@@ -34,6 +34,7 @@ export function Home() {
         const currentAuthHeaders = { 'Authorization': `twa ${initData}` };
 
         setLoading(true);
+        setError(null);
         fetcher('/api/me', currentAuthHeaders)
             .then(setData)
             .catch(err => setError(`${err.name}: ${err.message}`))
