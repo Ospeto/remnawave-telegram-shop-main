@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
 	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -29,13 +31,37 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 )
 
+type keyRepository interface {
+	FindExpiringAutoRenewKeys(ctx context.Context, before time.Time) ([]database.SubscriptionKey, error)
+	MarkKeyAutoRenewed(ctx context.Context, keyID int64) error
+	MarkKeyAutoRenewNotified(ctx context.Context, keyID int64) error
+}
+
+type customerRepository interface {
+	FindById(ctx context.Context, id int64) (*database.Customer, error)
+}
+
+type walletExtender interface {
+	ExtendKeyWithBalance(ctx context.Context, keyID int64, customerID int64, planPrice float64, days int, trafficGB int) error
+}
+
+type textProvider interface {
+	GetText(langCode, key string) string
+}
+
+type telegramClient interface {
+	SendMessage(ctx context.Context, params *bot.SendMessageParams) (*models.Message, error)
+}
+
 // Job encapsulates the scheduled per-key auto-renew process.
 type Job struct {
-	subKeyRepo    *database.SubscriptionKeyRepository
-	customerRepo  *database.CustomerRepository
-	walletService *wallet.WalletService
-	tm            *translation.Manager
-	telegramBot   *bot.Bot
+	subKeyRepo    keyRepository
+	customerRepo  customerRepository
+	walletService walletExtender
+	tm            textProvider
+	telegramBot   telegramClient
+	nowFn         func() time.Time
+	selectPlanFn  func(database.SubscriptionKey, float64) (*config.Plan, bool)
 }
 
 // New creates a new AutoRenew Job.
@@ -52,6 +78,8 @@ func New(
 		walletService: walletService,
 		tm:            tm,
 		telegramBot:   b,
+		nowFn:         time.Now,
+		selectPlanFn:  findAffordablePlan,
 	}
 }
 
@@ -60,7 +88,7 @@ func New(
 func (j *Job) Run(ctx context.Context) {
 	slog.Info("Auto-renew: per-key cron job started")
 
-	threeDaysFromNow := time.Now().Add(3 * 24 * time.Hour)
+	threeDaysFromNow := j.nowFn().Add(3 * 24 * time.Hour)
 	keys, err := j.subKeyRepo.FindExpiringAutoRenewKeys(ctx, threeDaysFromNow)
 	if err != nil {
 		slog.Error("Auto-renew: error finding expiring keys", "error", err)
@@ -101,7 +129,7 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 	// findAffordablePlan prefers the most expensive plan the user can afford
 	// (best value), falling back to cheaper options of the same traffic type.
 	// Returns nil if no plan at all is affordable.
-	plan, isFallback := findAffordablePlan(key, customer.Balance)
+	plan, isFallback := j.selectPlanFn(key, customer.Balance)
 	if plan == nil {
 		log.Warn("Auto-renew: insufficient balance for any plan",
 			"balance", customer.Balance, "key_traffic_gb", key.TrafficLimitGB)
@@ -133,7 +161,7 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 	if isFallback {
 		msg := fmt.Sprintf(
 			j.tm.GetText(customer.Language, "auto_renew_fallback_detail"),
-			plan.Label, plan.Days, plan.Price,
+			plan.Days, plan.Price,
 		)
 		j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
 	} else {
@@ -150,7 +178,7 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, plan *config.Plan) {
 	log := slog.With("key_id", key.ID, "customer_id", customer.ID)
 
-	if key.AutoRenewNotifiedAt != nil && time.Since(*key.AutoRenewNotifiedAt) < 24*time.Hour {
+	if key.AutoRenewNotifiedAt != nil && j.nowFn().Sub(*key.AutoRenewNotifiedAt) < 24*time.Hour {
 		log.Info("Auto-renew: low-balance notification recently sent — suppressing")
 		return
 	}
@@ -158,12 +186,18 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 	var neededPrice int
 	if plan != nil {
 		neededPrice = plan.Price
+	} else {
+		neededPrice = minimumPlanPriceForKey(*key)
+	}
+	shortfall := 0
+	if deficit := float64(neededPrice) - customer.Balance; deficit > 0 {
+		shortfall = int(math.Ceil(deficit))
 	}
 	log.Info("Auto-renew: insufficient funds — notifying", "balance", customer.Balance, "needed", neededPrice)
 
 	msg := fmt.Sprintf(
 		j.tm.GetText(customer.Language, "auto_renew_insufficient_balance_detail"),
-		neededPrice, customer.Balance,
+		shortfall,
 	)
 	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
 
@@ -233,8 +267,40 @@ func findAffordablePlan(key database.SubscriptionKey, balance float64) (plan *co
 	return nil, false
 }
 
+func minimumPlanPriceForKey(key database.SubscriptionKey) int {
+	allPlans := config.Plans()
+	if len(allPlans) == 0 {
+		return config.LowestPlanPrice()
+	}
+
+	isUnlimited := key.TrafficLimitGB == 0
+	minPrice := 0
+	found := false
+
+	for _, plan := range allPlans {
+		if isUnlimited && plan.TrafficLimitGB != 0 {
+			continue
+		}
+		if !isUnlimited && plan.TrafficLimitGB == 0 {
+			continue
+		}
+		if !found || plan.Price < minPrice {
+			minPrice = plan.Price
+			found = true
+		}
+	}
+
+	if found {
+		return minPrice
+	}
+	return config.LowestPlanPrice()
+}
+
 // sendMessage is a best-effort Telegram notification helper.
 func (j *Job) sendMessage(ctx context.Context, chatID int64, _ string, text string) {
+	if j.telegramBot == nil {
+		return
+	}
 	if _, err := j.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,

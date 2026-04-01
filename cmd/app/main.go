@@ -26,6 +26,7 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -51,7 +52,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 
 	config.InitConfig()
@@ -438,6 +439,10 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Health server shutdown error", "error", err)
 	}
+}
+
+func shutdownSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
 // newCronContext creates a background context with a unique request ID for

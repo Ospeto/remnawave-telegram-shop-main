@@ -1,8 +1,12 @@
 package payment
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"remnawave-tg-shop-bot/internal/database"
 )
 
 func TestNormalizePhone(t *testing.T) {
@@ -211,5 +215,127 @@ func TestSyncCacheEntry_TTL(t *testing.T) {
 	}
 	if time.Now().Before(expired.expiresAt) {
 		t.Error("stale entry should be expired")
+	}
+}
+
+type fakeWalletTopUpTx struct {
+	commitErr error
+	committed bool
+	rollbacks int
+}
+
+func (f *fakeWalletTopUpTx) Commit(_ context.Context) error {
+	if f.commitErr != nil {
+		return f.commitErr
+	}
+	f.committed = true
+	return nil
+}
+
+func (f *fakeWalletTopUpTx) Rollback(_ context.Context) error {
+	f.rollbacks++
+	return nil
+}
+
+type fakeWalletTopUpStore struct {
+	tx             *fakeWalletTopUpTx
+	beginErr       error
+	addErr         error
+	logErr         error
+	addCalls       int
+	logCalls       int
+	lastCustomerID int64
+	lastPurchaseID int64
+	lastAmount     float64
+}
+
+func (f *fakeWalletTopUpStore) BeginTx(_ context.Context) (walletTopUpTx, error) {
+	if f.beginErr != nil {
+		return nil, f.beginErr
+	}
+	return f.tx, nil
+}
+
+func (f *fakeWalletTopUpStore) AddBalance(_ context.Context, _ walletTopUpTx, customerID int64, amount float64) error {
+	f.addCalls++
+	f.lastCustomerID = customerID
+	f.lastAmount = amount
+	return f.addErr
+}
+
+func (f *fakeWalletTopUpStore) LogTopUp(_ context.Context, _ walletTopUpTx, purchaseID int64, customerID int64, amount float64) error {
+	f.logCalls++
+	f.lastPurchaseID = purchaseID
+	f.lastCustomerID = customerID
+	f.lastAmount = amount
+	return f.logErr
+}
+
+func TestSettleWalletTopUpSuccess(t *testing.T) {
+	tx := &fakeWalletTopUpTx{}
+	store := &fakeWalletTopUpStore{tx: tx}
+	var restored []int64
+
+	err := settleWalletTopUp(
+		context.Background(),
+		store,
+		11,
+		22,
+		5000,
+		database.PurchaseStatusPending,
+		func(_ context.Context, purchaseID int64, _ database.PurchaseStatus) {
+			restored = append(restored, purchaseID)
+		},
+	)
+	if err != nil {
+		t.Fatalf("settleWalletTopUp() error = %v", err)
+	}
+	if !tx.committed {
+		t.Fatal("expected transaction to commit on success")
+	}
+	if store.addCalls != 1 {
+		t.Fatalf("AddBalance() calls = %d, want 1", store.addCalls)
+	}
+	if store.logCalls != 1 {
+		t.Fatalf("LogTopUp() calls = %d, want 1", store.logCalls)
+	}
+	if len(restored) != 0 {
+		t.Fatalf("restore should not be called on success, got %v", restored)
+	}
+}
+
+func TestSettleWalletTopUpRestoresStateWhenLoggingFails(t *testing.T) {
+	tx := &fakeWalletTopUpTx{}
+	store := &fakeWalletTopUpStore{
+		tx:     tx,
+		logErr: errors.New("log failed"),
+	}
+	var restored []int64
+
+	err := settleWalletTopUp(
+		context.Background(),
+		store,
+		33,
+		44,
+		9000,
+		database.PurchaseStatusNew,
+		func(_ context.Context, purchaseID int64, _ database.PurchaseStatus) {
+			restored = append(restored, purchaseID)
+		},
+	)
+	if err == nil {
+		t.Fatal("settleWalletTopUp() expected error")
+	}
+	if tx.committed {
+		t.Fatal("transaction must not commit when logging fails")
+	}
+	if store.addCalls != 1 {
+		t.Fatalf("AddBalance() calls = %d, want 1", store.addCalls)
+	}
+	if store.logCalls != 1 {
+		t.Fatalf("LogTopUp() calls = %d, want 1", store.logCalls)
+	}
+	if len(restored) != 1 || restored[0] != 33 {
+		t.Fatalf("restore calls = %v, want [33]", restored)
 	}
 }

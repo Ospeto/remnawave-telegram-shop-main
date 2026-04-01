@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - codex/**
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web-app/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web-app
+        run: npm ci
+
+      - name: Go test
+        run: go test ./...
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Go build
+        run: go build ./cmd/app
+
+      - name: Frontend test
+        working-directory: web-app
+        run: npm test
+
+      - name: Frontend build
+        working-directory: web-app
+        run: npm run build
