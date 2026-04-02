@@ -63,3 +63,19 @@ func TestInvoiceTypeConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestPurchaseStatusConstants(t *testing.T) {
+	wantValues := map[database.PurchaseStatus]string{
+		database.PurchaseStatusNew:        "new",
+		database.PurchaseStatusPending:    "pending",
+		database.PurchaseStatusProcessing: "processing",
+		database.PurchaseStatusPaid:       "paid",
+		database.PurchaseStatusCancel:     "cancel",
+	}
+
+	for constant, want := range wantValues {
+		if string(constant) != want {
+			t.Errorf("PurchaseStatus constant mismatch: got %q, want %q", string(constant), want)
+		}
+	}
+}

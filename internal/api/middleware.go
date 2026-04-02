@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -130,5 +131,8 @@ func firstForwardedIP(xff string) string {
 }
 
 func isTrustedProxyIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate()
+	if ip.IsLoopback() {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TRUST_PRIVATE_PROXY_HEADERS")), "true") && ip.IsPrivate()
 }

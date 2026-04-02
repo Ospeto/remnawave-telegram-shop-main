@@ -138,9 +138,9 @@ func main() {
 			cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 		)
 		_, err = cryptoInvoiceCron.AddFunc("*/5 * * * * *", func() {
-			cronCtx, cronCancel := newCronContext(ctx, "invoice_checker", 4*time.Second)
-			defer cronCancel()
-			invoiceJob.Run(cronCtx)
+			runCronJob(ctx, "invoice_checker", 4*time.Second, func(cronCtx context.Context) {
+				invoiceJob.Run(cronCtx)
+			})
 		})
 		if err != nil {
 			panic(err)
@@ -160,9 +160,9 @@ func main() {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
 	_, err = autoRenewCron.AddFunc("0 9 * * *", func() {
-		cronCtx, cronCancel := newCronContext(ctx, "auto_renew", 2*time.Minute)
-		defer cronCancel()
-		autoRenewJob.Run(cronCtx)
+		runCronJob(ctx, "auto_renew", 2*time.Minute, func(cronCtx context.Context) {
+			autoRenewJob.Run(cronCtx)
+		})
 	})
 	if err != nil {
 		panic(err)
@@ -357,14 +357,18 @@ func main() {
 	limiter := api.NewRateLimiter(10, 20)
 
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.GetHealthCheckPort()),
-		Handler: limiter.Middleware(mux),
+		Addr:              fmt.Sprintf(":%d", config.GetHealthCheckPort()),
+		Handler:           limiter.Middleware(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
 		slog.Info("HTTP server listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server error", "error", err)
-			os.Exit(1)
+			cancel()
 		}
 	}()
 
@@ -375,53 +379,52 @@ func main() {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
 	c.AddFunc("0 0 * * *", func() {
-		cronCtx, cronCancel := newCronContext(ctx, "daily_revenue_report", 30*time.Second)
-		defer cronCancel()
-
-		rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
-		if err != nil {
-			slog.Error("Daily revenue report failed", "error", err)
-			return
-		}
-
-		adminID := config.GetAdminTelegramId()
-		yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
-		var totalRevenue float64
-		var totalTxns int
-		var lines []string
-
-		for _, r := range rows {
-			if r.Day != yesterday {
-				continue
+		runCronJob(ctx, "daily_revenue_report", 30*time.Second, func(cronCtx context.Context) {
+			rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
+			if err != nil {
+				slog.Error("Daily revenue report failed", "error", err)
+				return
 			}
-			method := r.PaymentMethod
-			if method == "" {
-				method = "unknown"
-			}
-			currency := r.Currency
-			if currency == "" {
-				currency = "MMK"
-			}
-			lines = append(lines, fmt.Sprintf("  %s: %.0f %s (%d txns, %d users)",
-				method, r.TotalRevenue, currency, r.TotalPurchases, r.UniqueCustomers))
-			totalRevenue += r.TotalRevenue
-			totalTxns += r.TotalPurchases
-		}
 
-		var text string
-		if len(lines) == 0 {
-			text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n%s: No sales yesterday.", yesterday)
-		} else {
-			text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n<b>%s</b>\n%s\n\n<b>Total: %.0f MMK (%d txns)</b>",
-				yesterday, strings.Join(lines, "\n"), totalRevenue, totalTxns)
-		}
+			adminID := config.GetAdminTelegramId()
+			yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
+			var totalRevenue float64
+			var totalTxns int
+			var lines []string
 
-		b.SendMessage(cronCtx, &bot.SendMessageParams{
-			ChatID:    adminID,
-			Text:      text,
-			ParseMode: models.ParseModeHTML,
+			for _, r := range rows {
+				if r.Day != yesterday {
+					continue
+				}
+				method := r.PaymentMethod
+				if method == "" {
+					method = "unknown"
+				}
+				currency := r.Currency
+				if currency == "" {
+					currency = "MMK"
+				}
+				lines = append(lines, fmt.Sprintf("  %s: %.0f %s (%d txns, %d users)",
+					method, r.TotalRevenue, currency, r.TotalPurchases, r.UniqueCustomers))
+				totalRevenue += r.TotalRevenue
+				totalTxns += r.TotalPurchases
+			}
+
+			var text string
+			if len(lines) == 0 {
+				text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n%s: No sales yesterday.", yesterday)
+			} else {
+				text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n<b>%s</b>\n%s\n\n<b>Total: %.0f MMK (%d txns)</b>",
+					yesterday, strings.Join(lines, "\n"), totalRevenue, totalTxns)
+			}
+
+			b.SendMessage(cronCtx, &bot.SendMessageParams{
+				ChatID:    adminID,
+				Text:      text,
+				ParseMode: models.ParseModeHTML,
+			})
+			slog.Info("Daily revenue report sent", "total", totalRevenue, "txns", totalTxns)
 		})
-		slog.Info("Daily revenue report sent", "total", totalRevenue, "txns", totalTxns)
 	})
 	c.Start()
 	defer c.Stop()
@@ -435,11 +438,11 @@ func main() {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
 	_, err = backupCron.AddFunc("* * * * *", func() {
-		cronCtx, cronCancel := newCronContext(ctx, "backup_scheduler", time.Duration(config.BackupJobTimeoutSeconds())*time.Second)
-		defer cronCancel()
-		if err := backupService.RunScheduledBackupIfDue(cronCtx, b, config.GetAdminTelegramId()); err != nil {
-			slog.Error("Scheduled backup job failed", "error", err)
-		}
+		runCronJob(ctx, "backup_scheduler", time.Duration(config.BackupJobTimeoutSeconds())*time.Second, func(cronCtx context.Context) {
+			if err := backupService.RunScheduledBackupIfDue(cronCtx, b, config.GetAdminTelegramId()); err != nil {
+				slog.Error("Scheduled backup job failed", "error", err)
+			}
+		})
 	})
 	if err != nil {
 		panic(err)
@@ -470,6 +473,19 @@ func newCronContext(parent context.Context, jobName string, timeout time.Duratio
 	ctx := context.WithValue(parent, cronJobKey{}, jobName)
 	ctx = context.WithValue(ctx, requestIDKey{}, uuid.New().String())
 	return context.WithTimeout(ctx, timeout)
+}
+
+func runCronJob(parent context.Context, jobName string, timeout time.Duration, fn func(context.Context)) {
+	cronCtx, cronCancel := newCronContext(parent, jobName, timeout)
+	defer cronCancel()
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("Cron job panicked", "job", jobName, "panic", recovered)
+		}
+	}()
+
+	fn(cronCtx)
 }
 
 func runHealthProbe() int {
@@ -588,12 +604,12 @@ func subscriptionChecker(parent context.Context, subService *notification.Subscr
 	)
 
 	_, err := c.AddFunc("0 16 * * *", func() {
-		cronCtx, cronCancel := newCronContext(parent, "subscription_expiration", 2*time.Minute)
-		defer cronCancel()
-		err := subService.ProcessSubscriptionExpirationWithContext(cronCtx)
-		if err != nil {
-			slog.Error("Error sending subscription notifications", "error", err)
-		}
+		runCronJob(parent, "subscription_expiration", 2*time.Minute, func(cronCtx context.Context) {
+			err := subService.ProcessSubscriptionExpirationWithContext(cronCtx)
+			if err != nil {
+				slog.Error("Error sending subscription notifications", "error", err)
+			}
+		})
 	})
 
 	if err != nil {

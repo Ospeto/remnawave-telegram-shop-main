@@ -1,4 +1,4 @@
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
 import { Checkout } from './pages/Checkout';
@@ -9,7 +9,7 @@ import { ThemeProvider } from './lib/ThemeProvider';
 function App() {
     return (
         <ThemeProvider>
-            <MemoryRouter>
+            <BrowserRouter>
                 <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/plans" element={<Plans />} />
@@ -17,7 +17,7 @@ function App() {
                     <Route path="/checkout" element={<Checkout />} />
                     <Route path="/checkout/:planIndex" element={<Checkout />} />
                 </Routes>
-            </MemoryRouter>
+            </BrowserRouter>
         </ThemeProvider>
     );
 }

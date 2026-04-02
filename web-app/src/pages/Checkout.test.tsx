@@ -23,9 +23,13 @@ const telegramState = vi.hoisted(() => ({
     themeParams: {},
 }));
 
-vi.mock('../lib/twa', () => ({
-    useTelegram: () => telegramState,
-}));
+vi.mock('../lib/twa', async () => {
+    const actual = await vi.importActual<typeof import('../lib/twa')>('../lib/twa');
+    return {
+        ...actual,
+        useTelegram: () => telegramState,
+    };
+});
 
 vi.mock('../lib/useMXBrownSound', () => ({
     useMXBrownSound: () => ({ playClick: vi.fn() }),
@@ -100,9 +104,49 @@ describe('Checkout', () => {
 
             const [, options] = purchaseCall as [string, RequestInit];
             const body = JSON.parse(String(options.body));
+            const headers = options.headers as Record<string, string>;
             expect(body.payment_method).toBe('wallet_topup');
             expect(body.amount).toBe(5000);
             expect(body.plan_index).toBeUndefined();
+            expect(headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/i);
         });
+    });
+
+    it('uses the discounted checkout amount for wallet eligibility', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { label: '1 Month', days: 30, price: 10000, traffic_limit_gb: 0, currency: 'MMK' },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 8500, currency: 'MMK' });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/0?promo=SAVE20&discount=20']);
+
+        const walletButton = await screen.findByRole('button', { name: 'Pay 8,000 MMK from Wallet' });
+        expect(walletButton.getAttribute('disabled')).toBeNull();
+        expect(screen.queryByText('Wallet balance is not enough for wallet payment')).toBeNull();
     });
 });

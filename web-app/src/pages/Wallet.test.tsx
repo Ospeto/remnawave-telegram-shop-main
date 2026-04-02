@@ -1,0 +1,65 @@
+import { screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Wallet } from './Wallet';
+import { jsonResponse, renderWithAppProviders } from '../test/test-utils';
+
+const telegramState = vi.hoisted(() => ({
+    tg: {
+        BackButton: {
+            show: vi.fn(),
+            hide: vi.fn(),
+            onClick: vi.fn(),
+            offClick: vi.fn(),
+        },
+        openLink: vi.fn(),
+        openTelegramLink: vi.fn(),
+        initDataUnsafe: { user: { id: 42 } },
+    },
+    initData: 'test-init-data',
+    user: { id: 42 },
+    close: vi.fn(),
+    openLink: vi.fn(),
+    colorScheme: 'light',
+    themeParams: {},
+}));
+
+vi.mock('../lib/twa', async () => {
+    const actual = await vi.importActual<typeof import('../lib/twa')>('../lib/twa');
+    return {
+        ...actual,
+        useTelegram: () => telegramState,
+    };
+});
+
+describe('Wallet', () => {
+    const fetchMock = vi.fn();
+
+    beforeEach(() => {
+        fetchMock.mockReset();
+        vi.stubGlobal('fetch', fetchMock);
+    });
+
+    it('renders wallet data even when referrals fail to load', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 5000, currency: 'MMK', auto_renew: false, auto_renew_duration: null, bot_url: 'https://t.me/WavyVpnBot', referral_bonus_amount: 1000 });
+            }
+            if (url === '/api/wallet/history?limit=10') {
+                return jsonResponse([]);
+            }
+            if (url === '/api/referrals') {
+                return jsonResponse('boom', 500);
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/wallet', element: <Wallet /> },
+            { path: '/', element: <div>Home</div> },
+        ], ['/wallet']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Wallet' })).toBeTruthy();
+        expect(screen.getByRole('button', { name: '+ Top Up Balance' })).toBeTruthy();
+    });
+});

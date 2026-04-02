@@ -24,10 +24,11 @@ const (
 type PurchaseStatus string
 
 const (
-	PurchaseStatusNew     PurchaseStatus = "new"
-	PurchaseStatusPending PurchaseStatus = "pending"
-	PurchaseStatusPaid    PurchaseStatus = "paid"
-	PurchaseStatusCancel  PurchaseStatus = "cancel"
+	PurchaseStatusNew        PurchaseStatus = "new"
+	PurchaseStatusPending    PurchaseStatus = "pending"
+	PurchaseStatusProcessing PurchaseStatus = "processing"
+	PurchaseStatusPaid       PurchaseStatus = "paid"
+	PurchaseStatusCancel     PurchaseStatus = "cancel"
 )
 
 type Purchase struct {
@@ -54,6 +55,7 @@ type Purchase struct {
 	VerifiedAt        *time.Time     `db:"verified_at"`
 	TransactionID     string         `db:"transaction_id"`
 	PromoCodeID       *int64         `db:"promo_code_id"`
+	IdempotencyKey    *uuid.UUID     `db:"idempotency_key"`
 }
 
 type PurchaseRepository struct {
@@ -66,14 +68,16 @@ func NewPurchaseRepository(pool *pgxpool.Pool) *PurchaseRepository {
 	}
 }
 
-func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (int64, error) {
-	buildInsert := sq.Insert("purchase").
-		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id", "promo_code_id").
-		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID, purchase.PromoCodeID).
+func buildPurchaseInsert(purchase *Purchase) sq.InsertBuilder {
+	return sq.Insert("purchase").
+		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id", "promo_code_id", "idempotency_key").
+		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID, purchase.PromoCodeID, purchase.IdempotencyKey).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
+}
 
-	sql, args, err := buildInsert.ToSql()
+func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (int64, error) {
+	sql, args, err := buildPurchaseInsert(purchase).ToSql()
 	if err != nil {
 		return 0, err
 	}
@@ -87,12 +91,27 @@ func (cr *PurchaseRepository) Create(ctx context.Context, purchase *Purchase) (i
 	return id, nil
 }
 
+func (cr *PurchaseRepository) CreateTx(ctx context.Context, tx pgx.Tx, purchase *Purchase) (int64, error) {
+	sql, args, err := buildPurchaseInsert(purchase).ToSql()
+	if err != nil {
+		return 0, err
+	}
+
+	var id int64
+	err = tx.QueryRow(ctx, sql, args...).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+
+	return id, nil
+}
+
 var purchaseColumns = []string{
 	"id", "amount", "customer_id", "created_at", "month",
 	"paid_at", "currency", "expire_at", "status", "invoice_type",
 	"crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id",
 	"traffic_limit_gb", "days", "extend_key_id",
-	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id",
+	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id", "idempotency_key",
 }
 
 // scanPurchaseRow scans a single pgx.Row into a Purchase.
@@ -103,7 +122,7 @@ func scanPurchase(row pgx.Row) (*Purchase, error) {
 		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
-		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -123,7 +142,7 @@ func scanPurchaseRow(rows pgx.Rows) (*Purchase, error) {
 		&p.PaidAt, &p.Currency, &p.ExpireAt, &p.Status, &p.InvoiceType,
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
-		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID,
+		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan purchase row: %w", err)
@@ -167,10 +186,44 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 	return &purchases, nil
 }
 
+func (cr *PurchaseRepository) FindLatestAwaitingVerificationByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
+	buildSelect := sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.And{
+			sq.Eq{"customer_id": customerID},
+			sq.Eq{"invoice_type": []InvoiceType{InvoiceTypeMobileBanking, InvoiceTypeWalletTopUp}},
+			sq.Eq{"status": []PurchaseStatus{PurchaseStatusPending, PurchaseStatusNew}},
+		}).
+		OrderBy("created_at DESC").
+		Limit(1).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
+
 func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase, error) {
 	buildSelect := sq.Select(purchaseColumns...).
 		From("purchase").
 		Where(sq.Eq{"id": id}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
+
+func (cr *PurchaseRepository) FindByIdempotencyKey(ctx context.Context, key uuid.UUID) (*Purchase, error) {
+	buildSelect := sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.Eq{"idempotency_key": key}).
 		PlaceholderFormat(sq.Dollar)
 
 	sql, args, err := buildSelect.ToSql()
@@ -223,19 +276,17 @@ func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates
 	return nil
 }
 
-// TryMarkAsPaid atomically marks a purchase as paid only if it has not already
-// been claimed by another worker. It returns false when another processor
-// already won the race or the row no longer exists.
-func (pr *PurchaseRepository) TryMarkAsPaid(ctx context.Context, purchaseID int64) (bool, error) {
-	now := time.Now()
-
+// TryMarkAsProcessing atomically claims a purchase for fulfillment.
+// It returns false when another worker already won the race or the purchase
+// is already in a terminal or in-flight state.
+func (pr *PurchaseRepository) TryMarkAsProcessing(ctx context.Context, purchaseID int64) (bool, error) {
 	query := `
 		UPDATE purchase
-		SET status = $1, paid_at = $2
-		WHERE id = $3 AND status IN ($4, $5)
+		SET status = $1
+		WHERE id = $2 AND status IN ($3, $4)
 	`
 
-	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusPaid, now, purchaseID, PurchaseStatusNew, PurchaseStatusPending)
+	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusProcessing, purchaseID, PurchaseStatusNew, PurchaseStatusPending)
 	if err != nil {
 		return false, fmt.Errorf("failed to claim purchase %d: %w", purchaseID, err)
 	}
@@ -244,8 +295,23 @@ func (pr *PurchaseRepository) TryMarkAsPaid(ctx context.Context, purchaseID int6
 }
 
 func (pr *PurchaseRepository) MarkAsPaid(ctx context.Context, purchaseID int64) error {
-	_, err := pr.TryMarkAsPaid(ctx, purchaseID)
-	return err
+	now := time.Now()
+
+	query := `
+		UPDATE purchase
+		SET status = $1, paid_at = $2
+		WHERE id = $3 AND status = $4
+	`
+
+	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusPaid, now, purchaseID, PurchaseStatusProcessing)
+	if err != nil {
+		return fmt.Errorf("failed to mark purchase %d as paid: %w", purchaseID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("purchase %d was not in processing state", purchaseID)
+	}
+
+	return nil
 }
 
 // FindSuccessfulPaidPurchaseByCustomer returns the most recent paid purchase for

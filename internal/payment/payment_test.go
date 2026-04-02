@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"remnawave-tg-shop-bot/internal/database"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgconn"
 )
 
 func TestNormalizePhone(t *testing.T) {
@@ -215,6 +218,34 @@ func TestSyncCacheEntry_TTL(t *testing.T) {
 	}
 	if time.Now().Before(expired.expiresAt) {
 		t.Error("stale entry should be expired")
+	}
+}
+
+func TestWithIdempotencyKeyRoundTrip(t *testing.T) {
+	key := uuid.New()
+	ctx := WithIdempotencyKey(context.Background(), key)
+
+	got := idempotencyKeyFromContext(ctx)
+	if got == nil {
+		t.Fatal("expected idempotency key in context")
+	}
+	if *got != key {
+		t.Fatalf("idempotencyKeyFromContext() = %s, want %s", *got, key)
+	}
+}
+
+func TestIdempotencyKeyFromContextReturnsNilWhenMissing(t *testing.T) {
+	if got := idempotencyKeyFromContext(context.Background()); got != nil {
+		t.Fatalf("expected nil idempotency key, got %v", got)
+	}
+}
+
+func TestIsUniqueViolation(t *testing.T) {
+	if !isUniqueViolation(&pgconn.PgError{Code: "23505"}) {
+		t.Fatal("expected unique violation to be detected")
+	}
+	if isUniqueViolation(errors.New("not a pg error")) {
+		t.Fatal("unexpected unique violation match")
 	}
 }
 
