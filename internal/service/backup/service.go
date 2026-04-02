@@ -33,6 +33,7 @@ const (
 	keyBackupLastSizeBytes     = "backup_last_size_bytes"
 	keyBackupLastError         = "backup_last_error"
 	keyBackupLastScheduledDate = "backup_last_scheduled_date"
+	keyBackupScheduledClaim    = "backup_scheduled_claim"
 )
 
 var ErrOperationInProgress = errors.New("backup or restore already in progress")
@@ -45,6 +46,7 @@ type TelegramClient interface {
 type AppConfigStore interface {
 	Get(ctx context.Context, key string) (string, error)
 	Set(ctx context.Context, key string, value string) error
+	CompareAndSwap(ctx context.Context, key string, expected string, value string) (bool, error)
 }
 
 type Options struct {
@@ -176,7 +178,11 @@ func (s *Service) RunScheduledBackupIfDue(ctx context.Context, tg TelegramClient
 	}
 
 	now := s.nowFn().In(settings.Location)
-	if now.Format("15:04") != settings.ScheduleTime {
+	scheduledAt, err := scheduledRunTime(now, settings.ScheduleTime, settings.Location)
+	if err != nil {
+		return err
+	}
+	if now.Before(scheduledAt) {
 		return nil
 	}
 
@@ -186,13 +192,26 @@ func (s *Service) RunScheduledBackupIfDue(ctx context.Context, tg TelegramClient
 		return nil
 	}
 
+	claim, claimed, err := s.tryAcquireScheduledBackupClaim(ctx, todayKey, now.UTC())
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+
+	releaseClaim := true
+	defer func() {
+		if !releaseClaim {
+			return
+		}
+		s.releaseScheduledBackupClaim(context.WithoutCancel(ctx), claim)
+	}()
+
 	result, backupErr := s.CreateBackup(ctx, "scheduled")
 	if backupErr != nil {
 		s.notifyFailure(ctx, tg, chatID, "Scheduled backup failed", backupErr)
 		return backupErr
-	}
-	if err := s.setValue(ctx, keyBackupLastScheduledDate, todayKey); err != nil {
-		slog.Warn("backup: failed to persist scheduled date", "error", err)
 	}
 
 	if settings.SendToTelegram {
@@ -206,6 +225,12 @@ func (s *Service) RunScheduledBackupIfDue(ctx context.Context, tg TelegramClient
 			Text:   fmt.Sprintf("Scheduled backup complete: %s", result.File.Name),
 		})
 	}
+
+	if err := s.completeScheduledBackup(context.WithoutCancel(ctx), claim, todayKey); err != nil {
+		releaseClaim = false
+		return err
+	}
+	releaseClaim = false
 	return nil
 }
 
@@ -591,6 +616,16 @@ type runtimeSettings struct {
 	Location       *time.Location
 }
 
+type scheduledBackupClaim struct {
+	DateKey   string
+	Owner     string
+	ExpiresAt time.Time
+}
+
+func (c scheduledBackupClaim) encode() string {
+	return fmt.Sprintf("%s|%s|%s", c.DateKey, c.Owner, c.ExpiresAt.UTC().Format(time.RFC3339Nano))
+}
+
 func (s *Service) loadRuntimeSettings(ctx context.Context) (*runtimeSettings, error) {
 	location, err := time.LoadLocation(s.opts.Timezone)
 	if err != nil {
@@ -645,6 +680,94 @@ func (s *Service) setValue(ctx context.Context, key, value string) error {
 	return s.appConfig.Set(ctx, key, value)
 }
 
+func (s *Service) compareAndSwapValue(ctx context.Context, key string, expected string, next string) (bool, error) {
+	if s.appConfig == nil {
+		return true, nil
+	}
+	return s.appConfig.CompareAndSwap(ctx, key, expected, next)
+}
+
+func (s *Service) scheduledClaimLeaseTTL() time.Duration {
+	ttl := s.opts.JobTimeout + 5*time.Minute
+	if ttl < 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return ttl
+}
+
+func (s *Service) tryAcquireScheduledBackupClaim(ctx context.Context, todayKey string, now time.Time) (*scheduledBackupClaim, bool, error) {
+	claim := &scheduledBackupClaim{
+		DateKey:   todayKey,
+		Owner:     uuid.NewString(),
+		ExpiresAt: now.Add(s.scheduledClaimLeaseTTL()),
+	}
+
+	for attempts := 0; attempts < 5; attempts++ {
+		current, _ := s.getValue(ctx, keyBackupScheduledClaim)
+		current = strings.TrimSpace(current)
+		if current != "" {
+			existing, err := parseScheduledBackupClaim(current)
+			if err == nil && existing.DateKey == todayKey && existing.ExpiresAt.After(now) {
+				return nil, false, nil
+			}
+		}
+
+		swapped, err := s.compareAndSwapValue(ctx, keyBackupScheduledClaim, current, claim.encode())
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to claim scheduled backup: %w", err)
+		}
+		if swapped {
+			return claim, true, nil
+		}
+	}
+
+	return nil, false, errors.New("failed to acquire scheduled backup claim after concurrent updates")
+}
+
+func (s *Service) releaseScheduledBackupClaim(ctx context.Context, claim *scheduledBackupClaim) {
+	if claim == nil {
+		return
+	}
+	released, err := s.compareAndSwapValue(ctx, keyBackupScheduledClaim, claim.encode(), "")
+	if err != nil {
+		slog.Warn("backup: failed to release scheduled claim", "error", err)
+		return
+	}
+	if !released {
+		slog.Warn("backup: scheduled claim changed before release", "date", claim.DateKey, "owner", claim.Owner)
+	}
+}
+
+func (s *Service) completeScheduledBackup(ctx context.Context, claim *scheduledBackupClaim, todayKey string) error {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := s.setValue(persistCtx, keyBackupLastScheduledDate, todayKey); err != nil {
+		_ = s.setValue(ctx, keyBackupLastError, err.Error())
+		return fmt.Errorf("failed to persist scheduled backup completion: %w", err)
+	}
+	s.releaseScheduledBackupClaim(persistCtx, claim)
+	return nil
+}
+
+func parseScheduledBackupClaim(value string) (*scheduledBackupClaim, error) {
+	parts := strings.Split(value, "|")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid scheduled backup claim %q", value)
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339Nano, parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("invalid scheduled backup claim expiry %q: %w", value, err)
+	}
+
+	return &scheduledBackupClaim{
+		DateKey:   parts[0],
+		Owner:     parts[1],
+		ExpiresAt: expiresAt,
+	}, nil
+}
+
 func (s *Service) notifyFailure(ctx context.Context, tg TelegramClient, chatID int64, prefix string, err error) {
 	if tg == nil {
 		return
@@ -668,6 +791,16 @@ func nextRunAt(location *time.Location, schedule string, now time.Time) time.Tim
 		next = next.Add(24 * time.Hour)
 	}
 	return next
+}
+
+func scheduledRunTime(now time.Time, schedule string, location *time.Location) (time.Time, error) {
+	hour, minute, err := parseScheduleTime(schedule)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	localNow := now.In(location)
+	return time.Date(localNow.Year(), localNow.Month(), localNow.Day(), hour, minute, 0, 0, location), nil
 }
 
 func parseScheduleTime(value string) (int, int, error) {
