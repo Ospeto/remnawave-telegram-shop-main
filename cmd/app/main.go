@@ -51,6 +51,35 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func newVisionProvider(providerName, geminiAPIKey, geminiModel, openRouterAPIKey, openRouterModel, openRouterFallbackModel string) (gemini.Provider, error) {
+	switch strings.TrimSpace(providerName) {
+	case "":
+		return nil, nil
+	case "gemini":
+		if strings.TrimSpace(geminiAPIKey) == "" {
+			return nil, fmt.Errorf("vision provider gemini requires GEMINI_API_KEY")
+		}
+		return gemini.NewClient(geminiAPIKey, geminiModel), nil
+	case "openrouter":
+		if strings.TrimSpace(openRouterAPIKey) == "" {
+			return nil, fmt.Errorf("vision provider openrouter requires OPENROUTER_API_KEY")
+		}
+		if strings.TrimSpace(openRouterFallbackModel) != "" {
+			return gemini.NewNamedOpenRouterClient("openrouter-fallback", openRouterAPIKey, openRouterFallbackModel), nil
+		}
+		return gemini.NewOpenRouterClient(openRouterAPIKey, openRouterModel), nil
+	default:
+		return nil, fmt.Errorf("unsupported vision provider %q", providerName)
+	}
+}
+
+func visionProviderName(provider gemini.Provider) string {
+	if provider == nil {
+		return ""
+	}
+	return provider.Name()
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--health" {
 		os.Exit(runHealthProbe())
@@ -95,15 +124,31 @@ func main() {
 	var paymentAnalyzer gemini.Analyzer
 	var mobilePaymentRepo *database.MobilePaymentRepository
 	if config.IsMobileBankingEnabled() {
-		primaryProvider := gemini.NewClient(config.GeminiAPIKey(), config.GeminiModel())
-		var fallbackProvider gemini.Provider
-		if config.VisionProviderFallback() == "openrouter" {
-			if config.OpenRouterAPIKey() != "" {
-				fallbackProvider = gemini.NewOpenRouterClient(config.OpenRouterAPIKey(), config.OpenRouterModel())
-			} else {
-				slog.Warn("Vision fallback requested but OpenRouter API key is not configured", "fallback_provider", config.VisionProviderFallback())
-			}
+		primaryProvider, err := newVisionProvider(
+			config.VisionProviderPrimary(),
+			config.GeminiAPIKey(),
+			config.GeminiModel(),
+			config.OpenRouterAPIKey(),
+			config.OpenRouterModel(),
+			"",
+		)
+		if err != nil {
+			panic(err)
 		}
+
+		fallbackOpenRouterModel := config.OpenRouterFallbackModel()
+		fallbackProvider, err := newVisionProvider(
+			config.VisionProviderFallback(),
+			config.GeminiAPIKey(),
+			config.GeminiModel(),
+			config.OpenRouterAPIKey(),
+			config.OpenRouterModel(),
+			fallbackOpenRouterModel,
+		)
+		if err != nil {
+			panic(err)
+		}
+
 		paymentAnalyzer = gemini.NewAnalyzer(gemini.AnalyzerOptions{
 			Primary:       primaryProvider,
 			Fallback:      fallbackProvider,
@@ -113,8 +158,8 @@ func main() {
 		mobilePaymentRepo = database.NewMobilePaymentRepository(pool)
 		slog.Info("Mobile banking enabled",
 			"phone", config.MobileBankingPhone(),
-			"vision_primary", primaryProvider.Name(),
-			"vision_fallback", config.VisionProviderFallback(),
+			"vision_primary", visionProviderName(primaryProvider),
+			"vision_fallback", visionProviderName(fallbackProvider),
 			"vision_retry_attempts", config.VisionRetryAttempts(),
 			"vision_max_attempts", config.VisionMaxAttempts(),
 		)

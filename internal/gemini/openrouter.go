@@ -15,16 +15,25 @@ import (
 const defaultOpenRouterModel = "openai/gpt-4.1-mini"
 
 type OpenRouterClient struct {
+	name       string
 	apiKey     string
 	model      string
 	httpClient *http.Client
 }
 
 func NewOpenRouterClient(apiKey, model string) *OpenRouterClient {
+	return NewNamedOpenRouterClient("openrouter", apiKey, model)
+}
+
+func NewNamedOpenRouterClient(name, apiKey, model string) *OpenRouterClient {
 	if model == "" {
 		model = defaultOpenRouterModel
 	}
+	if strings.TrimSpace(name) == "" {
+		name = "openrouter"
+	}
 	return &OpenRouterClient{
+		name:   name,
 		apiKey: apiKey,
 		model:  model,
 		httpClient: &http.Client{
@@ -34,7 +43,7 @@ func NewOpenRouterClient(apiKey, model string) *OpenRouterClient {
 }
 
 func (c *OpenRouterClient) Name() string {
-	return "openrouter"
+	return c.name
 }
 
 func (c *OpenRouterClient) Ping(ctx context.Context) error {

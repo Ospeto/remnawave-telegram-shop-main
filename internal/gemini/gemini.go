@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultGeminiModel    = "gemini-2.5-flash"
+	defaultGeminiModel    = "gemini-3.1-flash-lite-preview"
 	defaultRequestTimeout = 60 * time.Second
 )
 

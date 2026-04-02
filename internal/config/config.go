@@ -55,10 +55,12 @@ type config struct {
 	trafficLimitResetStrategy                                 string
 	mobileBankingEnabled                                      bool
 	mobileBankingPhone                                        string
+	visionProviderPrimary                                     string
 	geminiAPIKey                                              string
 	geminiModel                                               string
 	openRouterAPIKey                                          string
 	openRouterModel                                           string
+	openRouterFallbackModel                                   string
 	visionProviderFallback                                    string
 	visionRetryAttempts                                       int
 	visionMaxAttempts                                         int
@@ -245,6 +247,14 @@ func OpenRouterModel() string {
 	return conf.openRouterModel
 }
 
+func OpenRouterFallbackModel() string {
+	return conf.openRouterFallbackModel
+}
+
+func VisionProviderPrimary() string {
+	return conf.visionProviderPrimary
+}
+
 func VisionProviderFallback() string {
 	return conf.visionProviderFallback
 }
@@ -389,11 +399,57 @@ func normalizeVisionProvider(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
 		return ""
+	case "gemini":
+		return "gemini"
 	case "openrouter":
 		return "openrouter"
 	default:
 		panic(fmt.Sprintf("unsupported VISION_PROVIDER_FALLBACK %q", value))
 	}
+}
+
+func resolveVisionProviders(geminiAPIKey, openRouterAPIKey, openRouterFallbackModel, fallbackRaw string) (string, string, error) {
+	hasGemini := strings.TrimSpace(geminiAPIKey) != ""
+	hasOpenRouter := strings.TrimSpace(openRouterAPIKey) != ""
+	hasOpenRouterFallback := strings.TrimSpace(openRouterFallbackModel) != ""
+
+	if !hasGemini && !hasOpenRouter {
+		return "", "", fmt.Errorf("mobile banking requires OPENROUTER_API_KEY or GEMINI_API_KEY")
+	}
+
+	primary := "gemini"
+	if hasOpenRouter {
+		primary = "openrouter"
+	}
+
+	fallback := ""
+	if strings.TrimSpace(fallbackRaw) == "" {
+		return primary, fallback, nil
+	}
+
+	normalizedFallback := normalizeVisionProvider(fallbackRaw)
+	if normalizedFallback == "openrouter" && primary == "openrouter" && !hasOpenRouterFallback {
+		return "", "", fmt.Errorf("VISION_PROVIDER_FALLBACK=openrouter requires OPENROUTER_FALLBACK_MODEL")
+	}
+	if normalizedFallback == primary && !(normalizedFallback == "openrouter" && hasOpenRouterFallback) {
+		return primary, "", nil
+	}
+
+	switch normalizedFallback {
+	case "gemini":
+		if !hasGemini {
+			return "", "", fmt.Errorf("VISION_PROVIDER_FALLBACK=gemini requires GEMINI_API_KEY")
+		}
+	case "openrouter":
+		if !hasOpenRouter {
+			return "", "", fmt.Errorf("VISION_PROVIDER_FALLBACK=openrouter requires OPENROUTER_API_KEY")
+		}
+		if !hasOpenRouterFallback {
+			return "", "", fmt.Errorf("VISION_PROVIDER_FALLBACK=openrouter requires OPENROUTER_FALLBACK_MODEL")
+		}
+	}
+
+	return primary, normalizedFallback, nil
 }
 
 func InitConfig() {
@@ -656,15 +712,17 @@ func InitConfig() {
 	conf.mobileBankingEnabled = envBool("MOBILE_BANKING_ENABLED")
 	if conf.mobileBankingEnabled {
 		conf.mobileBankingPhone = mustEnv("MOBILE_BANKING_PHONE")
-		conf.geminiAPIKey = mustEnv("GEMINI_API_KEY")
-		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-2.5-flash")
+		conf.geminiAPIKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 		conf.openRouterAPIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
 		conf.openRouterModel = envStringDefault("OPENROUTER_MODEL", "openai/gpt-4.1-mini")
-		if fallbackRaw, isSet := os.LookupEnv("VISION_PROVIDER_FALLBACK"); isSet {
-			conf.visionProviderFallback = normalizeVisionProvider(fallbackRaw)
-		} else if conf.openRouterAPIKey != "" {
-			conf.visionProviderFallback = "openrouter"
+		conf.openRouterFallbackModel = strings.TrimSpace(os.Getenv("OPENROUTER_FALLBACK_MODEL"))
+		primary, fallback, err := resolveVisionProviders(conf.geminiAPIKey, conf.openRouterAPIKey, conf.openRouterFallbackModel, os.Getenv("VISION_PROVIDER_FALLBACK"))
+		if err != nil {
+			panic(err.Error())
 		}
+		conf.visionProviderPrimary = primary
+		conf.visionProviderFallback = fallback
 		conf.visionRetryAttempts = envIntDefault("VISION_RETRY_ATTEMPTS", 1)
 		if conf.visionRetryAttempts < 0 {
 			panic("VISION_RETRY_ATTEMPTS must be >= 0")
@@ -680,7 +738,7 @@ func InitConfig() {
 			conf.visionMaxAttempts = explicitMaxAttempts
 		} else {
 			providerCount := 1
-			if conf.visionProviderFallback == "openrouter" && conf.openRouterAPIKey != "" {
+			if conf.visionProviderFallback != "" {
 				providerCount++
 			}
 			conf.visionMaxAttempts = providerCount * (conf.visionRetryAttempts + 1)

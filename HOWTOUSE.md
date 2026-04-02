@@ -53,12 +53,12 @@ After editing plans, you must restart the bot:
 -   **Usage**: Fully automated. User clicks "Pay", sends crypto, bot detects tx, plan activates immediately.
 
 ### Mobile Banking (Manual / AI)
--   **Setup**: Enable in `setup.sh`, set `MOBILE_BANKING_PHONE` and `GEMINI_API_KEY`.
+-   **Setup**: Enable in `setup.sh`, set `MOBILE_BANKING_PHONE` and `OPENROUTER_API_KEY`. Add `OPENROUTER_FALLBACK_MODEL` if you want a fallback model on the same OpenRouter account.
 -   **Usage**:
     1.  User selects plan & payment method.
     2.  Bot sends instructions ("Transfer money to 09...").
     3.  User transfers money and **sends screenshot** to the bot.
-    4.  **AI Verification**: Gemini reads the screenshot. Checks amount, phone number, and transaction ID.
+    4.  **AI Verification**: OpenRouter reads the screenshot first. If configured, a second OpenRouter model such as `google/gemini-3.1-flash-lite-preview` is used as fallback on provider-side failures.
     5.  **Success**: Bot activates plan automatically.
     6.  **Failure**: Bot asks user to try again or contact support.
 

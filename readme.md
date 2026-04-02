@@ -28,8 +28,7 @@ A complete, self-hosted Telegram Shop Bot for selling digital goods (subscriptio
 -   A **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather)).
 -   A **Remnawave Panel** URL and API Token (for key generation).
 -   *(Optional)* **CryptoPay** API Token for crypto payments.
--   *(Optional)* **Gemini API Key** for AI verification of payment screenshots.
--   *(Optional)* **OpenRouter API Key** if you want screenshot verification fallback when Gemini has provider-side failures.
+-   *(Optional)* **OpenRouter API Key** for AI verification of payment screenshots.
 
 ## Getting Started
 
@@ -121,26 +120,24 @@ Key variables used in `.env`:
 
 ### Mobile Banking Screenshot Verification
 
-Mobile banking screenshot checks stay Gemini-first by default. If you do nothing beyond `GEMINI_API_KEY` and `GEMINI_MODEL`, the app keeps the current Gemini-only behavior.
-
-To enable fallback, add an OpenRouter key/model and set the fallback provider:
+Mobile banking screenshot checks use OpenRouter by default.
 
 | Variable | Description |
 | :--- | :--- |
-| `GEMINI_API_KEY` | Required when mobile banking is enabled; primary screenshot-analysis provider |
-| `GEMINI_MODEL` | Gemini model used for primary screenshot analysis |
-| `OPENROUTER_API_KEY` | Optional fallback provider key; leave empty for Gemini-only mode |
-| `OPENROUTER_MODEL` | OpenRouter model to use when fallback is enabled |
-| `VISION_PROVIDER_FALLBACK` | Set to `openrouter` to allow fallback after retriable provider failures |
+| `OPENROUTER_API_KEY` | Required when mobile banking screenshot verification is enabled |
+| `OPENROUTER_MODEL` | OpenRouter vision model used for screenshot analysis |
+| `OPENROUTER_FALLBACK_MODEL` | Optional OpenRouter fallback model, typically `google/gemini-3.1-flash-lite-preview` |
+| `VISION_PROVIDER_FALLBACK` | Optional secondary provider; use `openrouter` when `OPENROUTER_FALLBACK_MODEL` is configured, or leave empty for OpenRouter-only mode |
 | `VISION_RETRY_ATTEMPTS` | Retries per provider before failover to the fallback provider |
 | `VISION_RETRY_MAX_ATTEMPTS` | Total screenshot-analysis attempts per upload, including retries and fallback attempts |
 
 Practical notes for operators:
 
--   Gemini stays the primary provider.
--   OpenRouter fallback is only meant for provider-side failures such as timeouts, rate limits, or upstream API errors.
+-   `openai/gpt-4.1-mini` is the default OpenRouter model because it is a strong reliability/cost balance for screenshot extraction.
+-   `google/gemini-3.1-flash-lite-preview` is the default OpenRouter fallback model when fallback is enabled.
 -   A screenshot that fails business validation does not become valid just because fallback is configured.
--   To return to Gemini-only mode, clear `OPENROUTER_API_KEY` or leave `VISION_PROVIDER_FALLBACK` empty.
+-   For an OpenRouter-only setup, leave `OPENROUTER_FALLBACK_MODEL` empty and set `VISION_PROVIDER_FALLBACK` empty with `VISION_RETRY_MAX_ATTEMPTS=2`.
+-   For OpenRouter plus OpenRouter-fallback-model, set `OPENROUTER_FALLBACK_MODEL` and use `VISION_PROVIDER_FALLBACK=openrouter` with `VISION_RETRY_MAX_ATTEMPTS=3`.
 -   `./setup.sh` fresh install and `Edit Payment Settings` both expose these values directly.
 
 ### Backup And Restore Configuration
