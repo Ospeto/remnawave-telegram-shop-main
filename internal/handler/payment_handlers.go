@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/google/uuid"
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -152,6 +153,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	}
 
 	ctxWithUsername := context.WithValue(dbCtx, "username", update.CallbackQuery.From.Username)
+	ctxWithUsername = payment.WithIdempotencyKey(ctxWithUsername, uuid.NewSHA1(uuid.NameSpaceURL, []byte("telegram-callback:"+update.CallbackQuery.ID)))
 	langCode := update.CallbackQuery.From.LanguageCode
 
 	if invoiceType == database.InvoiceTypeMobileBanking {
@@ -288,6 +290,23 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 
 	// Check if this user has a pending mobile banking purchase
 	purchaseID, hasPending := h.mobilePayCache.Get(chatID)
+	if hasPending {
+		purchase, err := h.purchaseRepository.FindById(ctx, int64(purchaseID))
+		if err != nil || purchase == nil || (purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew) {
+			hasPending = false
+		}
+	}
+	if !hasPending {
+		customer, err := h.customerRepository.FindByTelegramId(ctx, chatID)
+		if err == nil && customer != nil {
+			purchase, pendingErr := h.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID)
+			if pendingErr == nil && purchase != nil {
+				purchaseID = int(purchase.ID)
+				hasPending = true
+				h.mobilePayCache.Set(chatID, purchaseID)
+			}
+		}
+	}
 	if !hasPending {
 		// No pending payment — ignore the photo
 		return
@@ -298,9 +317,6 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		ChatID: chatID,
 		Text:   h.translation.GetText(langCode, "mobile_pay_verifying"),
 	})
-
-	// Clear the pending state so user can't double-submit
-	h.mobilePayCache.Delete(chatID)
 
 	defer func() {
 		// Delete the "verifying" message later
@@ -334,8 +350,14 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	}
 
 	if result.Success {
+		h.mobilePayCache.Delete(chatID)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, result.ReasonKey, 0)
 		return
+	}
+
+	purchase, pErr := h.purchaseRepository.FindById(ctx, int64(purchaseID))
+	if pErr == nil && purchase != nil && purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
+		h.mobilePayCache.Delete(chatID)
 	}
 
 	// For amount mismatch, pass the expected purchase amount

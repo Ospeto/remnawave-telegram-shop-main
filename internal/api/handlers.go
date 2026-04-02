@@ -13,9 +13,11 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
+	"github.com/google/uuid"
 )
 
 // --- Response types ---
@@ -126,6 +128,9 @@ type APIHandler struct {
 	promoCodeRepository *database.PromoCodeRepository
 	walletService       WalletServiceInterface
 	referralRepo        *database.ReferralRepository
+	screenshotMu        sync.Mutex
+	screenshotAttempts  map[int64]time.Time
+	screenshotInFlight  map[int64]struct{}
 }
 
 func NewAPIHandler(
@@ -147,7 +152,33 @@ func NewAPIHandler(
 		promoCodeRepository: promoCodeRepository,
 		walletService:       walletService,
 		referralRepo:        referralRepo,
+		screenshotAttempts:  make(map[int64]time.Time),
+		screenshotInFlight:  make(map[int64]struct{}),
 	}
+}
+
+const screenshotVerificationCooldown = 15 * time.Second
+
+func (h *APIHandler) beginScreenshotVerification(purchaseID int64) error {
+	h.screenshotMu.Lock()
+	defer h.screenshotMu.Unlock()
+
+	if _, exists := h.screenshotInFlight[purchaseID]; exists {
+		return fmt.Errorf("verification already in progress")
+	}
+	if lastAttempt, exists := h.screenshotAttempts[purchaseID]; exists && time.Since(lastAttempt) < screenshotVerificationCooldown {
+		return fmt.Errorf("verification throttled")
+	}
+
+	h.screenshotAttempts[purchaseID] = time.Now()
+	h.screenshotInFlight[purchaseID] = struct{}{}
+	return nil
+}
+
+func (h *APIHandler) finishScreenshotVerification(purchaseID int64) {
+	h.screenshotMu.Lock()
+	defer h.screenshotMu.Unlock()
+	delete(h.screenshotInFlight, purchaseID)
 }
 
 // --- Handlers ---
@@ -196,7 +227,17 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	ctx := r.Context()
+	if rawKey := strings.TrimSpace(r.Header.Get("Idempotency-Key")); rawKey != "" {
+		key, err := uuid.Parse(rawKey)
+		if err != nil {
+			http.Error(w, "Invalid Idempotency-Key header", http.StatusBadRequest)
+			return
+		}
+		ctx = payment.WithIdempotencyKey(ctx, key)
+	}
+
+	telegramID, ok := ctx.Value(telegramIDKey).(int64)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
@@ -245,7 +286,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		label = plan.Label
 	}
 
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	customer, err := h.customerRepo.FindByTelegramId(ctx, telegramID)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
@@ -265,7 +306,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		extendKey, err := h.subKeyRepo.FindByID(r.Context(), *req.ExtendKeyID)
+		extendKey, err := h.subKeyRepo.FindByID(ctx, *req.ExtendKeyID)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return
@@ -282,10 +323,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	var purchaseID int64
 	if req.ExtendKeyID != nil && invoiceType == database.InvoiceTypeWalletPayment {
-		_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(r.Context(), price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
+		_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(ctx, price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
 	} else {
 		// Delegate to PaymentService with Promo Code
-		_, purchaseID, err = h.paymentService.CreatePurchase(r.Context(), price, days, trafficLimit, customer, invoiceType, req.PromoCode)
+		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
 		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
@@ -293,7 +334,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the actual purchase to get the final amount (which might be discounted)
-	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), purchaseID)
+	purchase, err := h.paymentService.GetPurchaseByID(ctx, purchaseID)
 	if err != nil || purchase == nil {
 		slog.Error("Failed to retrieve purchase after creation", "purchase_id", purchaseID, "error", err)
 		http.Error(w, "Failed to retrieve purchase details", http.StatusInternalServerError)
@@ -307,7 +348,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if req.ExtendKeyID != nil && invoiceType != database.InvoiceTypeWalletPayment {
 		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
-	if err := h.paymentService.UpdatePurchaseFields(r.Context(), purchaseID, updateFields); err != nil {
+	if err := h.paymentService.UpdatePurchaseFields(ctx, purchaseID, updateFields); err != nil {
 		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
 	}
 
@@ -330,11 +371,11 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if purchase.InvoiceType == database.InvoiceTypeWalletPayment {
 		if h.subKeyRepo != nil {
 			if req.ExtendKeyID != nil {
-				if extendKey, kErr := h.subKeyRepo.FindByID(r.Context(), *req.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
+				if extendKey, kErr := h.subKeyRepo.FindByID(ctx, *req.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
 					happLink = "happ://add/" + extendKey.SubscriptionURL
 				}
 			} else {
-				keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+				keys, kErr := h.subKeyRepo.FindByCustomerID(ctx, customer.ID)
 				if kErr == nil && len(keys) > 0 {
 					latestKey := keys[0]
 					happLink = "happ://add/" + latestKey.SubscriptionURL
@@ -605,9 +646,18 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	}
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
-		http.Error(w, "Purchase not allowed", http.StatusForbidden)
+		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
 	}
+	if purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
+		http.Error(w, "Purchase is not awaiting verification", http.StatusConflict)
+		return
+	}
+	if err := h.beginScreenshotVerification(purchase.ID); err != nil {
+		http.Error(w, "Verification is temporarily unavailable for this purchase", http.StatusTooManyRequests)
+		return
+	}
+	defer h.finishScreenshotVerification(purchase.ID)
 
 	// Now safe to read the file. Limit body to 10 MB.
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
@@ -697,7 +747,7 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
-		http.Error(w, "Purchase not allowed", http.StatusForbidden)
+		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
 	}
 

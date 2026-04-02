@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { useTelegram } from '../lib/twa';
+import { copyText, createIdempotencyKey, openTelegramShareLink, useTelegram } from '../lib/twa';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
@@ -40,6 +40,7 @@ export function Checkout() {
 
     const extendKeyId = searchParams.get('extend');
     const promoCode = searchParams.get('promo');
+    const promoDiscount = Number(searchParams.get('discount'));
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
     const amountParam = searchParams.get('amount');
     const parsedPlanIndex = Number(planIndex);
@@ -65,6 +66,7 @@ export function Checkout() {
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const purchaseIntentRef = useRef<{ action: CheckoutAction | null; key: string | null }>({ action: null, key: null });
     const selectedPlan = !Number.isNaN(parsedPlanIndex) ? plans[parsedPlanIndex] : undefined;
     const extendingKey = extendKeyId && userData?.keys
         ? userData.keys.find((key) => key.id === Number(extendKeyId))
@@ -119,6 +121,7 @@ export function Checkout() {
         setSelectedProvider(null);
         setWalletPayError(null);
         setWalletBalance(null);
+        purchaseIntentRef.current = { action: null, key: null };
 
         try {
             const headers = { 'Authorization': `twa ${initData}` };
@@ -198,6 +201,13 @@ export function Checkout() {
                 headers: {
                     'Authorization': `twa ${initData}`,
                     'Content-Type': 'application/json',
+                    'Idempotency-Key': purchaseIntentRef.current.action === action && purchaseIntentRef.current.key
+                        ? purchaseIntentRef.current.key
+                        : (() => {
+                            const key = createIdempotencyKey();
+                            purchaseIntentRef.current = { action, key };
+                            return key;
+                        })(),
                 },
                 body: JSON.stringify(body),
             });
@@ -265,21 +275,9 @@ export function Checkout() {
     };
 
     const copyToClipboard = (text: string) => {
-        navigator.clipboard.writeText(text)
-            .then(() => {
-                // Success handled by caller
-            })
-            .catch(() => {
-                // Fallback for environments where clipboard API is unavailable
-                const textArea = document.createElement('textarea');
-                textArea.value = text;
-                textArea.style.position = 'fixed';
-                textArea.style.left = '-9999px';
-                document.body.appendChild(textArea);
-                textArea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-            });
+        void copyText(text).catch((err) => {
+            console.warn('Clipboard copy failed:', err);
+        });
     };
 
     const handleHappLink = (happUrl: string) => {
@@ -376,7 +374,7 @@ export function Checkout() {
                             }
                             const text = t('referral_share_text');
                             const url = `${botUrlToUse}?start=ref_${uid}`;
-                            (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+                            openTelegramShareLink(tg, url, text);
                         }}
                         style={{
                             width: '100%', padding: '12px', fontSize: 14, fontWeight: 700,
@@ -395,10 +393,14 @@ export function Checkout() {
         );
     }
 
-    const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= selectedPlan.price;
-    const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
+    const effectiveDiscountPercent = promoCode && Number.isFinite(promoDiscount) && promoDiscount > 0 ? promoDiscount : 0;
     const topUpAmount = isWalletTopup && hasValidTopUpAmount ? parsedTopUpAmount : 0;
-    const targetAmount = isWalletTopup ? topUpAmount : selectedPlan?.price ?? 0;
+    const baseTargetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
+    const targetAmount = !isWalletTopup && effectiveDiscountPercent > 0
+        ? Math.round(baseTargetAmount * (1 - effectiveDiscountPercent / 100))
+        : baseTargetAmount;
+    const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;
+    const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
     const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
 
     return (

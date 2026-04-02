@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useTelegram } from '../lib/twa';
+import { openTelegramShareLink, useTelegram } from '../lib/twa';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
@@ -45,25 +45,26 @@ export function Wallet() {
     setLoadError(false);
 
     try {
-      const [walletRes, historyRes, referralRes] = await Promise.all([
+      const [walletRes, historyRes, referralResult] = await Promise.all([
         fetch('/api/wallet', { headers }),
         fetch('/api/wallet/history?limit=10', { headers }),
-        fetch('/api/referrals', { headers }),
+        fetch('/api/referrals', { headers })
+          .then(async (res) => res.ok ? res.json() : [])
+          .catch(() => []),
       ]);
 
-      if (!walletRes.ok || !historyRes.ok || !referralRes.ok) {
+      if (!walletRes.ok || !historyRes.ok) {
         throw new Error('Failed to load wallet data');
       }
 
-      const [walletData, historyData, referralData] = await Promise.all([
+      const [walletData, historyData] = await Promise.all([
         walletRes.json(),
         historyRes.json(),
-        referralRes.json(),
       ]);
 
       setWallet(walletData);
       setTransactions(historyData || []);
-      setReferrals(referralData || []);
+      setReferrals(Array.isArray(referralResult) ? referralResult : []);
     } catch (err) {
       console.warn('Wallet load error:', err);
       setLoadError(true);
@@ -289,7 +290,7 @@ export function Wallet() {
             }
             const text = t('referral_share_text');
             const url = `${botUrlToUse}?start=ref_${uid}`;
-            (tg as any).openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+            openTelegramShareLink(tg, url, text);
           }}
           style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
         >

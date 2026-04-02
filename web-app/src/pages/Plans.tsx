@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
@@ -24,6 +24,7 @@ export function Plans() {
     const [discountPercent, setDiscountPercent] = useState<number>(0);
     const [appliedPromoCode, setAppliedPromoCode] = useState('');
     const [loadError, setLoadError] = useState<string | null>(null);
+    const promoRequestRef = useRef(0);
 
     const extendKeyId = searchParams.get('extend');
     const isExtend = !!extendKeyId;
@@ -86,12 +87,17 @@ export function Plans() {
     }, [loadPlans]);
 
     const handleApplyPromo = () => {
-        if (!promoCode.trim()) return;
+        const normalizedCode = promoCode.trim();
+        if (!normalizedCode || !initData) return;
+
+        const requestId = promoRequestRef.current + 1;
+        promoRequestRef.current = requestId;
         setPromoStatus('validating');
-        fetch(`/api/promo/validate?code=${encodeURIComponent(promoCode)}`, {
+        fetch(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, {
             headers: { 'Authorization': `twa ${initData}` }
         })
             .then(async res => {
+                if (promoRequestRef.current !== requestId) return;
                 if (res.ok) {
                     const data = await res.json();
                     if (data.valid) {
@@ -110,6 +116,7 @@ export function Plans() {
                 }
             })
             .catch(() => {
+                if (promoRequestRef.current !== requestId) return;
                 setPromoStatus('invalid');
                 setDiscountPercent(0);
                 setAppliedPromoCode('');
@@ -218,11 +225,12 @@ export function Plans() {
                             const next = e.target.value;
                             setPromoCode(next);
                             if (next !== appliedPromoCode) {
-                                setPromoStatus('idle');
-                                setDiscountPercent(0);
-                                setAppliedPromoCode('');
-                            }
-                        }}
+                            setPromoStatus('idle');
+                            setDiscountPercent(0);
+                            setAppliedPromoCode('');
+                            promoRequestRef.current += 1;
+                        }
+                    }}
                         placeholder={t('promo_placeholder')}
                         aria-label={t('promo_placeholder')}
                         style={{
@@ -292,6 +300,7 @@ export function Plans() {
                     }
                     if (!isWalletTopup && appliedPromoCode) {
                         checkoutParams.set('promo', appliedPromoCode);
+                        checkoutParams.set('discount', String(discountPercent));
                     }
 
                     const checkoutPath = isWalletTopup ? '/checkout' : `/checkout/${originalIdx}`;

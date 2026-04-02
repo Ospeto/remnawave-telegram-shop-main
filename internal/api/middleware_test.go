@@ -6,12 +6,24 @@ import (
 )
 
 func TestGetIPUsesForwardedForFromTrustedProxy(t *testing.T) {
+	t.Setenv("TRUST_PRIVATE_PROXY_HEADERS", "true")
+
 	req := httptest.NewRequest("GET", "http://example.com/", nil)
 	req.RemoteAddr = "172.18.0.2:12345"
 	req.Header.Set("X-Forwarded-For", "198.51.100.8, 172.18.0.2")
 
 	if got := getIP(req); got != "198.51.100.8" {
 		t.Fatalf("getIP() = %q, want %q", got, "198.51.100.8")
+	}
+}
+
+func TestGetIPIgnoresPrivateProxyHeadersByDefault(t *testing.T) {
+	req := httptest.NewRequest("GET", "http://example.com/", nil)
+	req.RemoteAddr = "172.18.0.2:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.8, 172.18.0.2")
+
+	if got := getIP(req); got != "172.18.0.2" {
+		t.Fatalf("getIP() = %q, want %q", got, "172.18.0.2")
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -29,6 +30,76 @@ type contextKey string
 const (
 	telegramIDKey contextKey = "telegram_id"
 )
+
+type initDataBinding struct {
+	fingerprint string
+	expiresAt   time.Time
+}
+
+type initDataReplayGuard struct {
+	mu       sync.Mutex
+	bindings map[string]initDataBinding
+}
+
+func newInitDataReplayGuard() *initDataReplayGuard {
+	guard := &initDataReplayGuard{
+		bindings: make(map[string]initDataBinding),
+	}
+	go guard.cleanupLoop()
+	return guard
+}
+
+func (g *initDataReplayGuard) bind(bindingKey, fingerprint string, expiresAt time.Time) error {
+	if bindingKey == "" {
+		return nil
+	}
+
+	now := time.Now()
+	if now.After(expiresAt) {
+		return fmt.Errorf("initData expired")
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if binding, exists := g.bindings[bindingKey]; exists && now.Before(binding.expiresAt) {
+		if binding.fingerprint != fingerprint {
+			return fmt.Errorf("initData replay detected")
+		}
+		if expiresAt.After(binding.expiresAt) {
+			binding.expiresAt = expiresAt
+			g.bindings[bindingKey] = binding
+		}
+		return nil
+	}
+
+	g.bindings[bindingKey] = initDataBinding{
+		fingerprint: fingerprint,
+		expiresAt:   expiresAt,
+	}
+	return nil
+}
+
+func (g *initDataReplayGuard) cleanupLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for now := range ticker.C {
+		g.mu.Lock()
+		for key, binding := range g.bindings {
+			if now.After(binding.expiresAt) {
+				delete(g.bindings, key)
+			}
+		}
+		g.mu.Unlock()
+	}
+}
+
+var replayGuard = newInitDataReplayGuard()
+
+func requestFingerprint(r *http.Request) string {
+	return getIP(r) + "|" + strings.TrimSpace(r.UserAgent())
+}
 
 func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface, referralRepo *database.ReferralRepository) {
 	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo)
@@ -245,7 +316,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -286,12 +357,20 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
 			return
 		}
+		if !strings.HasPrefix(authHeader, "twa ") {
+			http.Error(w, "Unsupported Authorization scheme", http.StatusUnauthorized)
+			return
+		}
 
 		// Expected format: "twa <initData>" from Telegram Web App frontend
 		initData := strings.TrimPrefix(authHeader, "twa ")
 
-		telegramID, username, err := validateInitData(initData, config.TelegramToken())
+		telegramID, username, bindingKey, expiresAt, err := validateInitData(initData, config.TelegramToken())
 		if err != nil {
+			http.Error(w, "Invalid initData: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+		if err := replayGuard.bind(bindingKey, requestFingerprint(r), expiresAt); err != nil {
 			http.Error(w, "Invalid initData: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
@@ -304,17 +383,18 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// validateInitData validates the Telegram Web App initData and returns the user ID and Username
-func validateInitData(initData string, botToken string) (int64, string, error) {
+// validateInitData validates the Telegram Web App initData and returns the user,
+// a stable replay-binding key, and the initData expiry.
+func validateInitData(initData string, botToken string) (int64, string, string, time.Time, error) {
 	// Parse query string
 	values, err := url.ParseQuery(initData)
 	if err != nil {
-		return 0, "", err
+		return 0, "", "", time.Time{}, err
 	}
 
 	hash := values.Get("hash")
 	if hash == "" {
-		return 0, "", fmt.Errorf("hash missing")
+		return 0, "", "", time.Time{}, fmt.Errorf("hash missing")
 	}
 
 	// Remove hash from values to compute data-check-string
@@ -344,26 +424,27 @@ func validateInitData(initData string, botToken string) (int64, string, error) {
 	computedHash := hex.EncodeToString(h.Sum(nil))
 
 	if computedHash != hash {
-		return 0, "", fmt.Errorf("hash mismatch")
+		return 0, "", "", time.Time{}, fmt.Errorf("hash mismatch")
 	}
 
 	// Check auth_date to prevent replay attacks
 	authDateStr := values.Get("auth_date")
 	if authDateStr == "" {
-		return 0, "", fmt.Errorf("auth_date missing")
+		return 0, "", "", time.Time{}, fmt.Errorf("auth_date missing")
 	}
 	authDate, err := strconv.ParseInt(authDateStr, 10, 64)
 	if err != nil {
-		return 0, "", fmt.Errorf("invalid auth_date")
+		return 0, "", "", time.Time{}, fmt.Errorf("invalid auth_date")
 	}
 	if time.Now().Unix()-authDate > 86400 {
-		return 0, "", fmt.Errorf("initData expired")
+		return 0, "", "", time.Time{}, fmt.Errorf("initData expired")
 	}
+	expiresAt := time.Unix(authDate, 0).Add(24 * time.Hour)
 
 	// Extract user ID
 	userStr := values.Get("user")
 	if userStr == "" {
-		return 0, "", fmt.Errorf("user data missing")
+		return 0, "", "", time.Time{}, fmt.Errorf("user data missing")
 	}
 
 	// Simple JSON parsing to get ID
@@ -373,8 +454,8 @@ func validateInitData(initData string, botToken string) (int64, string, error) {
 		Username string `json:"username"`
 	}
 	if err := json.Unmarshal([]byte(userStr), &user); err != nil {
-		return 0, "", err
+		return 0, "", "", time.Time{}, err
 	}
 
-	return user.ID, user.Username, nil
+	return user.ID, user.Username, hash, expiresAt, nil
 }
