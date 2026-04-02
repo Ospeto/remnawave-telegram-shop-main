@@ -18,10 +18,13 @@ import (
 )
 
 type fakeConfigStore struct {
+	mu     sync.Mutex
 	values map[string]string
 }
 
 func (f *fakeConfigStore) Get(_ context.Context, key string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if value, ok := f.values[key]; ok {
 		return value, nil
 	}
@@ -29,8 +32,22 @@ func (f *fakeConfigStore) Get(_ context.Context, key string) (string, error) {
 }
 
 func (f *fakeConfigStore) Set(_ context.Context, key, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.values[key] = value
 	return nil
+}
+
+func (f *fakeConfigStore) CompareAndSwap(_ context.Context, key string, expected string, value string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	current := f.values[key]
+	if current != expected {
+		return false, nil
+	}
+	f.values[key] = value
+	return true, nil
 }
 
 func TestCreateBackupAndRetention(t *testing.T) {
@@ -161,8 +178,9 @@ func TestRunScheduledBackupIfDue(t *testing.T) {
 		Enabled:             true,
 	})
 	loc, _ := time.LoadLocation("Asia/Rangoon")
+	currentTime := time.Date(2026, 4, 1, 0, 10, 0, 0, loc)
 	svc.nowFn = func() time.Time {
-		return time.Date(2026, 4, 1, 0, 10, 0, 0, loc)
+		return currentTime
 	}
 	svc.dumpFn = func(_ context.Context, _ string, output io.Writer) error {
 		_, err := output.Write([]byte("SELECT now();"))
@@ -265,8 +283,9 @@ func TestRunScheduledBackupIfDueFailureNotification(t *testing.T) {
 		SendToTelegram:      true,
 	})
 	loc, _ := time.LoadLocation("Asia/Rangoon")
+	currentTime := time.Date(2026, 4, 1, 0, 10, 0, 0, loc)
 	svc.nowFn = func() time.Time {
-		return time.Date(2026, 4, 1, 0, 10, 0, 0, loc)
+		return currentTime
 	}
 	svc.dumpFn = func(_ context.Context, _ string, _ io.Writer) error {
 		return errors.New("dump failed")
@@ -284,6 +303,117 @@ func TestRunScheduledBackupIfDueFailureNotification(t *testing.T) {
 	}
 	if _, ok := store.values[keyBackupLastScheduledDate]; ok {
 		t.Fatal("scheduled date should not be persisted when backup creation fails")
+	}
+}
+
+func TestRunScheduledBackupIfDueRetriesSameDayAfterUploadFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := &fakeConfigStore{values: map[string]string{
+		keyBackupEnabled:        "true",
+		keyBackupScheduleTime:   "00:10",
+		keyBackupSendToTelegram: "true",
+	}}
+	svc := NewService(store, Options{
+		DatabaseURL:         "postgres://example",
+		BackupDir:           dir,
+		Timezone:            "Asia/Rangoon",
+		DefaultScheduleTime: "00:10",
+		Enabled:             true,
+		SendToTelegram:      true,
+	})
+	loc, _ := time.LoadLocation("Asia/Rangoon")
+	currentTime := time.Date(2026, 4, 1, 0, 10, 0, 0, loc)
+	svc.nowFn = func() time.Time {
+		return currentTime
+	}
+	svc.dumpFn = func(_ context.Context, _ string, output io.Writer) error {
+		_, err := output.Write([]byte("SELECT retry();"))
+		return err
+	}
+
+	failingTG := &fakeTelegramClient{sendDocumentErr: errors.New("telegram unavailable")}
+	if err := svc.RunScheduledBackupIfDue(context.Background(), failingTG, 777); err == nil {
+		t.Fatal("first RunScheduledBackupIfDue() expected upload error")
+	}
+	if got := store.values[keyBackupLastScheduledDate]; got != "" {
+		t.Fatalf("scheduled date should stay unset after upload failure, got %q", got)
+	}
+
+	currentTime = time.Date(2026, 4, 1, 0, 11, 1, 0, loc)
+	successTG := &fakeTelegramClient{}
+	if err := svc.RunScheduledBackupIfDue(context.Background(), successTG, 777); err != nil {
+		t.Fatalf("second RunScheduledBackupIfDue() error = %v", err)
+	}
+	if successTG.documentCount != 1 {
+		t.Fatalf("expected retry to upload one backup document, got %d", successTG.documentCount)
+	}
+	if got := store.values[keyBackupLastScheduledDate]; got != "2026-04-01" {
+		t.Fatalf("expected scheduled date after successful retry, got %q", got)
+	}
+}
+
+func TestRunScheduledBackupIfDueSingleClaimAcrossServices(t *testing.T) {
+	dir := t.TempDir()
+	store := &fakeConfigStore{values: map[string]string{
+		keyBackupEnabled:        "true",
+		keyBackupScheduleTime:   "00:10",
+		keyBackupSendToTelegram: "false",
+	}}
+	opts := Options{
+		DatabaseURL:         "postgres://example",
+		BackupDir:           dir,
+		Timezone:            "Asia/Rangoon",
+		DefaultScheduleTime: "00:10",
+		Enabled:             true,
+		JobTimeout:          time.Minute,
+	}
+
+	loc, _ := time.LoadLocation("Asia/Rangoon")
+	release := make(chan struct{})
+	var dumpCalls int
+	var dumpMu sync.Mutex
+
+	makeSvc := func(now time.Time) *Service {
+		svc := NewService(store, opts)
+		svc.nowFn = func() time.Time {
+			return now
+		}
+		svc.dumpFn = func(_ context.Context, _ string, output io.Writer) error {
+			dumpMu.Lock()
+			dumpCalls++
+			dumpMu.Unlock()
+			<-release
+			_, err := output.Write([]byte("SELECT once();"))
+			return err
+		}
+		return svc
+	}
+
+	svcA := makeSvc(time.Date(2026, 4, 1, 0, 10, 0, 0, loc))
+	svcB := makeSvc(time.Date(2026, 4, 1, 0, 10, 1, 0, loc))
+
+	errs := make(chan error, 2)
+	go func() {
+		errs <- svcA.RunScheduledBackupIfDue(context.Background(), &fakeTelegramClient{}, 1)
+	}()
+	go func() {
+		errs <- svcB.RunScheduledBackupIfDue(context.Background(), &fakeTelegramClient{}, 1)
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	close(release)
+
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("RunScheduledBackupIfDue() concurrent error = %v", err)
+		}
+	}
+
+	dumpMu.Lock()
+	gotCalls := dumpCalls
+	dumpMu.Unlock()
+	if gotCalls != 1 {
+		t.Fatalf("expected exactly one scheduled dump across services, got %d", gotCalls)
 	}
 }
 
