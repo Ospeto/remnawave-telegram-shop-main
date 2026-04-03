@@ -12,6 +12,68 @@ import (
 	"github.com/jackc/pgconn"
 )
 
+func TestCanonicalCustomerSubscriptionStatePrefersLatestExpiryKey(t *testing.T) {
+	now := time.Now()
+	earlier := now.Add(24 * time.Hour)
+	later := now.Add(72 * time.Hour)
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:              1,
+			SubscriptionURL: "https://example.com/early",
+			ExpireAt:        &earlier,
+			Status:          "active",
+			CreatedAt:       now.Add(-2 * time.Hour),
+		},
+		{
+			ID:              2,
+			SubscriptionURL: "https://example.com/late",
+			ExpireAt:        &later,
+			Status:          "active",
+			CreatedAt:       now.Add(-1 * time.Hour),
+		},
+	}, "https://example.com/fallback", now.Add(12*time.Hour))
+
+	if link == nil || *link != "https://example.com/late" {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want latest key URL", link)
+	}
+	if expireAt == nil || !expireAt.Equal(later) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want %v", expireAt, later)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionStateUsesFallbackWhenKeyMissing(t *testing.T) {
+	fallbackExpireAt := time.Now().Add(48 * time.Hour)
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:        1,
+			Status:    "deleted",
+			CreatedAt: time.Now(),
+		},
+	}, "https://example.com/fallback", fallbackExpireAt)
+
+	if link == nil || *link != "https://example.com/fallback" {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want fallback URL", link)
+	}
+	if expireAt == nil || !expireAt.Equal(fallbackExpireAt) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want fallback expiry", expireAt)
+	}
+}
+
+func TestCustomerForPostPurchaseNotificationsFallsBackToOriginal(t *testing.T) {
+	original := &database.Customer{ID: 1, TelegramID: 123, Language: "en"}
+
+	if got := customerForPostPurchaseNotifications(original, nil); got != original {
+		t.Fatalf("customerForPostPurchaseNotifications() = %v, want original customer", got)
+	}
+
+	refreshed := &database.Customer{ID: 1, TelegramID: 456, Language: "my"}
+	if got := customerForPostPurchaseNotifications(original, refreshed); got != refreshed {
+		t.Fatalf("customerForPostPurchaseNotifications() = %v, want refreshed customer", got)
+	}
+}
+
 func TestNormalizePhone(t *testing.T) {
 	tests := []struct {
 		name  string

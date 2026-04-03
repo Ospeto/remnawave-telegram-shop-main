@@ -101,6 +101,21 @@ func requestFingerprint(r *http.Request) string {
 	return getIP(r) + "|" + strings.TrimSpace(r.UserAgent())
 }
 
+func isSupportedRedirectTarget(target string) bool {
+	return strings.HasPrefix(target, "happ://") || strings.HasPrefix(target, "happproxy://")
+}
+
+func extractRedirectSubscriptionURL(target string) string {
+	switch {
+	case strings.HasPrefix(target, "happ://add/"):
+		return strings.TrimPrefix(target, "happ://add/")
+	case strings.HasPrefix(target, "happproxy://add/"):
+		return strings.TrimPrefix(target, "happproxy://add/")
+	default:
+		return ""
+	}
+}
+
 func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface, referralRepo *database.ReferralRepository) {
 	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo)
 
@@ -145,13 +160,11 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 			http.Error(w, "Missing url parameter", http.StatusBadRequest)
 			return
 		}
-		// Only allow happ:// scheme for security
-		if !strings.HasPrefix(target, "happ://") {
+		if !isSupportedRedirectTarget(target) {
 			http.Error(w, "Unsupported URL scheme", http.StatusBadRequest)
 			return
 		}
-		// Extract the subscription URL from the deep link for copy fallback
-		subURL := strings.TrimPrefix(target, "happ://add/")
+		subURL := extractRedirectSubscriptionURL(target)
 
 		page, err := renderRedirectPage(target, subURL)
 		if err != nil {

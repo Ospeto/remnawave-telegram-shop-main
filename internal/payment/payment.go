@@ -526,6 +526,72 @@ type KeyStats struct {
 	Status            string
 }
 
+func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbackURL string, fallbackExpireAt time.Time) (*string, *time.Time) {
+	var bestURL *string
+	var bestExpire *time.Time
+	var bestCreatedAt time.Time
+
+	if strings.TrimSpace(fallbackURL) != "" {
+		fallbackURLCopy := fallbackURL
+		bestURL = &fallbackURLCopy
+	}
+	if !fallbackExpireAt.IsZero() {
+		fallbackExpireCopy := fallbackExpireAt
+		bestExpire = &fallbackExpireCopy
+	}
+
+	for _, key := range keys {
+		if key.Status == "deleted" || key.ExpireAt == nil {
+			continue
+		}
+
+		if bestExpire != nil {
+			if key.ExpireAt.Before(*bestExpire) {
+				continue
+			}
+			if key.ExpireAt.Equal(*bestExpire) && !key.CreatedAt.After(bestCreatedAt) {
+				continue
+			}
+		}
+
+		expireCopy := *key.ExpireAt
+		bestExpire = &expireCopy
+		if strings.TrimSpace(key.SubscriptionURL) != "" {
+			urlCopy := key.SubscriptionURL
+			bestURL = &urlCopy
+		} else {
+			bestURL = nil
+		}
+		bestCreatedAt = key.CreatedAt
+	}
+
+	return bestURL, bestExpire
+}
+
+func customerForPostPurchaseNotifications(original, refreshed *database.Customer) *database.Customer {
+	if refreshed != nil {
+		return refreshed
+	}
+	return original
+}
+
+func (s *PaymentService) syncCustomerCanonicalSubscriptionState(ctx context.Context, customerID int64, fallbackURL string, fallbackExpireAt time.Time) error {
+	link, expireAt := canonicalCustomerSubscriptionState(nil, fallbackURL, fallbackExpireAt)
+	if s.subKeyRepo != nil {
+		keys, err := s.subKeyRepo.FindByCustomerID(ctx, customerID)
+		if err != nil {
+			return err
+		}
+		link, expireAt = canonicalCustomerSubscriptionState(keys, fallbackURL, fallbackExpireAt)
+	}
+
+	updates := map[string]interface{}{
+		"subscription_link": link,
+		"expire_at":         expireAt,
+	}
+	return s.customerRepository.UpdateFields(ctx, customerID, updates)
+}
+
 func (s *PaymentService) restorePurchaseState(ctx context.Context, purchaseID int64, status database.PurchaseStatus) {
 	if status == database.PurchaseStatusPaid {
 		return
@@ -690,6 +756,11 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		}
 		slog.Info("Wallet top-up successful", "purchase_id", purchaseId, "amount", purchase.Amount, "customer_id", customer.ID)
 	} else if purchase.ExtendKeyID != nil {
+		if s.subKeyRepo == nil {
+			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+			return fmt.Errorf("subscription key repository is not configured")
+		}
+
 		// EXTEND existing key
 		existingKey, err := s.subKeyRepo.FindByID(ctx, *purchase.ExtendKeyID)
 		if err != nil || existingKey == nil {
@@ -714,13 +785,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				slog.Error("Failed to update subscription URL (non-fatal)", "key_id", existingKey.ID, "error", err)
 			}
 		}
-		// Update customer expire_at to the latest
-		customerFilesToUpdate := map[string]interface{}{
-			"subscription_link": remnawaveUser.SubscriptionUrl,
-			"expire_at":         remnawaveUser.ExpireAt,
-		}
-		if err := s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate); err != nil {
-			slog.Error("Failed to update customer fields after extend (non-fatal)", "error", err)
+
+		if err := s.syncCustomerCanonicalSubscriptionState(ctx, customer.ID, remnawaveUser.SubscriptionUrl, remnawaveUser.ExpireAt); err != nil {
+			slog.Error("Failed to sync customer fields after extend (non-fatal)", "error", err)
 		}
 	} else {
 		// CREATE new key — always creates a fresh Remnawave user
@@ -768,13 +835,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				// local rows from Remnawave and will recover this mismatch.
 			}
 		}
-		// Update customer
-		customerFilesToUpdate := map[string]interface{}{
-			"subscription_link": remnawaveUser.SubscriptionUrl,
-			"expire_at":         remnawaveUser.ExpireAt,
-		}
-		if err := s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate); err != nil {
-			slog.Error("Failed to update customer fields after create (non-fatal)", "error", err)
+
+		if err := s.syncCustomerCanonicalSubscriptionState(ctx, customer.ID, remnawaveUser.SubscriptionUrl, remnawaveUser.ExpireAt); err != nil {
+			slog.Error("Failed to sync customer fields after create (non-fatal)", "error", err)
 		}
 	}
 
@@ -789,24 +852,27 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	// Telegram notification and referral bonus are best-effort.
 	// Failures here should NOT prevent the user from getting their key.
 
-	// Refresh customer
-	customer, err = s.customerRepository.FindById(ctx, customer.ID)
-	if err != nil {
-		slog.Error("Error refreshing customer after purchase (non-fatal)", "error", err)
+	notifyCustomer := customer
+	refreshedCustomer, refreshErr := s.customerRepository.FindById(ctx, customer.ID)
+	if refreshErr != nil {
+		slog.Error("Error refreshing customer after purchase (non-fatal)", "error", refreshErr)
+	} else if refreshedCustomer == nil {
+		slog.Error("Refreshed customer missing after purchase (non-fatal)", "customer_id", customer.ID)
 	}
+	notifyCustomer = customerForPostPurchaseNotifications(customer, refreshedCustomer)
 
 	if _, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: customer.TelegramID,
-		Text:   s.translation.GetText(customer.Language, "subscription_activated"),
+		ChatID: notifyCustomer.TelegramID,
+		Text:   s.translation.GetText(notifyCustomer.Language, "subscription_activated"),
 		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: s.createConnectKeyboard(customer),
+			InlineKeyboard: s.createConnectKeyboard(notifyCustomer),
 		},
 	}); err != nil {
 		slog.Error("Failed to send activation message (non-fatal)", "error", err, "purchase_id", purchaseId)
 	}
 
 	// Referral bonus — completely non-fatal
-	s.processReferralBonus(ctx, customer)
+	s.processReferralBonus(ctx, notifyCustomer)
 
 	return nil
 }
@@ -1025,6 +1091,10 @@ func (s *PaymentService) createConnectKeyboard(customer *database.Customer) [][]
 }
 
 func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string) (url string, purchaseId int64, err error) {
+	return s.createPurchaseWithOptionalExtend(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode, nil)
+}
+
+func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	var promoID *int64
 	var promoClaimed bool
 	if invoiceType != database.InvoiceTypeWalletTopUp {
@@ -1037,14 +1107,14 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 	}()
 
 	if amount <= 0 {
-		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoID)
+		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoID, extendKeyID)
 	}
 
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
-		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID)
+		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID, extendKeyID)
 	case database.InvoiceTypeMobileBanking:
-		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
+		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID, extendKeyID)
 	case database.InvoiceTypeWalletTopUp:
 		return s.createWalletTopUpInvoice(ctx, amount, customer, promoID)
 	case database.InvoiceTypeWalletPayment:
@@ -1055,7 +1125,18 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 	}
 }
 
-func (s *PaymentService) createFreePurchase(ctx context.Context, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) CreatePurchaseWithExtendForInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, keyID int64) (url string, purchaseId int64, err error) {
+	if invoiceType == database.InvoiceTypeWalletTopUp {
+		return "", 0, fmt.Errorf("extend is not supported for wallet top-up")
+	}
+	if invoiceType == database.InvoiceTypeWalletPayment {
+		return s.CreatePurchaseWithExtend(ctx, amount, days, trafficLimitGB, customer, keyID, promoCode)
+	}
+
+	return s.createPurchaseWithOptionalExtend(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode, &keyID)
+}
+
+func (s *PaymentService) createFreePurchase(ctx context.Context, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeWalletPayment, // Treat free purchases like wallet payments
 		Status:         database.PurchaseStatusNew,
@@ -1065,6 +1146,7 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    extendKeyID,
 		PromoCodeID:    promoID,
 	})
 	if err != nil {
@@ -1088,7 +1170,7 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 	return "", purchaseId, nil
 }
 
-func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeCrypto,
 		Status:         database.PurchaseStatusNew,
@@ -1098,6 +1180,7 @@ func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    extendKeyID,
 		PromoCodeID:    promoID,
 	})
 	if err != nil {
@@ -1182,7 +1265,7 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 
 }
 
-func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	if len(GetEnabledPaymentProviders()) == 0 {
 		return "", 0, fmt.Errorf("no mobile banking accounts configured")
 	}
@@ -1196,6 +1279,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    extendKeyID,
 		PromoCodeID:    promoID,
 	})
 	if err != nil {

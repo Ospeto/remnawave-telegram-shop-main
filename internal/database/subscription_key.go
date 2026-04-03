@@ -36,6 +36,22 @@ func NewSubscriptionKeyRepository(pool *pgxpool.Pool) *SubscriptionKeyRepository
 	return &SubscriptionKeyRepository{pool: pool}
 }
 
+func PrimarySubscriptionKey(keys []SubscriptionKey) *SubscriptionKey {
+	var best *SubscriptionKey
+
+	for i := range keys {
+		key := &keys[i]
+		if key.Status == "deleted" || key.ExpireAt == nil {
+			continue
+		}
+		if best == nil || key.ExpireAt.After(*best.ExpireAt) || (key.ExpireAt.Equal(*best.ExpireAt) && key.CreatedAt.After(best.CreatedAt)) {
+			best = key
+		}
+	}
+
+	return best
+}
+
 var subKeyColumns = []string{
 	"id", "customer_id", "remnawave_uuid", "username",
 	"subscription_url", "expire_at", "status", "created_at", "label",

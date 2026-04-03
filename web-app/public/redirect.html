@@ -11,9 +11,9 @@
     <script>
         const params = new URLSearchParams(window.location.search);
         const url = params.get('url');
-        // Only allow happ:// and happproxy:// deep-link schemes
         if (url && (url.startsWith('happ://') || url.startsWith('happproxy://'))) {
-            window.location.replace(url);
+            const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(url)}`;
+            window.location.replace(redirectUrl);
         } else {
             document.body.textContent = 'Invalid or missing URL.';
         }

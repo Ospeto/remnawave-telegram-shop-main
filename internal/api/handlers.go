@@ -322,10 +322,17 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var purchaseID int64
-	if req.ExtendKeyID != nil && invoiceType == database.InvoiceTypeWalletPayment {
-		_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(ctx, price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
+	if req.ExtendKeyID != nil {
+		switch invoiceType {
+		case database.InvoiceTypeWalletPayment:
+			_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(ctx, price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
+		case database.InvoiceTypeWalletTopUp:
+			http.Error(w, "extend_key_id is not valid for wallet top-up", http.StatusBadRequest)
+			return
+		default:
+			_, purchaseID, err = h.paymentService.CreatePurchaseWithExtendForInvoice(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode, *req.ExtendKeyID)
+		}
 	} else {
-		// Delegate to PaymentService with Promo Code
 		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
@@ -344,9 +351,6 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	updateFields := map[string]interface{}{
 		"plan_label":    label,
 		"payment_phone": payment.GetFirstPaymentPhone(),
-	}
-	if req.ExtendKeyID != nil && invoiceType != database.InvoiceTypeWalletPayment {
-		updateFields["extend_key_id"] = *req.ExtendKeyID
 	}
 	if err := h.paymentService.UpdatePurchaseFields(ctx, purchaseID, updateFields); err != nil {
 		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
@@ -418,13 +422,6 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isActive := false
-	daysRemaining := 0
-	if customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
-		isActive = true
-		daysRemaining = int(time.Until(*customer.ExpireAt).Hours() / 24)
-	}
-
 	var keys []KeyResponse
 	const bytesInGB = 1073741824.0
 
@@ -444,6 +441,21 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 		if len(localKeys) > 0 {
 			hasMigratedKeys = true
+		}
+		if hasMigratedKeys {
+			primaryKey := database.PrimarySubscriptionKey(localKeys)
+			if primaryKey == nil {
+				customer.SubscriptionLink = nil
+				customer.ExpireAt = nil
+			} else {
+				if strings.TrimSpace(primaryKey.SubscriptionURL) == "" {
+					customer.SubscriptionLink = nil
+				} else {
+					link := primaryKey.SubscriptionURL
+					customer.SubscriptionLink = &link
+				}
+				customer.ExpireAt = primaryKey.ExpireAt
+			}
 		}
 		for _, k := range localKeys {
 			if k.Status == "deleted" {
@@ -477,6 +489,13 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				AutoRenew:       k.AutoRenew,
 			})
 		}
+	}
+
+	isActive := false
+	daysRemaining := 0
+	if customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
+		isActive = true
+		daysRemaining = int(time.Until(*customer.ExpireAt).Hours() / 24)
 	}
 
 	// Legacy fallback: customer has subscription_link but no subscription_key rows (not migrated yet)

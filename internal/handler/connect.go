@@ -3,11 +3,10 @@ package handler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"remnawave-tg-shop-bot/internal/config"
 	"strings"
 	"time"
-
-	"log/slog"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -27,6 +26,7 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(update.Message.Chat.ID), "error", err)
 		return
 	}
+	h.applyCanonicalConnectState(ctx, customer)
 
 	langCode := update.Message.From.LanguageCode
 
@@ -79,6 +79,7 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(callback.Chat.ID), "error", err)
 		return
 	}
+	h.applyCanonicalConnectState(ctx, customer)
 
 	langCode := update.CallbackQuery.From.LanguageCode
 
@@ -151,4 +152,34 @@ func buildConnectText(customer *database.Customer, langCode string) string {
 	}
 
 	return info.String()
+}
+
+func (h Handler) applyCanonicalConnectState(ctx context.Context, customer *database.Customer) {
+	if h.subKeyRepo == nil || customer == nil {
+		return
+	}
+
+	keys, err := h.subKeyRepo.FindByCustomerID(ctx, customer.ID)
+	if err != nil {
+		slog.Error("Error loading subscription keys for connect flow", "customer_id", customer.ID, "error", err)
+		return
+	}
+	if len(keys) == 0 {
+		return
+	}
+
+	primaryKey := database.PrimarySubscriptionKey(keys)
+	if primaryKey == nil {
+		customer.SubscriptionLink = nil
+		customer.ExpireAt = nil
+		return
+	}
+
+	if strings.TrimSpace(primaryKey.SubscriptionURL) == "" {
+		customer.SubscriptionLink = nil
+	} else {
+		link := primaryKey.SubscriptionURL
+		customer.SubscriptionLink = &link
+	}
+	customer.ExpireAt = primaryKey.ExpireAt
 }

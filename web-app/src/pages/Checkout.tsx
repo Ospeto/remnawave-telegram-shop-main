@@ -7,6 +7,7 @@ import { ErrorScreen } from '../components/ErrorScreen';
 import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
+import { openHappLink } from '../lib/openHapp';
 
 interface PaymentProvider {
     key: string;
@@ -281,14 +282,7 @@ export function Checkout() {
     };
 
     const handleHappLink = (happUrl: string) => {
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = happUrl;
-        document.body.appendChild(iframe);
-        setTimeout(() => iframe.remove(), 3000);
-        const redirectUrl = `${window.location.origin}/redirect.html?url=${encodeURIComponent(happUrl)}`;
-        if (tg?.openLink) tg.openLink(redirectUrl);
-        else window.open(redirectUrl, '_blank');
+        openHappLink(happUrl, tg ?? null);
     };
 
     if (!initData) {

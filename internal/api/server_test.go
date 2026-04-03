@@ -84,3 +84,42 @@ func TestRenderRedirectPageUsesEncodedJSStrings(t *testing.T) {
 		t.Fatalf("renderRedirectPage() used query-escaped URL in output, expected JS string")
 	}
 }
+
+func TestRedirectHelpers(t *testing.T) {
+	tests := []struct {
+		name       string
+		target     string
+		wantValid  bool
+		wantSubURL string
+	}{
+		{
+			name:       "happ deep link",
+			target:     "happ://add/https://example.com/sub",
+			wantValid:  true,
+			wantSubURL: "https://example.com/sub",
+		},
+		{
+			name:       "happproxy deep link",
+			target:     "happproxy://add/https://example.com/sub",
+			wantValid:  true,
+			wantSubURL: "https://example.com/sub",
+		},
+		{
+			name:       "unsupported scheme",
+			target:     "https://example.com/sub",
+			wantValid:  false,
+			wantSubURL: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSupportedRedirectTarget(tt.target); got != tt.wantValid {
+				t.Fatalf("isSupportedRedirectTarget(%q) = %v, want %v", tt.target, got, tt.wantValid)
+			}
+			if got := extractRedirectSubscriptionURL(tt.target); got != tt.wantSubURL {
+				t.Fatalf("extractRedirectSubscriptionURL(%q) = %q, want %q", tt.target, got, tt.wantSubURL)
+			}
+		})
+	}
+}
