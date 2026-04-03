@@ -1,194 +1,600 @@
 # Remnawave Telegram Shop Bot
 
-A complete, self-hosted Telegram Shop Bot for selling digital goods (subscription keys) with automated delivery, multi-currency support, and a modern React-based Mini App UI.
+A self-hosted Telegram shop for selling Remnawave-backed digital subscriptions through a Telegram bot and Mini App.
 
-## Key Features
+It combines:
 
--   **Automated Sales**: Instant delivery of subscription keys (e.g., VPN keys, software licenses) via Remnawave API integration.
--   **Telegram Mini App**: A beautiful, responsive React frontend for browsing plans and managing subscriptions directly within Telegram.
--   **Multi-Payment Support**:
-    -   **CryptoPay**: Accept cryptocurrency payments automatically.
-    -   **Mobile Banking**: Semi-automated workflow for manual bank transfers (KPay, WavePay, etc.) with screenshot verification (AI-powered options available).
-    -   **Wallet System**: Built-in user wallet for top-ups and quick purchases.
--   **Referral System**: Built-in referral tracking and rewards.
--   **Admin Tools**: Manage plans, users, and broadcasts directly from Telegram or the database.
--   **Dockerized**: Easy deployment with `docker-compose`.
+- a Go backend for bot logic, payments, delivery, and operations
+- a React Mini App for plan browsing and checkout
+- PostgreSQL for state and transaction history
+- Caddy for HTTPS termination in the default deployment
 
-## Tech Stack
+This repository is intended for operators who want a production-capable Telegram sales flow without depending on a hosted storefront.
 
--   **Backend**: Go (Golang) 1.21+
--   **Frontend**: React 18, TypeScript, Vite, TailwindCSS (Telegram Mini App)
--   **Database**: PostgreSQL 16
--   **Infrastructure**: Docker & Docker Compose
--   **Reverse Proxy**: Caddy (Automatic HTTPS)
+## What It Does
+
+- sells subscription plans defined in environment configuration
+- provisions or extends access through the Remnawave API
+- supports multiple payment paths:
+  - Crypto Pay
+  - mobile banking with screenshot verification
+  - internal wallet top-ups and wallet purchases
+- supports promo codes, referral rewards, trials, and auto-renew toggles
+- exposes a Telegram Mini App UI for customer self-service
+- includes scheduled database backups and Telegram admin backup commands
+
+## Production Notes
+
+Recent hardening in this codebase includes:
+
+- idempotent purchase creation for API and Telegram callback flows
+- atomic wallet charging and wallet ledger writes
+- purchase processing state before final `paid` transition
+- promo usage reservation at purchase creation to prevent oversell
+- screenshot verification throttling for repeated uploads
+- panic recovery and timeout guards around scheduled jobs
+- HTTP server read, write, and idle timeouts
+- stricter replay protection for Telegram Mini App auth
+- safer forwarded-header trust defaults
+
+If you are deploying for real users, read the `Configuration`, `Payments`, `Backups`, and `Operations` sections carefully.
+
+## Architecture
+
+### Runtime Components
+
+- `bot`: Go application
+  - runs Telegram long polling
+  - serves the Mini App build and JSON API
+  - runs DB migrations on startup
+  - executes scheduled jobs for invoices, auto-renew, reports, backups, and subscription checks
+- `db`: PostgreSQL
+- `caddy`: reverse proxy with automatic HTTPS
+
+### Request Flow
+
+1. A user opens the bot or Mini App from Telegram.
+2. The Mini App calls the backend API under the same origin.
+3. The backend authenticates Mini App requests using Telegram `initData`.
+4. Purchases are created and processed through payment services.
+5. Subscription creation or extension is executed through Remnawave.
+6. Purchase state, wallet entries, referrals, and audit data are stored in PostgreSQL.
+
+### Repository Layout
+
+```text
+.
+├── cmd/
+│   ├── app/                  # Main application entrypoint
+│   └── reset_db/             # DB reset utility
+├── db/
+│   └── migrations/           # SQL migrations
+├── internal/
+│   ├── api/                  # HTTP API and Mini App auth
+│   ├── cache/                # Runtime caches
+│   ├── config/               # Environment loading and validation
+│   ├── cryptopay/            # Crypto Pay client logic
+│   ├── database/             # Repositories and DB helpers
+│   ├── gemini/               # Screenshot-analysis providers and analyzer
+│   ├── handler/              # Telegram command and callback handlers
+│   ├── notification/         # Subscription notifications
+│   ├── payment/              # Purchase creation and fulfillment logic
+│   ├── remnawave/            # Remnawave API integration
+│   └── service/              # Backup, auto-renew, invoice checker, wallet, etc.
+├── translations/             # Localization files mounted into the container
+├── web-app/                  # React Mini App
+├── Caddyfile
+├── Dockerfile
+├── docker-compose.yaml
+├── setup.sh                  # Interactive setup and maintenance wizard
+└── .env.sample
+```
+
+## Stack
+
+- Go `1.25.3`
+- Node.js `20` for the frontend build stage
+- React `18`
+- TypeScript
+- Vite
+- PostgreSQL `17` in the default compose stack
+- Caddy `2`
 
 ## Prerequisites
 
--   **Docker** and **Docker Compose** installed on your server or local machine.
--   A **Telegram Bot Token** (from [@BotFather](https://t.me/BotFather)).
--   A **Remnawave Panel** URL and API Token (for key generation).
--   *(Optional)* **CryptoPay** API Token for crypto payments.
--   *(Optional)* **OpenRouter API Key** for AI verification of payment screenshots.
+You need:
 
-## Getting Started
+- Docker and Docker Compose plugin, or legacy `docker-compose`
+- a Telegram bot token from [@BotFather](https://t.me/BotFather)
+- your Telegram numeric ID for admin access
+- a Remnawave panel URL and API token
+- a public domain name if you want the Mini App exposed over HTTPS
 
-The project includes an interactive setup wizard to get you running in minutes.
+Optional, depending on the payment features you enable:
 
-### 1. Clone the Repository
+- Crypto Pay token
+- OpenRouter API key
+- Gemini API key
+
+## Quick Start
+
+### Recommended: Setup Wizard
+
+The repository includes an interactive installer and maintenance script.
 
 ```bash
 git clone https://github.com/Ospeto/remnawave-telegram-shop-main.git
 cd remnawave-telegram-shop-main
-```
-
-### 2. Run the Setup Wizard
-
-This script will guide you through configuration, environment setup, and deployment.
-
-```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-Select **Option 1 (Fresh Install)** and answer the prompts.
+Use `Fresh Install` from the menu and fill in the required values.
 
-### 3. Manual Configuration (Alternative)
+The wizard can:
 
-If you prefer determining settings manually:
+- create or update `.env`
+- detect Docker Compose style
+- build and start the stack
+- edit payment and backup settings later
+- create full-system backups
+- restore from a previously created backup bundle
 
-1.  Copy `.env.example` to `.env`.
-2.  Edit `.env` with your credentials (`TELEGRAM_TOKEN`, `DATABASE_URL`, etc.).
-3.  Start services:
-    ```bash
-    docker-compose up -d --build
-    ```
+### Manual Docker Deployment
 
-### 4. Setup the Mini App
+1. Copy the sample environment.
 
-1.  Go to [@BotFather](https://t.me/BotFather) in Telegram.
-2.  Select your bot.
-3.  Go to **Bot Settings** -> **Menu Button** -> **Configure Menu Button**.
-4.  Send the URL of your deployed Mini App (e.g., `https://your-domain.com`).
-5.  Give the button a title (e.g., "Open Shop").
-
-## Architecture Overview
-
-### Directory Structure
-
-```
-├── cmd/                # Application entry points
-│   └── app/            # Main bot executable
-├── internal/           # Private application code
-│   ├── config/         # Configuration loading
-│   ├── database/       # Database access layer (Repositories)
-│   ├── handler/        # Telegram command & callback handlers
-│   ├── payment/        # Payment processing logic
-│   ├── remnawave/      # Remnawave API client
-│   └── service/        # Business logic services
-├── web-app/            # Frontend (React + Vite)
-│   ├── src/            # Source code
-│   └── dist/           # Built assets (served by Go backend)
-├── db/                 # Database migrations
-├── setup.sh            # Interactive deployment script
-├── docker-compose.yaml # Container orchestration
-└── Dockerfile          # Multi-stage build definition
+```bash
+cp .env.sample .env
 ```
 
-### Data Flow
+2. Edit `.env` with your real values.
 
+At minimum, configure:
+
+- `TELEGRAM_TOKEN`
+- `ADMIN_TELEGRAM_ID`
+- `DOMAIN_NAME`
+- `ACME_EMAIL`
+- `REMNAWAVE_URL`
+- `REMNAWAVE_TOKEN`
+- `PLANS`
+- `MINI_APP_URL`
+
+3. Start the stack.
+
+```bash
+docker compose up -d --build
 ```
-User → Telegram Bot (Command/Mini App)
-↓
-Go Backend (Webhook/Polling)
-↓
-PostgreSQL (State/Transactions) ←→ Remnawave API (Key Management)
+
+If you use legacy Compose:
+
+```bash
+docker-compose up -d --build
 ```
 
-## Environment Variables
+4. Follow logs if needed.
 
-Key variables used in `.env`:
+```bash
+docker compose logs -f bot
+docker compose logs -f caddy
+docker compose logs -f db
+```
 
-| Variable | Description |
-| :--- | :--- |
-| `TELEGRAM_TOKEN` | Bot API token from BotFather |
-| `ADMIN_TELEGRAM_ID` | Your Telegram numeric ID for admin commands |
-| `REMNAWAVE_URL` | URL of your Remnawave panel |
-| `REMNAWAVE_TOKEN` | Admin API token for Remnawave |
-| `DATABASE_URL` | Connection string `postgres://user:pass@host:5432/db` |
-| `PLANS` | Config string for subscription plans |
-| `DOMAIN_NAME` | Your domain for Caddy (SSL) |
+## Telegram Setup
 
-### Mobile Banking Screenshot Verification
+### Create and Configure the Bot
 
-Mobile banking screenshot checks use OpenRouter by default.
+1. Create a bot with [@BotFather](https://t.me/BotFather).
+2. Put the token in `TELEGRAM_TOKEN`.
+3. Put your own numeric Telegram ID in `ADMIN_TELEGRAM_ID`.
 
-| Variable | Description |
-| :--- | :--- |
-| `OPENROUTER_API_KEY` | Required when mobile banking screenshot verification is enabled |
-| `OPENROUTER_MODEL` | OpenRouter vision model used for screenshot analysis |
-| `OPENROUTER_FALLBACK_MODEL` | Optional OpenRouter fallback model, typically `google/gemini-3.1-flash-lite-preview` |
-| `VISION_PROVIDER_FALLBACK` | Optional secondary provider; use `openrouter` when `OPENROUTER_FALLBACK_MODEL` is configured, or leave empty for OpenRouter-only mode |
-| `VISION_RETRY_ATTEMPTS` | Retries per provider before failover to the fallback provider |
-| `VISION_RETRY_MAX_ATTEMPTS` | Total screenshot-analysis attempts per upload, including retries and fallback attempts |
+### Configure the Mini App / Menu Button
 
-Practical notes for operators:
+1. Open your bot in BotFather.
+2. Go to `Bot Settings`.
+3. Configure the menu button with your Mini App URL.
+4. Set the URL to the same HTTPS origin you deploy for the app, for example:
 
--   `openai/gpt-4.1-mini` is the default OpenRouter model because it is a strong reliability/cost balance for screenshot extraction.
--   `google/gemini-3.1-flash-lite-preview` is the default OpenRouter fallback model when fallback is enabled.
--   A screenshot that fails business validation does not become valid just because fallback is configured.
--   For an OpenRouter-only setup, leave `OPENROUTER_FALLBACK_MODEL` empty and set `VISION_PROVIDER_FALLBACK` empty with `VISION_RETRY_MAX_ATTEMPTS=2`.
--   For OpenRouter plus OpenRouter-fallback-model, set `OPENROUTER_FALLBACK_MODEL` and use `VISION_PROVIDER_FALLBACK=openrouter` with `VISION_RETRY_MAX_ATTEMPTS=3`.
--   `./setup.sh` fresh install and `Edit Payment Settings` both expose these values directly.
+```text
+https://shop.example.com
+```
 
-### Backup And Restore Configuration
+Also set:
 
-Bot-managed DB backup uses PostgreSQL client tools inside the bot container and stores local backup artifacts in the `/backups` volume. Live restore execution through the running bot is disabled for safety and must be performed offline/manual while the app is stopped.
+- `DOMAIN_NAME=shop.example.com`
+- `MINI_APP_URL=https://shop.example.com`
 
-Recommended backup-related variables:
+If `MINI_APP_URL` is left empty, the Mini App link is effectively disabled.
 
-| Variable | Description |
-| :--- | :--- |
-| `BACKUP_ENABLED` | Enable or disable scheduled daily DB backups |
-| `BACKUP_SCHEDULE_CRON` | Daily backup cron expression |
-| `BACKUP_TIMEZONE` | Timezone for backup schedule, e.g. `Asia/Rangoon` |
-| `BACKUP_DIR` | In-container backup directory, default `/backups` |
-| `BACKUP_RETENTION_DAYS` | Retention window for local backup files |
-| `BACKUP_MAX_LOCAL_FILES` | Max number of local backups to keep |
-| `BACKUP_SEND_TO_TELEGRAM` | Send successful backups to `ADMIN_TELEGRAM_ID` |
-| `BACKUP_RESTORE_ENABLED` | Controls restore-related settings and offline recovery workflows; live restore execution remains disabled in the running bot |
-| `BACKUP_CONFIRM_TTL_MINUTES` | Confirmation-token lifetime for restore |
-| `BACKUP_JOB_TIMEOUT_SECONDS` | Timeout for dump/compress/send jobs |
-| `BACKUP_RESTORE_TIMEOUT_SECONDS` | Timeout for restore jobs |
+## Configuration
 
-### Admin Backup Commands
+The full template lives in [.env.sample](.env.sample).
 
-The backup/restore feature is operated from the admin Telegram account:
+### Core Required Variables
 
-- `/backup now`: Create a DB backup immediately and send it to admin chat.
-- `/backup status`: Show last successful backup, retention, and next run.
-- `/backup list`: List local backup artifacts available for restore.
-- `/backup enable` / `/backup disable`: Turn scheduled backups on or off.
-- `/backup schedule` or `/backup schedule HH:MM`: Show or update the daily schedule.
-- `/restore list`: Show local backup files available for offline/manual restore.
-- `/restore latest`, `/restore file <name>`, `/restore confirm <token>`, `/restore cancel`: Disabled in the live runtime; stop the app and use an offline/manual restore workflow instead.
+| Variable | Purpose |
+| --- | --- |
+| `TELEGRAM_TOKEN` | Bot token from BotFather |
+| `ADMIN_TELEGRAM_ID` | Telegram user ID allowed to run admin commands |
+| `REMNAWAVE_URL` | Remnawave panel base URL |
+| `REMNAWAVE_TOKEN` | Remnawave API token |
+| `PLANS` | Comma-separated plan definitions: `Label|Days|Price|TrafficGB` |
+| `DATABASE_URL` | PostgreSQL connection string |
 
-## Backup & Restore
+### Domain and Web App
 
-The `setup.sh` script includes built-in tools for migration:
+| Variable | Purpose |
+| --- | --- |
+| `DOMAIN_NAME` | Public domain used by Caddy |
+| `ACME_EMAIL` | Email for Caddy / Let's Encrypt |
+| `MINI_APP_URL` | Full HTTPS URL for the Telegram Mini App |
+| `HEALTH_CHECK_PORT` | Internal HTTP listen port, default `8080` |
+| `IS_WEB_APP_LINK` | Whether to present the web app as the primary user-facing link |
 
--   **Backup**: `./setup.sh` -> Option 9. Creates a tarball of DB, Config, and Certs.
--   **Restore**: `./setup.sh` -> Option 10. Restores a system from a backup tarball.
+### Remnawave
 
-For bot-managed operations, the runtime now includes PostgreSQL client tooling and the compose stack mounts a persistent `bot_backups` volume at `/backups`. The bot backup feature is DB-only; full-system backup of certs, translations, and `.env` remains a `setup.sh` workflow. Restores must be performed offline/manual while the app is stopped.
+| Variable | Purpose |
+| --- | --- |
+| `REMNAWAVE_MODE` | `remote` or `local` |
+| `REMNAWAVE_TAG` | Optional tag attached to generated subscriptions |
+| `TRIAL_REMNAWAVE_TAG` | Optional separate tag for trial users |
+| `REMNAWAVE_HEADERS` | Optional extra API headers in `key:value;key:value` format |
+| `SQUAD_UUIDS` | Comma-separated Remnawave squad UUIDs |
+| `EXTERNAL_SQUAD_UUID` | Optional external squad UUID |
+
+### Payments
+
+#### Crypto Pay
+
+| Variable | Purpose |
+| --- | --- |
+| `CRYPTO_PAY_ENABLED` | Enable or disable Crypto Pay |
+| `CRYPTO_PAY_TOKEN` | Crypto Pay API token |
+| `CRYPTO_PAY_URL` | Crypto Pay API base URL |
+
+#### Mobile Banking
+
+| Variable | Purpose |
+| --- | --- |
+| `MOBILE_BANKING_ENABLED` | Enable or disable mobile banking |
+| `MOBILE_BANKING_PHONE` | Default display phone number |
+| `OPENROUTER_API_KEY` | OpenRouter API key for screenshot verification |
+| `OPENROUTER_MODEL` | Primary OpenRouter model |
+| `OPENROUTER_FALLBACK_MODEL` | Optional fallback model via OpenRouter |
+| `VISION_PROVIDER_FALLBACK` | Fallback provider, for example `openrouter` or `gemini` |
+| `VISION_RETRY_ATTEMPTS` | Retries per provider before failover |
+| `VISION_RETRY_MAX_ATTEMPTS` | Total attempts across primary and fallback |
+
+Advanced note:
+
+- screenshot verification can use OpenRouter and Gemini-backed providers
+- the sample file is OpenRouter-first because that is the default production path in this repository
+- if you want Gemini available, configure `GEMINI_API_KEY` and optionally `GEMINI_MODEL`
+
+#### Wallet, Referrals, Trials
+
+| Variable | Purpose |
+| --- | --- |
+| `REFERRAL_DAYS` | Reward or extension window for referrals |
+| `TRIAL_DAYS` | Trial duration in days |
+| `TRIAL_TRAFFIC_LIMIT` | Trial traffic cap |
+| `TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY` | Trial reset strategy |
+
+### Optional External Links
+
+These show up in the user experience if set:
+
+- `SERVER_STATUS_URL`
+- `SUPPORT_URL`
+- `FEEDBACK_URL`
+- `CHANNEL_URL`
+- `TOS_URL`
+
+### Access Control
+
+| Variable | Purpose |
+| --- | --- |
+| `BLOCKED_TELEGRAM_IDS` | Comma-separated blocked user IDs |
+| `WHITELISTED_TELEGRAM_IDS` | Comma-separated allowlisted user IDs |
+
+### Backups
+
+| Variable | Purpose |
+| --- | --- |
+| `BACKUP_ENABLED` | Enable scheduled DB backups |
+| `BACKUP_SCHEDULE_CRON` | Daily cron expression |
+| `BACKUP_TIMEZONE` | Backup timezone |
+| `BACKUP_DIR` | In-container backup path, default `/backups` |
+| `BACKUP_RETENTION_DAYS` | Retention window |
+| `BACKUP_MAX_LOCAL_FILES` | Max number of local backup files |
+| `BACKUP_SEND_TO_TELEGRAM` | Send successful backups to admin chat |
+| `BACKUP_RESTORE_ENABLED` | Enables restore-related config, but live runtime restore remains disabled |
+| `BACKUP_CONFIRM_TTL_MINUTES` | Restore confirmation token lifetime |
+| `BACKUP_JOB_TIMEOUT_SECONDS` | Backup job timeout |
+| `BACKUP_RESTORE_TIMEOUT_SECONDS` | Restore timeout |
+
+### Reverse Proxy Header Trust
+
+By default, the app does not trust private-network `X-Forwarded-For` values unless you opt in.
+
+Set this only when you know your proxy chain is correct:
+
+```bash
+TRUST_PRIVATE_PROXY_HEADERS=true
+```
+
+This matters when you put another private reverse proxy in front of the bot or Caddy.
+
+## Payments and Checkout Flows
+
+### Crypto Pay
+
+- customer creates an invoice
+- the invoice checker confirms payment
+- the purchase is fulfilled automatically
+
+### Mobile Banking
+
+- customer selects a provider
+- customer transfers money manually
+- customer uploads a screenshot
+- screenshot analysis validates the payment details
+- purchase is fulfilled if verification succeeds
+
+The current runtime includes:
+
+- retry and fallback support for screenshot analyzers
+- throttling for repeated screenshot uploads on the same purchase
+- safer handling of overlapping verification attempts
+
+### Wallet
+
+- customer can top up wallet balance
+- wallet purchases reuse internal balance for fast checkout
+- wallet debit and wallet ledger insertion are handled atomically
+
+### Promo Codes and Referrals
+
+- promo validation is exposed through the Mini App API
+- promo usage is reserved when the purchase is created
+- referrals and wallet data are available through the API and Mini App
+
+## Reliability and Safety Behavior
+
+This codebase is opinionated about not losing money or silently mis-marking purchases.
+
+Important runtime behavior:
+
+- DB migrations run automatically on startup from [`db/migrations`](db/migrations)
+- purchase creation supports idempotency through the `Idempotency-Key` request header
+- wallet purchases are transactionally protected
+- purchases move through a processing state before being marked paid
+- scheduled jobs use timeout wrappers and panic recovery
+- the HTTP server uses read, write, header, and idle timeouts
+- Telegram Mini App auth is validated server-side and bound to a replay guard
+
+If you are building your own client instead of using the bundled Mini App, send a unique `Idempotency-Key` for purchase creation.
+
+## API Overview
+
+The Go app serves the Mini App and these API routes:
+
+| Route | Purpose |
+| --- | --- |
+| `/api/me` | Current authenticated customer |
+| `/api/plans` | Available plans |
+| `/api/purchase` | Create a purchase |
+| `/api/upload_screenshot` | Upload screenshot for mobile banking verification |
+| `/api/purchase/status` | Poll purchase state |
+| `/api/promo/validate` | Validate promo code |
+| `/api/trial` | Activate a trial |
+| `/api/wallet` | Wallet summary |
+| `/api/wallet/history` | Wallet transaction history |
+| `/api/wallet/autorenew` | Wallet-based auto-renew settings |
+| `/api/referrals` | Referral information |
+| `/api/keys/autorenew` | Per-key auto-renew settings |
+| `/api/revenue` | Admin revenue summary |
+| `/redirect` | Simple redirect helper |
+
+Notes:
+
+- Mini App auth uses Telegram `initData`
+- CORS allows `Authorization`, `Content-Type`, and `Idempotency-Key`
+- the frontend is served from `web-app/dist` with SPA fallback
+
+## Admin Commands
+
+The admin Telegram account can operate the bot from chat.
+
+Key commands include:
+
+- `/start`
+- `/setphone <provider> <number>`
+- `/setname <provider> <name>`
+- `/backup now`
+- `/backup status`
+- `/backup list`
+- `/backup enable`
+- `/backup disable`
+- `/backup schedule [HH:MM]`
+- `/restore list`
+
+Important restore note:
+
+- live runtime restore is intentionally disabled for safety
+- use `/restore list` to identify the backup you want
+- stop the app and perform the restore offline/manual
+
+## Backups and Restore
+
+There are two backup paths in this repository.
+
+### 1. Bot-Managed DB Backups
+
+The running bot can create scheduled or on-demand PostgreSQL backups into the `/backups` volume.
+
+The compose stack mounts:
+
+- `bot_backups:/backups`
+
+Use admin commands to trigger or inspect these backups.
+
+### 2. Full-System Backup via `setup.sh`
+
+The setup wizard can create and restore a broader archive that includes:
+
+- database dump
+- `.env`
+- `translations`
+- Caddy data
+
+Use the menu options in `setup.sh` for this workflow when doing environment migration or disaster recovery.
+
+### Restore Policy
+
+For safety, live runtime restore through the bot process is disabled.
+
+Recommended restore workflow:
+
+1. stop the app
+2. identify the backup to restore
+3. perform the restore offline/manual
+4. restart the app
+5. verify health endpoints and bot behavior
+
+## Health Checks and Operations
+
+### Health Endpoints
+
+- `/livez`: liveness probe
+- `/healthcheck`: dependency-aware health check
+
+The Docker healthcheck uses `/livez` on `127.0.0.1:${HEALTH_CHECK_PORT}`.
+
+### Logs
+
+```bash
+docker compose logs -f bot
+docker compose logs -f caddy
+docker compose logs -f db
+```
+
+### Upgrades
+
+The app runs SQL migrations automatically on startup, so a normal upgrade is:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+If you are doing a production update, verify:
+
+- `.env` changes are applied
+- the Mini App URL is still correct
+- payment provider credentials remain valid
+- backup schedules still match your expectations
+
+## Local Development
+
+### Backend
+
+The Go app expects the built frontend at `web-app/dist` when serving the Mini App.
+
+```bash
+cp .env.sample .env
+cd web-app
+npm ci
+npm run build
+cd ..
+go run ./cmd/app
+```
+
+### Frontend
+
+For frontend-only iteration:
+
+```bash
+cd web-app
+npm ci
+npm run dev
+```
+
+For end-to-end behavior, Docker Compose is still the recommended path because the Mini App depends on the Go backend and database.
+
+## Testing
+
+Backend:
+
+```bash
+go test ./...
+go test -race ./...
+```
+
+Frontend:
+
+```bash
+cd web-app
+npm test -- --run
+npm run build
+```
 
 ## Troubleshooting
 
--   **Bot not responding?** Check logs: `docker-compose logs -f bot`
--   **Backup commands fail with missing binaries?** Rebuild the bot image so the updated runtime layer with PostgreSQL client tools is applied: `docker-compose up -d --build bot`
--   **Backup file was not sent to Telegram?** Check bot logs and confirm the backup still exists in the local `/backups` volume.
--   **Database crashed?** Use `fix_db_crash.sh` or reset via setup wizard.
--   **Mini App Blank Screen?** Ensure `MINI_APP_URL` is set correctly and HTTPS is working.
+### Mini App loads blank or fails to authenticate
+
+Check:
+
+- `MINI_APP_URL`
+- `DOMAIN_NAME`
+- HTTPS termination in Caddy
+- BotFather menu button URL
+
+### Mobile banking verification fails immediately
+
+Check:
+
+- `MOBILE_BANKING_ENABLED=true`
+- `MOBILE_BANKING_PHONE`
+- `OPENROUTER_API_KEY` or `GEMINI_API_KEY`
+- model configuration and fallback settings
+
+### Backup command runs but file is not delivered
+
+Check:
+
+- `BACKUP_SEND_TO_TELEGRAM=true`
+- `ADMIN_TELEGRAM_ID`
+- bot logs
+- local `/backups` volume contents
+
+### Real client IPs are not showing correctly
+
+If you run another private reverse proxy in front of the app, set:
+
+```bash
+TRUST_PRIVATE_PROXY_HEADERS=true
+```
+
+Do not enable that blindly on untrusted networks.
+
+### Bot image does not have the latest backup tooling
+
+Rebuild the container:
+
+```bash
+docker compose up -d --build bot
+```
+
+## Deployment Files
+
+- [docker-compose.yaml](docker-compose.yaml)
+- [Dockerfile](Dockerfile)
+- [Caddyfile](Caddyfile)
+- [setup.sh](setup.sh)
+- [.env.sample](.env.sample)
 
 ## License
 
-MIT License.
+MIT
