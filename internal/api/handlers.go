@@ -97,6 +97,14 @@ type UploadScreenshotResponse struct {
 	HappLink string `json:"happ_link,omitempty"`
 }
 
+func uploadScreenshotFailureResponse(result *payment.VerificationResult) UploadScreenshotResponse {
+	return UploadScreenshotResponse{
+		Status:  "failed",
+		Message: result.Reason,
+		Reason:  result.ReasonKey,
+	}
+}
+
 type PurchaseStatusResponse struct {
 	ID     int64  `json:"id"`
 	Status string `json:"status"`
@@ -728,8 +736,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		resp.Message = result.Reason
-		resp.Reason = result.ReasonKey
+		resp = uploadScreenshotFailureResponse(result)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

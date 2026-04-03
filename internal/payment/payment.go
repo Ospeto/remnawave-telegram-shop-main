@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"math"
 	"remnawave-tg-shop-bot/internal/cache"
@@ -155,6 +156,8 @@ type PaymentService struct {
 	testModeMu          sync.RWMutex
 	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
 	syncInFlight        sync.Map // key: customerID int64, value: struct{}
+	visionAlertMu       sync.Mutex
+	visionAlertLastSent map[string]time.Time
 }
 
 func NewPaymentService(
@@ -186,6 +189,7 @@ func NewPaymentService(
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
 		walletTxRepo:        walletTxRepo,
+		visionAlertLastSent: make(map[string]time.Time),
 	}
 }
 
@@ -1479,6 +1483,109 @@ type VerificationResult struct {
 	ReasonKey string // translation key
 }
 
+const (
+	visionProviderAlertCooldown         = 30 * time.Minute
+	mobilePayProviderAuthReasonKey      = "mobile_pay_failed_provider_auth"
+	mobilePayProviderAuthFailureMessage = "Screenshot verification is temporarily unavailable right now. Please try again later or contact support."
+)
+
+func openRouterAuthFailure(err error) (*gemini.ProviderError, bool) {
+	providerErr, ok := gemini.AsProviderError(err)
+	if !ok || providerErr.Class != gemini.ErrorClassAuth {
+		return nil, false
+	}
+
+	provider := strings.ToLower(strings.TrimSpace(providerErr.Provider))
+	if strings.HasPrefix(provider, "openrouter") {
+		return providerErr, true
+	}
+
+	return nil, false
+}
+
+func providerCredentialHint(provider string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "openrouter") {
+		return "OPENROUTER_API_KEY"
+	}
+	return "provider credential"
+}
+
+func providerAuthVerificationResult() *VerificationResult {
+	return &VerificationResult{
+		Success:   false,
+		Reason:    mobilePayProviderAuthFailureMessage,
+		ReasonKey: mobilePayProviderAuthReasonKey,
+	}
+}
+
+func (s *PaymentService) claimVisionAlertSlot(key string, now time.Time) bool {
+	if strings.TrimSpace(key) == "" {
+		return false
+	}
+
+	s.visionAlertMu.Lock()
+	defer s.visionAlertMu.Unlock()
+
+	if lastSent, ok := s.visionAlertLastSent[key]; ok && now.Sub(lastSent) < visionProviderAlertCooldown {
+		return false
+	}
+
+	s.visionAlertLastSent[key] = now
+	return true
+}
+
+func (s *PaymentService) releaseVisionAlertSlot(key string, timestamp time.Time) {
+	if strings.TrimSpace(key) == "" {
+		return
+	}
+
+	s.visionAlertMu.Lock()
+	defer s.visionAlertMu.Unlock()
+
+	if lastSent, ok := s.visionAlertLastSent[key]; ok && lastSent.Equal(timestamp) {
+		delete(s.visionAlertLastSent, key)
+	}
+}
+
+func (s *PaymentService) notifyOpenRouterAuthFailure(ctx context.Context, providerErr *gemini.ProviderError) {
+	if providerErr == nil || s.telegramBot == nil {
+		return
+	}
+
+	alertKey := strings.ToLower(strings.TrimSpace(providerErr.Provider)) + ":" + string(providerErr.Class)
+	now := time.Now()
+	if !s.claimVisionAlertSlot(alertKey, now) {
+		return
+	}
+
+	if _, err := s.telegramBot.SendMessage(context.WithoutCancel(ctx), &bot.SendMessageParams{
+		ChatID:    config.GetAdminTelegramId(),
+		ParseMode: models.ParseModeHTML,
+		Text:      buildVisionProviderAuthAlert(providerErr),
+	}); err != nil {
+		s.releaseVisionAlertSlot(alertKey, now)
+		slog.Error("Failed to send OpenRouter auth alert", "provider", providerErr.Provider, "error", err)
+	}
+}
+
+func buildVisionProviderAuthAlert(providerErr *gemini.ProviderError) string {
+	if providerErr == nil {
+		return ""
+	}
+
+	message := strings.TrimSpace(providerErr.Message)
+	if message == "" {
+		message = "provider auth failed"
+	}
+
+	return fmt.Sprintf(
+		"⚠️ <b>Screenshot verification provider auth failed</b>\n\nProvider: <code>%s</code>\nError: <code>%s</code>\nCheck: <code>%s</code>",
+		html.EscapeString(strings.TrimSpace(providerErr.Provider)),
+		html.EscapeString(message),
+		html.EscapeString(providerCredentialHint(providerErr.Provider)),
+	)
+}
+
 func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
 	if s.paymentAnalyzer == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
@@ -1526,6 +1633,10 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 			)
 		}
 		slog.Error("Mobile payment analysis failed", logAttrs...)
+		if providerErr, ok := openRouterAuthFailure(err); ok {
+			s.notifyOpenRouterAuthFailure(ctx, providerErr)
+			return providerAuthVerificationResult(), nil
+		}
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 

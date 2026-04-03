@@ -45,6 +45,7 @@
   "mobile_pay_failed_note": "❌ Your transfer remark contains a forbidden word (e.g. vpn, outline). Please make a new transfer with only \"Payment\" in the remark.",
   "mobile_pay_failed_amount": "❌ Amount doesn't match. Expected exactly %d MMK. Please transfer again with the correct amount.",
   "mobile_pay_failed_generic": "❌ Could not verify this screenshot. Make sure it clearly shows the confirmation — not just a balance screen. Contact support if the issue persists.",
+  "mobile_pay_failed_provider_auth": "❌ Screenshot verification is temporarily unavailable right now. Please try again later or contact support.",
   "mobile_pay_no_pending": "No pending payment found. Please start a purchase from the app first.",
   "happ_proxy_instructions": "\n\n<b>Using with Happ Proxy:</b>\n1. Copy the subscription link below.\n2. Open the <b>Happ Proxy</b> app.\n3. The app will detect the link automatically. If not, tap 'Import from Clipboard'.\n4. Connect and enjoy unrestricted internet!",
   "happ_proxy_button": "Import to Happ Proxy",

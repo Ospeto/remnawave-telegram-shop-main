@@ -372,10 +372,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 }
 
 func (h Handler) sendMobilePayResult(ctx context.Context, b *bot.Bot, chatID int64, langCode string, translationKey string, amount int) {
-	text := h.translation.GetText(langCode, translationKey)
-	if translationKey == "mobile_pay_failed_amount" && amount > 0 {
-		text = fmt.Sprintf(h.translation.GetText(langCode, translationKey), amount)
-	}
+	text := mobilePayResultText(h.translation, langCode, translationKey, amount)
 
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
@@ -392,4 +389,14 @@ func (h Handler) sendMobilePayResult(ctx context.Context, b *bot.Bot, chatID int
 	if err != nil {
 		slog.Error("Error sending mobile pay result", "error", err)
 	}
+}
+
+func mobilePayResultText(tm interface {
+	GetText(langCode, key string) string
+}, langCode string, translationKey string, amount int) string {
+	text := tm.GetText(langCode, translationKey)
+	if translationKey == "mobile_pay_failed_amount" && amount > 0 {
+		text = fmt.Sprintf(tm.GetText(langCode, translationKey), amount)
+	}
+	return text
 }

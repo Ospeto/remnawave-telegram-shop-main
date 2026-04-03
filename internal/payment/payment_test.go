@@ -3,10 +3,12 @@ package payment
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/gemini"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgconn"
@@ -71,6 +73,155 @@ func TestCustomerForPostPurchaseNotificationsFallsBackToOriginal(t *testing.T) {
 	refreshed := &database.Customer{ID: 1, TelegramID: 456, Language: "my"}
 	if got := customerForPostPurchaseNotifications(original, refreshed); got != refreshed {
 		t.Fatalf("customerForPostPurchaseNotifications() = %v, want refreshed customer", got)
+	}
+}
+
+func TestOpenRouterAuthFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "openrouter auth failure",
+			err: &gemini.ProviderError{
+				Provider: "openrouter",
+				Class:    gemini.ErrorClassAuth,
+				Message:  "unauthorized",
+			},
+			want: true,
+		},
+		{
+			name: "openrouter fallback auth failure",
+			err: &gemini.ProviderError{
+				Provider: "openrouter-fallback",
+				Class:    gemini.ErrorClassAuth,
+				Message:  "unauthorized",
+			},
+			want: true,
+		},
+		{
+			name: "prefixed provider auth failure",
+			err: &gemini.ProviderError{
+				Provider: "OpenRouter-EU",
+				Class:    gemini.ErrorClassAuth,
+				Message:  "unauthorized",
+			},
+			want: true,
+		},
+		{
+			name: "non-auth openrouter failure",
+			err: &gemini.ProviderError{
+				Provider: "openrouter",
+				Class:    gemini.ErrorClassRateLimit,
+				Message:  "too many requests",
+			},
+			want: false,
+		},
+		{
+			name: "other provider auth failure",
+			err: &gemini.ProviderError{
+				Provider: "gemini",
+				Class:    gemini.ErrorClassAuth,
+				Message:  "unauthorized",
+			},
+			want: false,
+		},
+		{
+			name: "plain error",
+			err:  errors.New("boom"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotErr, got := openRouterAuthFailure(tt.err)
+			if got != tt.want {
+				t.Fatalf("openRouterAuthFailure() matched = %v, want %v", got, tt.want)
+			}
+			if tt.want && gotErr == nil {
+				t.Fatal("openRouterAuthFailure() returned nil provider error for matching case")
+			}
+		})
+	}
+}
+
+func TestProviderAuthVerificationResult(t *testing.T) {
+	result := providerAuthVerificationResult()
+
+	if result.Success {
+		t.Fatal("providerAuthVerificationResult() should fail verification")
+	}
+	if result.ReasonKey != mobilePayProviderAuthReasonKey {
+		t.Fatalf("providerAuthVerificationResult() reason key = %q, want %q", result.ReasonKey, mobilePayProviderAuthReasonKey)
+	}
+	if !strings.Contains(strings.ToLower(result.Reason), "temporarily unavailable") {
+		t.Fatalf("providerAuthVerificationResult() reason = %q, want temporary-unavailable guidance", result.Reason)
+	}
+	if strings.Contains(strings.ToLower(result.Reason), "openrouter") {
+		t.Fatalf("providerAuthVerificationResult() reason leaked provider name: %q", result.Reason)
+	}
+}
+
+func TestVisionAlertCooldown(t *testing.T) {
+	service := &PaymentService{
+		visionAlertLastSent: make(map[string]time.Time),
+	}
+	key := "openrouter:auth"
+	start := time.Now()
+
+	if !service.claimVisionAlertSlot(key, start) {
+		t.Fatal("claimVisionAlertSlot() first claim = false, want true")
+	}
+	if service.claimVisionAlertSlot(key, start.Add(visionProviderAlertCooldown/2)) {
+		t.Fatal("claimVisionAlertSlot() within cooldown = true, want false")
+	}
+	if !service.claimVisionAlertSlot(key, start.Add(visionProviderAlertCooldown+time.Second)) {
+		t.Fatal("claimVisionAlertSlot() after cooldown = false, want true")
+	}
+	if service.claimVisionAlertSlot("", start) {
+		t.Fatal("claimVisionAlertSlot() empty key = true, want false")
+	}
+}
+
+func TestReleaseVisionAlertSlot(t *testing.T) {
+	service := &PaymentService{
+		visionAlertLastSent: make(map[string]time.Time),
+	}
+	key := "openrouter:auth"
+	start := time.Now()
+
+	if !service.claimVisionAlertSlot(key, start) {
+		t.Fatal("claimVisionAlertSlot() first claim = false, want true")
+	}
+
+	service.releaseVisionAlertSlot(key, start.Add(time.Second))
+	if service.claimVisionAlertSlot(key, start.Add(2*time.Second)) {
+		t.Fatal("releaseVisionAlertSlot() removed slot for mismatched timestamp")
+	}
+
+	service.releaseVisionAlertSlot(key, start)
+	if !service.claimVisionAlertSlot(key, start.Add(2*time.Second)) {
+		t.Fatal("releaseVisionAlertSlot() did not free slot for matching timestamp")
+	}
+}
+
+func TestBuildVisionProviderAuthAlertEscapesHTML(t *testing.T) {
+	alert := buildVisionProviderAuthAlert(&gemini.ProviderError{
+		Provider: "openrouter-fallback",
+		Class:    gemini.ErrorClassAuth,
+		Message:  `<bad&token>`,
+	})
+
+	if strings.Contains(alert, "<bad&token>") {
+		t.Fatalf("buildVisionProviderAuthAlert() leaked unescaped HTML: %q", alert)
+	}
+	if !strings.Contains(alert, "&lt;bad&amp;token&gt;") {
+		t.Fatalf("buildVisionProviderAuthAlert() missing escaped error text: %q", alert)
+	}
+	if !strings.Contains(alert, "OPENROUTER_API_KEY") {
+		t.Fatalf("buildVisionProviderAuthAlert() missing credential hint: %q", alert)
 	}
 }
 
