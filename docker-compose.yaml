@@ -10,6 +10,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Host-managed Caddy/HAProxy on the shared-443 VPS terminates TLS on the host
+    # and proxies the shop app through loopback, so the bot must stay published here.
+    ports:
+      - '127.0.0.1:8080:8080'
     volumes:
       - ./translations:/translations
       - bot_backups:/backups

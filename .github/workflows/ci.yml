@@ -36,6 +36,9 @@ jobs:
         working-directory: web-app
         run: npm ci
 
+      - name: Check shared-443 deployment invariant
+        run: ./scripts/check_shared_443_shop.sh --repo-only
+
       - name: Go test
         run: go test ./...
 
