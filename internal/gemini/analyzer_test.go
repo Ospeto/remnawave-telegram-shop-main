@@ -244,6 +244,57 @@ func TestAnalyzerReservesAttemptForFallbackWhenBudgetIsTight(t *testing.T) {
 	}
 }
 
+func TestAnalyzerFallsBackOnAmbiguousPrimaryResult(t *testing.T) {
+	primary := &fakeProvider{
+		name: "gemini",
+		results: []*PaymentInfo{
+			{
+				Provider:          "kpay",
+				Amount:            12000,
+				IsValid:           true,
+				Confidence:        0.41,
+				NeedsClearerImage: true,
+			},
+		},
+	}
+	fallback := &fakeProvider{
+		name: "openrouter",
+		results: []*PaymentInfo{
+			{
+				Provider:      "kpay",
+				TransactionID: "TX-200",
+				PhoneNumber:   "09123456789",
+				Amount:        12000,
+				IsValid:       true,
+				Confidence:    0.96,
+			},
+		},
+	}
+
+	analyzer := NewAnalyzer(AnalyzerOptions{
+		Primary:                   primary,
+		Fallback:                  fallback,
+		RetryAttempts:             0,
+		MaxAttempts:               2,
+		AcceptConfidenceThreshold: 0.80,
+		RejectConfidenceThreshold: 0.70,
+	})
+
+	info, err := analyzer.AnalyzePaymentScreenshot(context.Background(), []byte("image"), "image/png", nil)
+	if err != nil {
+		t.Fatalf("AnalyzePaymentScreenshot() error = %v", err)
+	}
+	if info == nil || info.TransactionID != "TX-200" {
+		t.Fatalf("AnalyzePaymentScreenshot() info = %+v, want fallback result", info)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary calls = %d, want 1", primary.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback calls = %d, want 1", fallback.calls)
+	}
+}
+
 func TestAnalyzerAppliesAttemptTimeoutWithoutParentDeadline(t *testing.T) {
 	primary := &fakeProvider{
 		name: "gemini",

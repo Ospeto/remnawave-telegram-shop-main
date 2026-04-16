@@ -64,6 +64,8 @@ type config struct {
 	visionProviderFallback                                    string
 	visionRetryAttempts                                       int
 	visionMaxAttempts                                         int
+	visionAcceptConfidenceThreshold                           float64
+	visionRejectConfidenceThreshold                           float64
 	currency                                                  string
 	backupEnabled                                             bool
 	backupScheduleCron                                        string
@@ -267,6 +269,14 @@ func VisionMaxAttempts() int {
 	return conf.visionMaxAttempts
 }
 
+func VisionAcceptConfidenceThreshold() float64 {
+	return conf.visionAcceptConfidenceThreshold
+}
+
+func VisionRejectConfidenceThreshold() float64 {
+	return conf.visionRejectConfidenceThreshold
+}
+
 func Currency() string {
 	return conf.currency
 }
@@ -393,6 +403,18 @@ func envOptionalInt(key string) (int, bool) {
 		log.Panicf("invalid int in %q: %v", key, err)
 	}
 	return i, true
+}
+
+func envFloatDefault(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		log.Panicf("invalid float in %q: %v", key, err)
+	}
+	return f
 }
 
 func normalizeVisionProvider(value string) string {
@@ -742,6 +764,14 @@ func InitConfig() {
 				providerCount++
 			}
 			conf.visionMaxAttempts = providerCount * (conf.visionRetryAttempts + 1)
+		}
+		conf.visionAcceptConfidenceThreshold = envFloatDefault("VISION_ACCEPT_CONFIDENCE_THRESHOLD", 0.55)
+		conf.visionRejectConfidenceThreshold = envFloatDefault("VISION_REJECT_CONFIDENCE_THRESHOLD", 0.90)
+		if conf.visionAcceptConfidenceThreshold <= 0 || conf.visionAcceptConfidenceThreshold > 1 {
+			panic("VISION_ACCEPT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
+		}
+		if conf.visionRejectConfidenceThreshold <= 0 || conf.visionRejectConfidenceThreshold > 1 {
+			panic("VISION_REJECT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
 		}
 	}
 

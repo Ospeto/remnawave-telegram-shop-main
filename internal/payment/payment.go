@@ -1491,7 +1491,9 @@ type VerificationResult struct {
 const (
 	visionProviderAlertCooldown         = 30 * time.Minute
 	mobilePayProviderAuthReasonKey      = "mobile_pay_failed_provider_auth"
+	mobilePayUnclearScreenshotReasonKey = "mobile_pay_failed_unclear_screenshot"
 	mobilePayProviderAuthFailureMessage = "Screenshot verification is temporarily unavailable right now. Please try again later or contact support."
+	mobilePayUnclearScreenshotMessage   = "The screenshot is too unclear to verify safely. Ask the user for a clearer payment confirmation screenshot."
 )
 
 func openRouterAuthFailure(err error) (*gemini.ProviderError, bool) {
@@ -1620,6 +1622,23 @@ func formatShadowFailureReason(vf *verificationFailure) string {
 	}
 
 	return "shadow_fail: " + strings.Join(parts, " | ")
+}
+
+func visionDecisionToVerificationFailure(assessment gemini.AnalysisAssessment) *verificationFailure {
+	switch assessment.Action {
+	case gemini.OutcomeAskClearer:
+		return &verificationFailure{
+			reason:    mobilePayUnclearScreenshotMessage,
+			reasonKey: mobilePayUnclearScreenshotReasonKey,
+		}
+	case gemini.OutcomeReject:
+		return &verificationFailure{
+			reason:    "Screenshot does not appear to be a valid payment confirmation",
+			reasonKey: "mobile_pay_failed_generic",
+		}
+	default:
+		return nil
+	}
 }
 
 func (s *PaymentService) isAdminTestPurchase(ctx context.Context, purchase *database.Purchase) bool {
@@ -1818,26 +1837,37 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
+	assessment := gemini.AssessPaymentInfo(info, config.VisionAcceptConfidenceThreshold(), config.VisionRejectConfidenceThreshold())
 	slog.Info("Mobile payment analyzer outcome",
 		"purchase_id", purchaseID,
 		"provider", info.Provider,
 		"is_valid", info.IsValid,
 		"has_transaction_id", strings.TrimSpace(info.TransactionID) != "",
+		"confidence", assessment.Confidence,
+		"needs_clearer_image", info.NeedsClearerImage,
+		"invalid_reason", info.InvalidReason,
 	)
-
-	if !info.IsValid {
-		slog.Warn("Mobile payment screenshot rejected by analyzer",
+	slog.Info("Mobile payment analysis decision",
+		"purchase_id", purchaseID,
+		"provider", info.Provider,
+		"decision", assessment.Action,
+		"decision_reason", assessment.Reason,
+		"confidence", assessment.Confidence,
+		"needs_clearer_image", info.NeedsClearerImage,
+		"invalid_reason", info.InvalidReason,
+	)
+	if failure := visionDecisionToVerificationFailure(assessment); failure != nil {
+		slog.Warn("Mobile payment screenshot did not pass analysis gate",
 			"purchase_id", purchaseID,
 			"provider", info.Provider,
-			"outcome", "semantic_negative",
+			"decision", assessment.Action,
+			"decision_reason", assessment.Reason,
+			"confidence", assessment.Confidence,
 		)
 		if testModeBypass {
-			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
-				reason:    "Screenshot does not appear to be a valid payment confirmation",
-				reasonKey: "mobile_pay_failed_generic",
-			})
+			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, failure)
 		}
-		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
+		return &VerificationResult{Success: false, Reason: failure.reason, ReasonKey: failure.reasonKey}, nil
 	}
 
 	// 1. Check transaction ID not empty

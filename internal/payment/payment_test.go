@@ -625,3 +625,16 @@ func TestSettleWalletTopUpRestoresStateWhenLoggingFails(t *testing.T) {
 		t.Fatalf("restore calls = %v, want [33]", restored)
 	}
 }
+
+func TestVisionDecisionToVerificationFailureMapsAskClearer(t *testing.T) {
+	failure := visionDecisionToVerificationFailure(gemini.AnalysisAssessment{
+		Action: gemini.OutcomeAskClearer,
+		Reason: "clearer_image_required",
+	})
+	if failure == nil {
+		t.Fatal("visionDecisionToVerificationFailure() = nil, want failure")
+	}
+	if failure.reasonKey != "mobile_pay_failed_unclear_screenshot" {
+		t.Fatalf("visionDecisionToVerificationFailure().reasonKey = %q, want %q", failure.reasonKey, "mobile_pay_failed_unclear_screenshot")
+	}
+}

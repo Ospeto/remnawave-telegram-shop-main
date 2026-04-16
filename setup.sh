@@ -623,6 +623,8 @@ wizard() {
         else
             ask_number "Max screenshot analysis attempts (total)" "2" "VISION_RETRY_MAX_ATTEMPTS"
         fi
+        ask "Accept confidence threshold (0-1)" "0.55" "VISION_ACCEPT_CONFIDENCE_THRESHOLD"
+        ask "Reject confidence threshold (0-1)" "0.90" "VISION_REJECT_CONFIDENCE_THRESHOLD"
     else
         CFG[MOBILE_BANKING_PHONE]=""
         CFG[MOBILE_BANKING_PHONE_KPAY]=""
@@ -639,6 +641,8 @@ wizard() {
         CFG[VISION_PROVIDER_FALLBACK]=""
         CFG[VISION_RETRY_ATTEMPTS]="1"
         CFG[VISION_RETRY_MAX_ATTEMPTS]="2"
+        CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]="0.55"
+        CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]="0.90"
         print_info "Mobile Banking disabled — skipping."
     fi
 
@@ -756,6 +760,8 @@ OPENROUTER_FALLBACK_MODEL=${CFG[OPENROUTER_FALLBACK_MODEL]}
 VISION_PROVIDER_FALLBACK=${CFG[VISION_PROVIDER_FALLBACK]}
 VISION_RETRY_ATTEMPTS=${CFG[VISION_RETRY_ATTEMPTS]}
 VISION_RETRY_MAX_ATTEMPTS=${CFG[VISION_RETRY_MAX_ATTEMPTS]}
+VISION_ACCEPT_CONFIDENCE_THRESHOLD=${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}
+VISION_REJECT_CONFIDENCE_THRESHOLD=${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}
 
 # ── Traffic & Referral ──────────────────────────────────────
 TRAFFIC_LIMIT_RESET_STRATEGY=${CFG[TRAFFIC_LIMIT_RESET_STRATEGY]}
@@ -1293,6 +1299,8 @@ do_edit_payments() {
     cur_openrouter_fallback_model="$(env_get "OPENROUTER_FALLBACK_MODEL" "google/gemini-3.1-flash-lite-preview")"
     cur_retry_attempts="$(env_get "VISION_RETRY_ATTEMPTS" "1")"
     cur_retry_max_attempts="$(env_get "VISION_RETRY_MAX_ATTEMPTS" "2")"
+    cur_accept_confidence="$(env_get "VISION_ACCEPT_CONFIDENCE_THRESHOLD" "0.55")"
+    cur_reject_confidence="$(env_get "VISION_REJECT_CONFIDENCE_THRESHOLD" "0.90")"
 
     cur_phone_kpay="$(env_get "MOBILE_BANKING_PHONE_KPAY" "$cur_legacy")"
     cur_phone_wave="$(env_get "MOBILE_BANKING_PHONE_WAVEPAY" "$cur_legacy")"
@@ -1329,6 +1337,8 @@ do_edit_payments() {
         fi
         ask_number "Retries per provider before failover" "$cur_retry_attempts" "VISION_RETRY_ATTEMPTS"
         ask_number "Max screenshot analysis attempts (total)" "$cur_retry_max_attempts" "VISION_RETRY_MAX_ATTEMPTS"
+        ask "Accept confidence threshold (0-1)" "$cur_accept_confidence" "VISION_ACCEPT_CONFIDENCE_THRESHOLD"
+        ask "Reject confidence threshold (0-1)" "$cur_reject_confidence" "VISION_REJECT_CONFIDENCE_THRESHOLD"
     else
         CFG[MOBILE_BANKING_PHONE]="$cur_legacy"
         CFG[MOBILE_BANKING_PHONE_KPAY]="$cur_phone_kpay"
@@ -1349,6 +1359,8 @@ do_edit_payments() {
         fi
         CFG[VISION_RETRY_ATTEMPTS]="$cur_retry_attempts"
         CFG[VISION_RETRY_MAX_ATTEMPTS]="$cur_retry_max_attempts"
+        CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]="$cur_accept_confidence"
+        CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]="$cur_reject_confidence"
         print_info "Mobile banking disabled globally. Provider values were kept for later reuse."
     fi
 
@@ -1368,6 +1380,8 @@ do_edit_payments() {
     env_set "VISION_PROVIDER_FALLBACK" "${CFG[VISION_PROVIDER_FALLBACK]}"
     env_set "VISION_RETRY_ATTEMPTS" "${CFG[VISION_RETRY_ATTEMPTS]}"
     env_set "VISION_RETRY_MAX_ATTEMPTS" "${CFG[VISION_RETRY_MAX_ATTEMPTS]}"
+    env_set "VISION_ACCEPT_CONFIDENCE_THRESHOLD" "${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}"
+    env_set "VISION_REJECT_CONFIDENCE_THRESHOLD" "${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}"
 
     sync_payment_receivers_to_db \
         "${CFG[MOBILE_BANKING_PHONE_KPAY]}" \
@@ -1389,9 +1403,9 @@ do_edit_payments() {
             print_info "Mobile banking is enabled, but all providers are OFF (no phone numbers set)."
         fi
         if [[ -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
-            print_info "Screenshot verification: OpenRouter primary (${CFG[OPENROUTER_MODEL]}), OpenRouter fallback (${CFG[OPENROUTER_FALLBACK_MODEL]}), retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}."
+            print_info "Screenshot verification: OpenRouter primary (${CFG[OPENROUTER_MODEL]}), OpenRouter fallback (${CFG[OPENROUTER_FALLBACK_MODEL]}), retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}, accept confidence ${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}, reject confidence ${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}."
         else
-            print_info "Screenshot verification: OpenRouter primary only, retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}."
+            print_info "Screenshot verification: OpenRouter primary only, retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}, accept confidence ${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}, reject confidence ${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}."
         fi
     else
         print_success "Payment settings updated. Mobile banking is globally OFF."

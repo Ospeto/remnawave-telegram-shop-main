@@ -278,12 +278,16 @@ The full template lives in [.env.sample](.env.sample).
 | `VISION_PROVIDER_FALLBACK` | Fallback provider, for example `openrouter` or `gemini` |
 | `VISION_RETRY_ATTEMPTS` | Retries per provider before failover |
 | `VISION_RETRY_MAX_ATTEMPTS` | Total attempts across primary and fallback |
+| `VISION_ACCEPT_CONFIDENCE_THRESHOLD` | Minimum confidence to accept a screenshot analysis result. Lower this to reduce false negatives. |
+| `VISION_REJECT_CONFIDENCE_THRESHOLD` | Minimum confidence before an invalid result is treated as a hard reject. Raise this to reduce false negatives. |
 
 Advanced note:
 
 - screenshot verification can use OpenRouter and Gemini-backed providers
 - the sample file is OpenRouter-first because that is the default production path in this repository
 - if you want Gemini available, configure `GEMINI_API_KEY` and optionally `GEMINI_MODEL`
+- low-confidence or blurry results now trigger a clearer-screenshot response instead of a generic reject
+- analyzer logs include explicit `decision` values so operators can see retry, fallback, reject, and ask-clearer paths
 
 #### Wallet, Referrals, Trials
 

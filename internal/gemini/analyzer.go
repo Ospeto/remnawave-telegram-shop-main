@@ -8,19 +8,23 @@ import (
 )
 
 type AnalyzerOptions struct {
-	Primary        Provider
-	Fallback       Provider
-	RetryAttempts  int
-	MaxAttempts    int
-	AttemptTimeout time.Duration
+	Primary                   Provider
+	Fallback                  Provider
+	RetryAttempts             int
+	MaxAttempts               int
+	AttemptTimeout            time.Duration
+	AcceptConfidenceThreshold float64
+	RejectConfidenceThreshold float64
 }
 
 type fallbackAnalyzer struct {
-	primary        Provider
-	fallback       Provider
-	retryAttempts  int
-	maxAttempts    int
-	attemptTimeout time.Duration
+	primary                   Provider
+	fallback                  Provider
+	retryAttempts             int
+	maxAttempts               int
+	attemptTimeout            time.Duration
+	acceptConfidenceThreshold float64
+	rejectConfidenceThreshold float64
 }
 
 const defaultAnalyzerAttemptTimeout = 20 * time.Second
@@ -57,12 +61,19 @@ func NewAnalyzer(options AnalyzerOptions) Analyzer {
 		attemptTimeout = defaultAnalyzerAttemptTimeout
 	}
 
+	acceptThreshold, rejectThreshold := normalizeConfidenceThresholds(
+		options.AcceptConfidenceThreshold,
+		options.RejectConfidenceThreshold,
+	)
+
 	return &fallbackAnalyzer{
-		primary:        options.Primary,
-		fallback:       options.Fallback,
-		retryAttempts:  options.RetryAttempts,
-		maxAttempts:    maxAttempts,
-		attemptTimeout: attemptTimeout,
+		primary:                   options.Primary,
+		fallback:                  options.Fallback,
+		retryAttempts:             options.RetryAttempts,
+		maxAttempts:               maxAttempts,
+		attemptTimeout:            attemptTimeout,
+		acceptConfidenceThreshold: acceptThreshold,
+		rejectConfidenceThreshold: rejectThreshold,
 	}
 }
 
@@ -97,14 +108,32 @@ func (a *fallbackAnalyzer) AnalyzePaymentScreenshot(ctx context.Context, imageBy
 		info, err := provider.AnalyzePaymentScreenshot(attemptCtx, imageBytes, mimeType, providers)
 		cancel()
 		if err == nil {
-			outcome := "accepted"
-			if info != nil && !info.IsValid {
-				outcome = "semantic_negative"
+			assessment := AssessPaymentInfo(info, a.acceptConfidenceThreshold, a.rejectConfidenceThreshold)
+			outcome := analyzerOutcome(info, assessment)
+			if assessment.Action == OutcomeAskClearer && currentProviderIdx+1 < len(order) && totalAttempt < a.maxAttempts {
+				nextProvider := order[currentProviderIdx+1]
+				slog.Warn("Vision analyzer ambiguous result",
+					"provider", providerName,
+					"attempt", totalAttempt,
+					"confidence", assessment.Confidence,
+					"decision", "fallback_provider",
+					"decision_reason", assessment.Reason,
+					"next_provider", nextProvider.Name(),
+					"needs_clearer_image", info != nil && info.NeedsClearerImage,
+					"invalid_reason", invalidReasonValue(info),
+				)
+				currentProviderIdx++
+				continue
 			}
 			slog.Info("Vision analyzer attempt complete",
 				"provider", providerName,
 				"attempt", totalAttempt,
 				"outcome", outcome,
+				"decision", "return_result",
+				"decision_reason", assessment.Reason,
+				"confidence", assessment.Confidence,
+				"needs_clearer_image", info != nil && info.NeedsClearerImage,
+				"invalid_reason", invalidReasonValue(info),
 			)
 			return info, nil
 		}
@@ -120,6 +149,16 @@ func (a *fallbackAnalyzer) AnalyzePaymentScreenshot(ctx context.Context, imageBy
 		}
 
 		lastErr = providerErr
+		nextAction := "return_error"
+		if totalAttempt < a.maxAttempts {
+			switch {
+			case providerErr.AllowsRetry() && providerAttempt <= a.retryAttempts && a.canRetryCurrentProvider(currentProviderIdx, totalAttempt, len(order)):
+				nextAction = "retry_provider"
+			case providerErr.AllowsFailover() && currentProviderIdx+1 < len(order):
+				nextAction = "fallback_provider"
+			}
+		}
+
 		slog.Warn("Vision analyzer attempt failed",
 			"provider", providerName,
 			"attempt", totalAttempt,
@@ -128,6 +167,7 @@ func (a *fallbackAnalyzer) AnalyzePaymentScreenshot(ctx context.Context, imageBy
 			"status_code", providerErr.StatusCode,
 			"retryable", providerErr.AllowsRetry(),
 			"failover_eligible", providerErr.AllowsFailover(),
+			"decision", nextAction,
 			"error", providerErr.Error(),
 		)
 
@@ -135,11 +175,11 @@ func (a *fallbackAnalyzer) AnalyzePaymentScreenshot(ctx context.Context, imageBy
 			break
 		}
 
-		if providerErr.AllowsRetry() && providerAttempt <= a.retryAttempts && a.canRetryCurrentProvider(currentProviderIdx, totalAttempt, len(order)) {
+		if nextAction == "retry_provider" {
 			continue
 		}
 
-		if providerErr.AllowsFailover() && currentProviderIdx+1 < len(order) {
+		if nextAction == "fallback_provider" {
 			nextProvider := order[currentProviderIdx+1]
 			slog.Warn("Vision analyzer fallback triggered",
 				"from_provider", providerName,
@@ -165,6 +205,27 @@ func (a *fallbackAnalyzer) AnalyzePaymentScreenshot(ctx context.Context, imageBy
 		"error", lastErr,
 	)
 	return nil, lastErr
+}
+
+func analyzerOutcome(info *PaymentInfo, assessment AnalysisAssessment) string {
+	if info == nil {
+		return "empty_result"
+	}
+	switch assessment.Action {
+	case OutcomeAskClearer:
+		return "ambiguous_result"
+	case OutcomeReject:
+		return "semantic_negative"
+	default:
+		return "accepted"
+	}
+}
+
+func invalidReasonValue(info *PaymentInfo) string {
+	if info == nil {
+		return ""
+	}
+	return info.InvalidReason
 }
 
 func (a *fallbackAnalyzer) attemptContext(parent context.Context, totalAttempt int) (context.Context, context.CancelFunc) {

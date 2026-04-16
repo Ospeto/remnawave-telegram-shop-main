@@ -28,6 +28,9 @@ type PaymentInfo struct {
 	Amount            float64 `json:"amount"`
 	Note              string  `json:"note"`
 	IsValid           bool    `json:"is_valid"`
+	Confidence        float64 `json:"confidence"`
+	NeedsClearerImage bool    `json:"needs_clearer_image"`
+	InvalidReason     string  `json:"invalid_reason"`
 	TamperingDetected bool    `json:"tampering_detected"`
 }
 
@@ -203,7 +206,10 @@ Extract the following fields and respond ONLY with valid JSON (no markdown, no c
   "recipient_name": "the recipient/account holder name who received the money, empty string if not visible",
   "amount": numeric payment amount (no currency symbol, just the number),
   "note": "any note or remark text, empty string if none",
-  "is_valid": true if this looks like a genuine payment confirmation screenshot, false otherwise
+  "is_valid": true if this looks like a genuine payment confirmation screenshot, false otherwise,
+  "confidence": number from 0.0 to 1.0 representing confidence in the overall screenshot analysis,
+  "needs_clearer_image": true if blur/cropping/low resolution/obstruction make safe verification impossible,
+  "invalid_reason": "empty string when valid, otherwise one of unclear_image, missing_required_fields, not_payment_confirmation, tampering_detected, or other short snake_case reason"
 }
 
 Important:
@@ -213,6 +219,9 @@ Important:
 - For recipient_name, extract the visible recipient/account holder name tied to the transfer target. Keep Burmese or English text as shown.
 - For amount, extract only the numeric value of the FINAL PAID AMOUNT or TRANSFER AMOUNT. Ignore original price if discounted.
 - For is_valid, set to false if: the image is not a payment screenshot, appears to be a screenshot of another screenshot, is heavily blurred, or shows no payment information
+- For confidence, return a conservative number. Use high confidence only when the screenshot is clear and the core fields are visible.
+- For needs_clearer_image, set true when a safer action is to ask the user for a clearer screenshot rather than reject outright.
+- For invalid_reason, use "unclear_image" for blur/crop/obstruction, "missing_required_fields" when key fields are unreadable, "not_payment_confirmation" when the image is not a payment confirmation, and "tampering_detected" when it looks edited or re-captured.
 - Return ONLY the JSON object, nothing else`, providerSummary, receiverSection, strings.Join(providerKeys, ", "))
 }
 
@@ -329,6 +338,12 @@ func parsePaymentInfo(providerName, rawText string) (*PaymentInfo, error) {
 	if err := json.Unmarshal([]byte(rawText), &info); err != nil {
 		return nil, classifyProviderError(providerName, http.StatusOK, err, "failed to parse payment info JSON")
 	}
+	info.Provider = strings.TrimSpace(info.Provider)
+	info.TransactionID = strings.TrimSpace(info.TransactionID)
+	info.PhoneNumber = strings.TrimSpace(info.PhoneNumber)
+	info.RecipientName = strings.TrimSpace(info.RecipientName)
+	info.Note = strings.TrimSpace(info.Note)
+	info.InvalidReason = normalizeInvalidReason(info.InvalidReason)
 
 	return &info, nil
 }

@@ -150,10 +150,12 @@ func main() {
 		}
 
 		paymentAnalyzer = gemini.NewAnalyzer(gemini.AnalyzerOptions{
-			Primary:       primaryProvider,
-			Fallback:      fallbackProvider,
-			RetryAttempts: config.VisionRetryAttempts(),
-			MaxAttempts:   config.VisionMaxAttempts(),
+			Primary:                   primaryProvider,
+			Fallback:                  fallbackProvider,
+			RetryAttempts:             config.VisionRetryAttempts(),
+			MaxAttempts:               config.VisionMaxAttempts(),
+			AcceptConfidenceThreshold: config.VisionAcceptConfidenceThreshold(),
+			RejectConfidenceThreshold: config.VisionRejectConfidenceThreshold(),
 		})
 		mobilePaymentRepo = database.NewMobilePaymentRepository(pool)
 		slog.Info("Mobile banking enabled",
@@ -162,6 +164,8 @@ func main() {
 			"vision_fallback", visionProviderName(fallbackProvider),
 			"vision_retry_attempts", config.VisionRetryAttempts(),
 			"vision_max_attempts", config.VisionMaxAttempts(),
+			"vision_accept_confidence_threshold", config.VisionAcceptConfidenceThreshold(),
+			"vision_reject_confidence_threshold", config.VisionRejectConfidenceThreshold(),
 		)
 	}
 
