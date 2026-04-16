@@ -1,26 +1,42 @@
 # User Manual & Operations Guide
 
-This guide covers how to operate the Remnawave Telegram Shop Bot after installation.
+This guide covers day-to-day operation after installation.
 
 ## Admin Commands
 
 To use these commands, your Telegram ID must be set in `ADMIN_TELEGRAM_ID` in the `.env` file.
 
-| Command | Description |
-| :--- | :--- |
-| `/admin` | Opens the main admin dashboard. |
-| `/broadcast` | Send a message to all users. Supports text, photos, and buttons. |
-| `/stats` | View sales statistics (daily revenue, user count). |
-| `/id` | Get your Telegram ID (useful for configuring whitelist/blocklist). |
-| `/test` | Toggle "Test Mode" (allows using Magic Transaction IDs). |
+The primary admin entrypoint is `/admin`.
+
+The dashboard is organized into four sections:
+
+- `Overview`: revenue, recent transactions, provider status, backup health
+- `Payments`: update provider phone/name, disable providers, adjust referral bonus
+- `Backups`: run backups, inspect status, manage schedule, view restore guidance
+- `Operations`: sync users, send notifications, toggle test mode, review fallbacks
+
+Most older admin slash commands still exist as hidden emergency fallbacks, but they are no longer the primary way to operate the bot.
+
+Hidden fallbacks:
+
+- `/backup now|status|list|enable|disable|schedule HH:MM`
+- `/restore list`
+- `/sync`
+- `/test enable|disable`
+- `/notify <telegram_id>`
+- `/setreferralbonus <amount>`
+- `/setphone <provider> <number>`
+- `/setname <provider> <name>`
+- `/disablephone <provider>`
+- `/disablename <provider>`
 
 ### Using Test Mode
-1.  Run `/test` (Admin only). The bot will reply "Test Mode ENABLED".
+1.  Open `/admin` -> `Operations` -> `Enable Test Mode`.
 2.  Use the Magic Transaction ID: `01004063070995016447`.
 3.  Go to **Wallet** -> Top up -> Select Mobile Banking.
 4.  Upload *any* screenshot.
-5.  Wait for verification (it will auto-approve).
-6.  The system will bypass duplicate checks for this ID by appending a timestamp.
+5.  Wait for verification; it will auto-approve.
+6.  Turn test mode off with `/test disable` when you are done.
 
 ---
 
@@ -72,20 +88,26 @@ After editing plans, you must restart the bot:
 
 You can move your entire shop to a new server without losing data.
 
+### Runtime Restore Policy
+
+The running bot can help you inspect backups, but it will not perform a live restore.
+
+Use `/admin` -> `Backups` for day-to-day backup work, and use `/restore list` only to identify the file you want before doing the restore offline/manual.
+
 ### 1. Create Backup (Old Server)
-1.  Run `./setup.sh`.
-2.  Select **Option 9 (Backup)**.
-3.  Wait for success message.
-4.  Download the file from `remnawave-telegram-shop-main/backups/backup_YYYYMMDD.tar.gz`.
+1.  Open `/admin` -> `Backups` -> `Run Backup Now`, or run `./setup.sh` and choose **Option 9 (Backup)**.
+2.  Wait for success message.
+3.  Download the file from `remnawave-telegram-shop-main/backups/backup_YYYYMMDD.tar.gz`.
 
 ### 2. Restore (New Server)
 1.  Install Docker & Git on new server.
 2.  Clone this repository.
 3.  Create a `backups` folder and upload your `.tar.gz` file there.
-4.  Run `./setup.sh`.
-5.  Select **Option 10 (Restore)**.
-6.  Choose your backup file.
-7.  The script will stop services, restore DB/Certs, and restart everything.
+4.  Use `/restore list` in the old bot if you need to confirm the exact backup filename.
+5.  Run `./setup.sh`.
+6.  Select **Option 10 (Restore)**.
+7.  Choose your backup file.
+8.  The script will stop services, restore DB/Certs, and restart everything.
 
 ---
 

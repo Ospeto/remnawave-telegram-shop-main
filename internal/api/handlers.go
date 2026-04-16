@@ -11,6 +11,7 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/translation"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -189,6 +190,59 @@ func (h *APIHandler) finishScreenshotVerification(purchaseID int64) {
 	h.screenshotMu.Lock()
 	defer h.screenshotMu.Unlock()
 	delete(h.screenshotInFlight, purchaseID)
+}
+
+func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []database.SubscriptionKey {
+	if len(keys) < 2 {
+		return keys
+	}
+
+	compacted := make([]database.SubscriptionKey, 0, len(keys))
+	groupToIndex := make(map[string]int)
+
+	isNewer := func(candidate, current database.SubscriptionKey) bool {
+		if candidate.ExpireAt != nil && current.ExpireAt != nil {
+			if candidate.ExpireAt.After(*current.ExpireAt) {
+				return true
+			}
+			if candidate.ExpireAt.Before(*current.ExpireAt) {
+				return false
+			}
+		}
+
+		if candidate.CreatedAt.After(current.CreatedAt) {
+			return true
+		}
+		if candidate.CreatedAt.Before(current.CreatedAt) {
+			return false
+		}
+
+		return candidate.ID > current.ID
+	}
+
+	for _, key := range keys {
+		if key.Status == "active" && key.ExpireAt != nil {
+			groupKey := fmt.Sprintf("%d|%s|%s", key.TrafficLimitGB, key.Status, key.ExpireAt.UTC().Format("2006-01-02"))
+			if idx, exists := groupToIndex[groupKey]; exists {
+				if isNewer(key, compacted[idx]) {
+					compacted[idx] = key
+				}
+				continue
+			}
+			groupToIndex[groupKey] = len(compacted)
+		}
+
+		compacted = append(compacted, key)
+	}
+
+	sort.SliceStable(compacted, func(i, j int) bool {
+		if compacted[i].CreatedAt.Equal(compacted[j].CreatedAt) {
+			return compacted[i].ID > compacted[j].ID
+		}
+		return compacted[i].CreatedAt.After(compacted[j].CreatedAt)
+	})
+
+	return compacted
 }
 
 // --- Handlers ---
@@ -449,6 +503,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	if h.subKeyRepo != nil {
 		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		localKeys = compactSubscriptionKeysForDisplay(localKeys)
 		if len(localKeys) > 0 {
 			hasMigratedKeys = true
 		}

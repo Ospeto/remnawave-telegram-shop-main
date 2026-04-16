@@ -48,7 +48,9 @@ Handles Telegram updates (messages, callbacks) and HTTP requests.
 -   **`handler.go`**: Main `Handler` struct and routing logic.
 -   **`start.go`**: `/start` command capabilities.
 -   **`payment_handlers.go`**: Logic for buying plans, callbacks from CryptoPay, and mobile payment screenshots.
--   **`admin.go`**: Admin-only commands (broadcast, stats).
+-   **`admin.go`**: Admin help plus the legacy slash-command handlers used behind the admin dashboard.
+-   **`admin_dashboard.go`**: `/admin` dashboard, callback routing, confirmations, and guided admin flows.
+-   **`admin_registry.go`**: Source-of-truth command metadata for visible bot commands and hidden admin fallbacks.
 
 #### `service/` (Business Logic)
 Contains high-level business rules, decoupled from the transport layer (Telegram/HTTP).

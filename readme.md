@@ -21,7 +21,7 @@ This repository is intended for operators who want a production-capable Telegram
   - internal wallet top-ups and wallet purchases
 - supports promo codes, referral rewards, trials, and auto-renew toggles
 - exposes a Telegram Mini App UI for customer self-service
-- includes scheduled database backups and Telegram admin backup commands
+- includes scheduled database backups and a Telegram admin dashboard for operator work
 
 ## Production Notes
 
@@ -38,6 +38,19 @@ Recent hardening in this codebase includes:
 - safer forwarded-header trust defaults
 
 If you are deploying for real users, read the `Configuration`, `Payments`, `Backups`, and `Operations` sections carefully.
+
+## Admin Operations
+
+The primary admin entrypoint is `/admin`.
+
+The dashboard is organized into:
+
+- `Overview`: revenue, transactions, provider status, backup health
+- `Payments`: provider settings, referral bonus, receiver status
+- `Backups`: run backups, inspect status, manage schedule, restore guidance
+- `Operations`: sync, notifications, test mode, fallback commands
+
+Most older slash commands still exist as hidden emergency fallbacks, but they are no longer the main operator UX.
 
 ## Architecture
 
@@ -76,7 +89,7 @@ If you are deploying for real users, read the `Configuration`, `Payments`, `Back
 │   ├── cryptopay/            # Crypto Pay client logic
 │   ├── database/             # Repositories and DB helpers
 │   ├── gemini/               # Screenshot-analysis providers and analyzer
-│   ├── handler/              # Telegram command and callback handlers
+│   ├── handler/              # Telegram command, dashboard, and callback handlers
 │   ├── notification/         # Subscription notifications
 │   ├── payment/              # Purchase creation and fulfillment logic
 │   ├── remnawave/            # Remnawave API integration
@@ -407,18 +420,31 @@ Notes:
 
 The admin Telegram account can operate the bot from chat.
 
-Key commands include:
+Primary entrypoint:
 
-- `/start`
+- `/admin`
+
+The dashboard is organized into four sections:
+
+- `Overview`: revenue, recent transactions, provider status, backup health
+- `Payments`: provider phone/name updates, provider disabling, referral bonus
+- `Backups`: backup now, status, list, schedule controls, restore guidance
+- `Operations`: user sync, subscription notifications, test mode, fallback help
+
+Most older admin slash commands still work as hidden emergency fallbacks, but they are no longer the primary operator UX. Use the dashboard first.
+
+Fallback commands that remain available include:
+
+- `/backup now|status|list|enable|disable|schedule HH:MM`
+- `/restore list`
+- `/sync`
+- `/test enable|disable`
+- `/notify <telegram_id>`
+- `/setreferralbonus <amount>`
 - `/setphone <provider> <number>`
 - `/setname <provider> <name>`
-- `/backup now`
-- `/backup status`
-- `/backup list`
-- `/backup enable`
-- `/backup disable`
-- `/backup schedule [HH:MM]`
-- `/restore list`
+- `/disablephone <provider>`
+- `/disablename <provider>`
 
 Important restore note:
 
@@ -458,7 +484,7 @@ For safety, live runtime restore through the bot process is disabled.
 Recommended restore workflow:
 
 1. stop the app
-2. identify the backup to restore
+2. run `/restore list` to identify the backup you want
 3. perform the restore offline/manual
 4. restart the app
 5. verify health endpoints and bot behavior

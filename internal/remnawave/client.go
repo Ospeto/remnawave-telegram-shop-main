@@ -1,11 +1,15 @@
 package remnawave
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/utils"
 	"strconv"
@@ -17,7 +21,10 @@ import (
 )
 
 type Client struct {
-	client *remapi.ClientExt
+	client     *remapi.ClientExt
+	httpClient *http.Client
+	baseURL    string
+	token      string
 }
 
 type headerTransport struct {
@@ -58,7 +65,12 @@ func NewClient(baseURL, token, mode string) *Client {
 	if err != nil {
 		panic(err)
 	}
-	return &Client{client: remapi.NewClientExt(api)}
+	return &Client{
+		client:     remapi.NewClientExt(api),
+		httpClient: client,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		token:      token,
+	}
 }
 
 func (r *Client) Ping(ctx context.Context) error {
@@ -94,6 +106,14 @@ func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
 func (r *Client) GetUsersByTelegramId(ctx context.Context, telegramId int64) ([]remapi.User, error) {
 	resp, err := r.client.Users().GetUserByTelegramId(ctx, strconv.FormatInt(telegramId, 10))
 	if err != nil {
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on GetUserByTelegramId, falling back to permissive parser", "telegram_id", telegramId, "error", err)
+			users, fallbackErr := r.getUsersByTelegramIDFallback(ctx, telegramId)
+			if fallbackErr == nil {
+				return users, nil
+			}
+			slog.Error("Remnawave fallback failed on GetUserByTelegramId", "telegram_id", telegramId, "error", fallbackErr)
+		}
 		return nil, err
 	}
 
@@ -106,18 +126,10 @@ func (r *Client) GetUsersByTelegramId(ctx context.Context, telegramId int64) ([]
 }
 
 func (r *Client) DecreaseSubscription(ctx context.Context, telegramId int64, trafficLimit int, days int) (*time.Time, error) {
-
-	resp, err := r.client.Users().GetUserByTelegramId(ctx, strconv.FormatInt(telegramId, 10))
+	users, err := r.GetUsersByTelegramId(ctx, telegramId)
 	if err != nil {
 		return nil, err
 	}
-
-	usersResp, ok := resp.(*remapi.UsersResponse)
-	if !ok {
-		return nil, errors.New("unknown response type")
-	}
-
-	users := usersResp.GetResponse()
 	if len(users) == 0 {
 		return nil, fmt.Errorf("user with telegramId %d not found", telegramId)
 	}
@@ -145,17 +157,10 @@ func (r *Client) DecreaseSubscription(ctx context.Context, telegramId int64, tra
 }
 
 func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool) (*remapi.User, error) {
-	resp, err := r.client.Users().GetUserByTelegramId(ctx, strconv.FormatInt(telegramId, 10))
+	users, err := r.GetUsersByTelegramId(ctx, telegramId)
 	if err != nil {
 		return nil, err
 	}
-
-	usersResp, ok := resp.(*remapi.UsersResponse)
-	if !ok {
-		return nil, errors.New("unknown response type")
-	}
-
-	users := usersResp.GetResponse()
 	if len(users) == 0 {
 		return r.createUser(ctx, customerId, telegramId, trafficLimit, days, isTrialUser, 0, "")
 	}
@@ -192,7 +197,19 @@ func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalT
 	// Fetch the specific user by UUID
 	resp, err := r.client.Users().GetUserByUuid(ctx, userUUID.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user %s: %w", userUUID, err)
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on GetUserByUuid, falling back to permissive parser", "user_uuid", userUUID.String(), "error", err)
+			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, userUUID)
+			if fallbackErr == nil && fallbackUser != nil {
+				resp = &remapi.UserResponse{Response: *fallbackUser}
+			} else if fallbackErr != nil {
+				return nil, fmt.Errorf("failed to get user %s (fallback): %w", userUUID, fallbackErr)
+			} else {
+				return nil, fmt.Errorf("failed to get user %s: not found after fallback", userUUID)
+			}
+		} else {
+			return nil, fmt.Errorf("failed to get user %s: %w", userUUID, err)
+		}
 	}
 	userResp, ok := resp.(*remapi.UserResponse)
 	if !ok {
@@ -225,26 +242,9 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 
 	newExpire := getNewExpire(days, existingUser.ExpireAt)
 
-	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
+	squadId, err := r.resolveInternalSquadUUIDs(ctx, false)
 	if err != nil {
 		return nil, err
-	}
-
-	squads := resp.(*remapi.InternalSquadsResponse).GetResponse()
-
-	selectedSquads := config.SquadUUIDs()
-
-	squadId := make([]uuid.UUID, 0, len(selectedSquads))
-	for _, squad := range squads.GetInternalSquads() {
-		if selectedSquads != nil && len(selectedSquads) > 0 {
-			if _, isExist := selectedSquads[squad.UUID]; !isExist {
-				continue
-			} else {
-				squadId = append(squadId, squad.UUID)
-			}
-		} else {
-			squadId = append(squadId, squad.UUID)
-		}
 	}
 
 	userUpdate := &remapi.UpdateUserRequestDto{
@@ -274,6 +274,18 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 
 	updateUser, err := r.client.Users().UpdateUser(ctx, userUpdate)
 	if err != nil {
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on UpdateUser, attempting user lookup fallback", "user_uuid", existingUser.UUID.String(), "error", err)
+			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, existingUser.UUID)
+			if fallbackErr == nil && fallbackUser != nil {
+				tgid, _ := fallbackUser.TelegramId.Get()
+				slog.Info("updated user (fallback)", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(fallbackUser.Username), "days", days)
+				return fallbackUser, nil
+			}
+			if fallbackErr != nil {
+				return nil, fmt.Errorf("update user decode fallback failed: %w", fallbackErr)
+			}
+		}
 		return nil, err
 	}
 	if value, ok := updateUser.(*remapi.InternalServerError); ok {
@@ -308,29 +320,9 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 		slog.Warn("Failed to check existing users for idempotency", "error", err)
 	}
 
-	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
+	squadId, err := r.resolveInternalSquadUUIDs(ctx, isTrialUser)
 	if err != nil {
 		return nil, err
-	}
-
-	squads := resp.(*remapi.InternalSquadsResponse).GetResponse()
-
-	selectedSquads := config.SquadUUIDs()
-	if isTrialUser {
-		selectedSquads = config.TrialInternalSquads()
-	}
-
-	squadId := make([]uuid.UUID, 0, len(selectedSquads))
-	for _, squad := range squads.GetInternalSquads() {
-		if selectedSquads != nil && len(selectedSquads) > 0 {
-			if _, isExist := selectedSquads[squad.UUID]; !isExist {
-				continue
-			} else {
-				squadId = append(squadId, squad.UUID)
-			}
-		} else {
-			squadId = append(squadId, squad.UUID)
-		}
 	}
 
 	externalSquad := config.ExternalSquadUUID()
@@ -371,10 +363,403 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 
 	userCreate, err := r.client.Users().CreateUser(ctx, &createUserRequestDto)
 	if err != nil {
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on CreateUser, attempting lookup fallback", "telegram_id", telegramId, "username", username, "error", err)
+			fallbackUsers, fallbackErr := r.getUsersByTelegramIDFallback(ctx, telegramId)
+			if fallbackErr == nil {
+				for i := range fallbackUsers {
+					if strings.EqualFold(fallbackUsers[i].Username, username) {
+						slog.Info("created user (fallback)", "telegramId", utils.MaskHalf(strconv.FormatInt(telegramId, 10)), "username", utils.MaskHalf(tgUsername), "key", username, "days", days)
+						return &fallbackUsers[i], nil
+					}
+				}
+			} else {
+				return nil, fmt.Errorf("create user decode fallback failed: %w", fallbackErr)
+			}
+		}
 		return nil, err
 	}
 	slog.Info("created user", "telegramId", utils.MaskHalf(strconv.FormatInt(telegramId, 10)), "username", utils.MaskHalf(tgUsername), "key", username, "days", days)
 	return &userCreate.(*remapi.UserResponse).Response, nil
+}
+
+func isDecodeResponseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "decode response") {
+		return true
+	}
+	if strings.Contains(msg, "unable to decode") || strings.Contains(msg, "decode field") {
+		return true
+	}
+	return false
+}
+
+func (r *Client) doRawJSONRequest(ctx context.Context, method, path string, body any) ([]byte, int, error) {
+	var requestBody io.Reader
+	if body != nil {
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, fmt.Errorf("marshal body: %w", err)
+		}
+		requestBody = bytes.NewReader(payload)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, r.baseURL+path, requestBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+r.token)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := r.httpClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return payload, resp.StatusCode, nil
+}
+
+func unwrapResponseEnvelope(payload []byte) (any, error) {
+	var envelope map[string]any
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return nil, err
+	}
+
+	if response, ok := envelope["response"]; ok {
+		return response, nil
+	}
+	return envelope, nil
+}
+
+func asMap(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	if m, ok := value.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func asSlice(value any) []any {
+	if value == nil {
+		return nil
+	}
+	if s, ok := value.([]any); ok {
+		return s
+	}
+	return nil
+}
+
+func asString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
+	default:
+		return ""
+	}
+}
+
+func asInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		i, err := v.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(i), true
+	case string:
+		i, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return i, true
+	default:
+		return 0, false
+	}
+}
+
+func asFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
+func asTime(value any) (time.Time, bool) {
+	str := asString(value)
+	if str == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339Nano, str); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, str); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+func parseUserLoose(data any) (*remapi.User, error) {
+	raw := asMap(data)
+	if raw == nil {
+		return nil, errors.New("user payload is not an object")
+	}
+
+	user := &remapi.User{}
+
+	uuidStr := asString(raw["uuid"])
+	if uuidStr == "" {
+		uuidStr = asString(raw["UUID"])
+	}
+	if uuidStr != "" {
+		if parsedUUID, err := uuid.Parse(uuidStr); err == nil {
+			user.UUID = parsedUUID
+		}
+	}
+
+	user.Username = asString(raw["username"])
+	if user.Username == "" {
+		user.Username = asString(raw["userName"])
+	}
+
+	user.SubscriptionUrl = asString(raw["subscriptionUrl"])
+	if user.SubscriptionUrl == "" {
+		user.SubscriptionUrl = asString(raw["subscription_url"])
+	}
+
+	if expireAt, ok := asTime(raw["expireAt"]); ok {
+		user.ExpireAt = expireAt
+	} else if expireAt, ok := asTime(raw["expire_at"]); ok {
+		user.ExpireAt = expireAt
+	}
+
+	if telegramID, ok := asInt(raw["telegramId"]); ok {
+		user.TelegramId = remapi.NewNilInt(telegramID)
+	} else if telegramID, ok := asInt(raw["telegram_id"]); ok {
+		user.TelegramId = remapi.NewNilInt(telegramID)
+	}
+
+	if trafficLimit, ok := asInt(raw["trafficLimitBytes"]); ok {
+		user.TrafficLimitBytes = remapi.NewOptInt(trafficLimit)
+	} else if trafficLimit, ok := asInt(raw["traffic_limit_bytes"]); ok {
+		user.TrafficLimitBytes = remapi.NewOptInt(trafficLimit)
+	}
+
+	userTraffic := asMap(raw["userTraffic"])
+	if userTraffic == nil {
+		userTraffic = asMap(raw["user_traffic"])
+	}
+	if userTraffic != nil {
+		if used, ok := asFloat(userTraffic["usedTrafficBytes"]); ok {
+			user.UserTraffic.UsedTrafficBytes = used
+		} else if used, ok := asFloat(userTraffic["used_traffic_bytes"]); ok {
+			user.UserTraffic.UsedTrafficBytes = used
+		}
+		if lifetime, ok := asFloat(userTraffic["lifetimeUsedTrafficBytes"]); ok {
+			user.UserTraffic.LifetimeUsedTrafficBytes = lifetime
+		}
+	}
+
+	return user, nil
+}
+
+func collectConfiguredSquads(selected map[uuid.UUID]uuid.UUID) []uuid.UUID {
+	if len(selected) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(selected))
+	for key := range selected {
+		ids = append(ids, key)
+	}
+	return ids
+}
+
+func parseInternalSquadUUIDsLoose(payload []byte) []uuid.UUID {
+	unwrapped, err := unwrapResponseEnvelope(payload)
+	if err != nil {
+		return nil
+	}
+
+	candidates := asSlice(unwrapped)
+	if candidates == nil {
+		if m := asMap(unwrapped); m != nil {
+			candidates = asSlice(m["internalSquads"])
+			if candidates == nil {
+				candidates = asSlice(m["internal_squads"])
+			}
+			if candidates == nil {
+				candidates = asSlice(m["squads"])
+			}
+		}
+	}
+
+	if candidates == nil {
+		return nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(candidates))
+	for _, candidate := range candidates {
+		squad := asMap(candidate)
+		if squad == nil {
+			continue
+		}
+		uuidStr := asString(squad["uuid"])
+		if uuidStr == "" {
+			continue
+		}
+		if parsedUUID, parseErr := uuid.Parse(uuidStr); parseErr == nil {
+			ids = append(ids, parsedUUID)
+		}
+	}
+	return ids
+}
+
+func (r *Client) resolveInternalSquadUUIDs(ctx context.Context, isTrialUser bool) ([]uuid.UUID, error) {
+	selectedSquads := config.SquadUUIDs()
+	if isTrialUser {
+		selectedSquads = config.TrialInternalSquads()
+	}
+
+	// Prefer configured UUIDs directly; this avoids brittle decode failures from
+	// list endpoints and still preserves explicit operator intent.
+	if configured := collectConfiguredSquads(selectedSquads); len(configured) > 0 {
+		return configured, nil
+	}
+
+	resp, err := r.client.InternalSquad().GetInternalSquads(ctx)
+	if err != nil {
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on GetInternalSquads, falling back to permissive parser", "error", err)
+			payload, statusCode, rawErr := r.doRawJSONRequest(ctx, http.MethodGet, "/api/internal-squads", nil)
+			if rawErr != nil {
+				return nil, fmt.Errorf("fallback get internal squads failed: %w", rawErr)
+			}
+			if statusCode >= 400 {
+				return nil, fmt.Errorf("fallback get internal squads status %d: %s", statusCode, strings.TrimSpace(string(payload)))
+			}
+			if ids := parseInternalSquadUUIDsLoose(payload); len(ids) > 0 {
+				return ids, nil
+			}
+		}
+		return nil, err
+	}
+
+	internalSquadsResp, ok := resp.(*remapi.InternalSquadsResponse)
+	if !ok {
+		return nil, errors.New("unknown response type from GetInternalSquads")
+	}
+
+	squads := internalSquadsResp.GetResponse()
+	ids := make([]uuid.UUID, 0, len(squads.GetInternalSquads()))
+	for _, squad := range squads.GetInternalSquads() {
+		ids = append(ids, squad.UUID)
+	}
+	return ids, nil
+}
+
+func (r *Client) getUsersByTelegramIDFallback(ctx context.Context, telegramID int64) ([]remapi.User, error) {
+	path := "/api/users/by-telegram-id/" + url.PathEscape(strconv.FormatInt(telegramID, 10))
+	payload, statusCode, err := r.doRawJSONRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		return nil, fmt.Errorf("fallback get users by telegram id status %d: %s", statusCode, strings.TrimSpace(string(payload)))
+	}
+
+	unwrapped, err := unwrapResponseEnvelope(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	items := asSlice(unwrapped)
+	if items == nil {
+		if m := asMap(unwrapped); m != nil {
+			items = asSlice(m["users"])
+			if items == nil {
+				if singleUser := asMap(m["user"]); singleUser != nil {
+					items = []any{singleUser}
+				}
+			}
+		}
+	}
+	if items == nil {
+		return []remapi.User{}, nil
+	}
+
+	users := make([]remapi.User, 0, len(items))
+	for _, item := range items {
+		parsedUser, parseErr := parseUserLoose(item)
+		if parseErr != nil {
+			continue
+		}
+		users = append(users, *parsedUser)
+	}
+	return users, nil
+}
+
+func (r *Client) getUserByUUIDFallback(ctx context.Context, userUUID uuid.UUID) (*remapi.User, error) {
+	path := "/api/users/" + url.PathEscape(userUUID.String())
+	payload, statusCode, err := r.doRawJSONRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		return nil, fmt.Errorf("fallback get user by uuid status %d: %s", statusCode, strings.TrimSpace(string(payload)))
+	}
+
+	unwrapped, err := unwrapResponseEnvelope(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := parseUserLoose(unwrapped)
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
 }
 
 // generateUsername creates a subscription key name.

@@ -317,48 +317,80 @@ func main() {
 		panic(err)
 	}
 
-	_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
-		MenuButton: &models.MenuButtonCommands{
-			Type: models.MenuButtonTypeCommands,
-		},
-	})
+	miniAppURL := strings.TrimSpace(config.GetMiniAppURL())
+	if miniAppURL != "" {
+		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
+			MenuButton: &models.MenuButtonWebApp{
+				Type: models.MenuButtonTypeWebApp,
+				Text: "ဒီမှာဝယ်ပါ",
+				WebApp: models.WebAppInfo{
+					URL: miniAppURL,
+				},
+			},
+		})
+	} else {
+		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
+			MenuButton: &models.MenuButtonCommands{
+				Type: models.MenuButtonTypeCommands,
+			},
+		})
+	}
 	if err != nil {
 		slog.Warn("Failed to set chat menu button (non-fatal)", "error", err)
 	}
 
-	// Set bot commands for Russian
+	// Set default bot commands (English fallback for all other locales).
 	_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-		Commands: []models.BotCommand{
-			{Command: "start", Description: "Начать работу с ботом"},
-			{Command: "connect", Description: "Подключиться"},
-		},
+		Commands: handler.PublicBotCommands("en"),
+	})
+	if err != nil {
+		slog.Warn("Failed to set default bot commands (non-fatal)", "error", err)
+	}
+
+	// Set public bot commands for Russian.
+	_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+		Commands:     handler.PublicBotCommands("ru"),
 		LanguageCode: "ru",
 	})
 	if err != nil {
 		slog.Warn("Failed to set Russian bot commands (non-fatal)", "error", err)
 	}
 
-	// Set bot commands for English
-	_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-		Commands: []models.BotCommand{
-			{Command: "start", Description: "Start using the bot"},
-			{Command: "connect", Description: "Connect"},
-		},
-		LanguageCode: "en",
-	})
-	if err != nil {
-		slog.Warn("Failed to set English bot commands (non-fatal)", "error", err)
+	adminID := config.GetAdminTelegramId()
+	if adminID != 0 {
+		adminScope := &models.BotCommandScopeChat{
+			ChatID: adminID,
+		}
+
+		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+			Commands: handler.AdminBotCommands("en"),
+			Scope:    adminScope,
+		})
+		if err != nil {
+			slog.Warn("Failed to set default admin bot commands (non-fatal)", "error", err)
+		}
+
+		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+			Commands:     handler.AdminBotCommands("ru"),
+			Scope:        adminScope,
+			LanguageCode: "ru",
+		})
+		if err != nil {
+			slog.Warn("Failed to set Russian admin bot commands (non-fatal)", "error", err)
+		}
 	}
 
 	config.SetBotURL(fmt.Sprintf("https://t.me/%s", me.Username))
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, h.StartCommandHandler, h.SuspiciousUserFilterMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/connect", bot.MatchTypeExact, h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/admin", bot.MatchTypeExact, h.AdminCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/admin@", bot.MatchTypePrefix, h.AdminCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/addpromo", bot.MatchTypePrefix, h.AddPromoCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/listpromos", bot.MatchTypeExact, h.ListPromosCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/deletepromo", bot.MatchTypePrefix, h.DeletePromoCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/transactions", bot.MatchTypePrefix, h.TransactionsCommandHandler, isAdminMiddleware)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandHandler)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setreferralbonus", bot.MatchTypePrefix, h.SetReferralBonusCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setphone", bot.MatchTypePrefix, h.SetPhoneCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setname", bot.MatchTypePrefix, h.SetNameCommandHandler, isAdminMiddleware)
@@ -381,6 +413,24 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackSell, bot.MatchTypePrefix, h.SellCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackConnect, bot.MatchTypeExact, h.ConnectCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackPayment, bot.MatchTypePrefix, h.PaymentCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackAdmin+":", bot.MatchTypePrefix, h.AdminCallbackHandler, h.AcknowledgeCallbackQueryMiddleware)
+
+	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+		return update.Message != nil &&
+			update.Message.From != nil &&
+			update.Message.Text != "" &&
+			!strings.HasPrefix(update.Message.Text, "/") &&
+			!h.HasPendingAdminFlow(update.Message.From.ID) &&
+			h.IsAdminQuickAction(update.Message.Text)
+	}, h.AdminQuickActionHandler, isAdminMiddleware)
+
+	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+		return update.Message != nil &&
+			update.Message.From != nil &&
+			update.Message.Text != "" &&
+			!strings.HasPrefix(update.Message.Text, "/") &&
+			h.HasPendingAdminFlow(update.Message.From.ID)
+	}, h.AdminFlowInputHandler, isAdminMiddleware)
 
 	// Register photo handler for mobile banking screenshot uploads
 	if config.IsMobileBankingEnabled() {

@@ -26,65 +26,81 @@ const runtimeRestoreGuidance = "⚠️ Runtime restore is disabled in the live b
 
 // adminOnly is a helper that sends an unauthorized message and returns false if not admin.
 func (h Handler) adminOnly(ctx context.Context, b *bot.Bot, update *models.Update) bool {
-	if update.Message.From.ID != config.GetAdminTelegramId() {
+	if h.isAdminUpdate(update) {
+		return true
+	}
+
+	chatID := updateChatID(update)
+	if chatID != 0 {
 		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
+			ChatID: chatID,
 			Text:   "⛔ Unauthorized: admin only command.",
 		})
-		return false
 	}
-	return true
+	return false
+}
+
+func (h Handler) isAdminUpdate(update *models.Update) bool {
+	userID := updateUserID(update)
+	return userID != 0 && userID == config.GetAdminTelegramId()
+}
+
+func updateUserID(update *models.Update) int64 {
+	switch {
+	case update == nil:
+		return 0
+	case update.Message != nil && update.Message.From != nil:
+		return update.Message.From.ID
+	case update.CallbackQuery != nil:
+		return update.CallbackQuery.From.ID
+	default:
+		return 0
+	}
+}
+
+func updateChatID(update *models.Update) int64 {
+	switch {
+	case update == nil:
+		return 0
+	case update.Message != nil:
+		return update.Message.Chat.ID
+	case update.CallbackQuery != nil && update.CallbackQuery.Message.Message != nil:
+		return update.CallbackQuery.Message.Message.Chat.ID
+	default:
+		return 0
+	}
+}
+
+func updateLanguageCode(update *models.Update) string {
+	switch {
+	case update == nil:
+		return "en"
+	case update.Message != nil && update.Message.From != nil && update.Message.From.LanguageCode != "":
+		return update.Message.From.LanguageCode
+	case update.CallbackQuery != nil && update.CallbackQuery.From.LanguageCode != "":
+		return update.CallbackQuery.From.LanguageCode
+	default:
+		return "en"
+	}
 }
 
 // HelpCommandHandler handles /help — lists all admin commands.
 func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if !h.adminOnly(ctx, b, update) {
+	chatID := updateChatID(update)
+	if chatID == 0 {
 		return
 	}
 
-	helpText := `🛠 <b>Admin Commands</b>
-
-<b>General</b>
-/start — Show main menu
-/help — Show this help message
-/sync — Sync users with Remnawave
-
-<b>Settings</b>
-/setreferralbonus &lt;amount&gt; — Change the referral bonus amount (e.g. /setreferralbonus 2000)
-/setphone &lt;provider&gt; &lt;number&gt; — Set phone for a provider (e.g. /setphone kpay 09123456789)
-/setname &lt;provider&gt; &lt;name&gt; — Set account name for a provider (e.g. /setname wave Aung Aung)
-/disablephone &lt;provider&gt; — Disable a provider (e.g. /disablephone aya)
-/disablename &lt;provider&gt; — Clear a provider account name (e.g. /disablename aya)
-/phones — Show all configured payment receivers
-
-<b>Transactions</b>
-/transactions — Last 10 paid transactions
-/transactions 25 — Last N paid transactions (max 50)
-/revenue — Revenue summary (today + last 7 days)
-/backup now — Create DB backup and send it to admin chat
-/backup status — Show backup scheduler and last backup status
-/backup list — Show recent local backup files
-/backup enable — Enable scheduled backups
-/backup disable — Disable scheduled backups
-/backup schedule [HH:MM] — Show or set daily backup time
-/restore list — Show local backup files for offline/manual restore
-/restore latest — Disabled in live runtime; use offline/manual restore
-/restore file &lt;name&gt; — Disabled in live runtime; use offline/manual restore
-/restore confirm &lt;token&gt; — Disabled in live runtime; use offline/manual restore
-/restore cancel — Disabled in live runtime; use offline/manual restore
-
-<b>Promo Codes</b>
-/addpromo &lt;code&gt; &lt;discount%&gt; &lt;Ndays&gt; &lt;Ncode&gt;
-  Example: /addpromo SALE50 50% 10days 100code
-/listpromos — List all promo codes
-/deletepromo &lt;code&gt; — Delete a promo code
-
-<b>Testing &amp; Notifications</b>
-/test — Test mode commands
-/noti — Send subscription notifications`
+	helpText := renderUserHelpText()
+	if h.isAdminUpdate(update) {
+		if update.Message != nil && update.Message.From != nil {
+			h.clearAdminFlow(update.Message.From.ID)
+		}
+		helpText = renderAdminHelpText()
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
+		ChatID:    chatID,
 		Text:      helpText,
 		ParseMode: models.ParseModeHTML,
 	})

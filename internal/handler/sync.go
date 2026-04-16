@@ -9,6 +9,10 @@ import (
 )
 
 func (h Handler) SyncUsersCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update.Message != nil && update.Message.From != nil {
+		h.clearAdminFlow(update.Message.From.ID)
+	}
+
 	h.syncService.Sync()
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,

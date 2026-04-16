@@ -98,7 +98,14 @@ func (g *initDataReplayGuard) cleanupLoop() {
 var replayGuard = newInitDataReplayGuard()
 
 func requestFingerprint(r *http.Request) string {
-	return getIP(r) + "|" + strings.TrimSpace(r.UserAgent())
+	// Do not bind initData to client IP. Users often change network/IP after
+	// connecting their VPN key, and strict IP binding causes false 401 replay
+	// rejections while the same Telegram session is still valid.
+	ua := strings.TrimSpace(r.UserAgent())
+	if ua == "" {
+		return "ua:unknown"
+	}
+	return "ua:" + ua
 }
 
 func isSupportedRedirectTarget(target string) bool {

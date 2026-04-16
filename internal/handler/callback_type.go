@@ -10,4 +10,5 @@ const (
 	CallbackActivateTrial = "activate_trial"
 	CallbackReferral      = "referral"
 	CallbackMobilePay     = "mobilepay"
+	CallbackAdmin         = "admin"
 )

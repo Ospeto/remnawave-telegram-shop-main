@@ -33,6 +33,20 @@ func TestGetIPIgnoresForwardedFor(t *testing.T) {
 	}
 }
 
+func TestRequestFingerprintIgnoresIPChanges(t *testing.T) {
+	reqA := httptest.NewRequest("GET", "http://example.com/", nil)
+	reqA.RemoteAddr = "203.0.113.7:12345"
+	reqA.Header.Set("User-Agent", "TelegramBot (iOS)")
+
+	reqB := httptest.NewRequest("GET", "http://example.com/", nil)
+	reqB.RemoteAddr = "198.51.100.9:54321"
+	reqB.Header.Set("User-Agent", "TelegramBot (iOS)")
+
+	if gotA, gotB := requestFingerprint(reqA), requestFingerprint(reqB); gotA != gotB {
+		t.Fatalf("requestFingerprint() should stay stable across IP changes, got %q vs %q", gotA, gotB)
+	}
+}
+
 func TestParsePaymentMethod(t *testing.T) {
 	tests := []struct {
 		name    string

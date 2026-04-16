@@ -32,6 +32,9 @@ type Handler struct {
 	// Rate Limiting
 	limitersMu *sync.Mutex
 	limiters   map[int64]*rate.Limiter
+
+	adminFlowsMu *sync.Mutex
+	adminFlows   map[int64]adminFlowState
 }
 
 func NewHandler(
@@ -65,6 +68,8 @@ func NewHandler(
 		mobilePayCache:      mobilePayCache,
 		limiters:            make(map[int64]*rate.Limiter),
 		limitersMu:          &sync.Mutex{},
+		adminFlows:          make(map[int64]adminFlowState),
+		adminFlowsMu:        &sync.Mutex{},
 	}
 
 	// Start cleanup loop for rate limiters
