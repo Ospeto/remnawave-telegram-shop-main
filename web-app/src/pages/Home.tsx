@@ -9,7 +9,8 @@ import { TipBox } from '../components/TipBox';
 import { UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
-import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
+import { APIError, isAPIStatus } from '../lib/http';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -27,16 +28,15 @@ export function Home() {
     const loadData = useCallback(async () => {
         if (!initData) { setLoading(false); return; }
 
-        const currentAuthHeaders = { 'Authorization': `twa ${initData}` };
-
         setLoading(true);
         setError(null);
         setAuthExpired(false);
         try {
-            const meData = await fetchJSON<UserData>('/api/me', { headers: currentAuthHeaders });
+            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
             setData(meData);
         } catch (err) {
             if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -83,15 +83,17 @@ export function Home() {
         if (!initData || togglingAutoRenewId === keyId) return;
         setTogglingAutoRenewId(keyId);
         try {
+            const authHeaders = await getTelegramAuthHeaders(initData);
             const res = await fetch('/api/keys/autorenew', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `twa ${initData}`,
+                    ...authHeaders,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ key_id: keyId, enabled: !currentValue }),
             });
             if (res.status === 401) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -123,15 +125,17 @@ export function Home() {
         setTrialLoading(true);
         setTrialError(null);
         try {
+            const authHeaders = await getTelegramAuthHeaders(initData);
             const res = await fetch('/api/trial', {
                 method: 'POST',
-                headers: { 'Authorization': `twa ${initData}` },
+                headers: authHeaders,
             });
             if (res.status === 409) {
                 setTrialError(t('trial_already_used'));
                 return;
             }
             if (res.status === 401) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -145,8 +149,8 @@ export function Home() {
         }
     };
 
-    const handleHappLink = (happUrl: string) => {
-        openHappLink(happUrl, tg ?? null);
+    const handleHappLink = (happUrl: string, redirectUrl?: string) => {
+        openHappLink(happUrl, redirectUrl, tg ?? null);
     };
 
     if (loading) return <LoadingScreen message={t('loading')} />;
@@ -430,7 +434,7 @@ export function Home() {
                                         <button
                                             className="btn-primary"
                                             style={{ padding: '13px', fontSize: 'var(--font-body)', fontWeight: 600 }}
-                                            onClick={() => { playClick(); handleHappLink(key.happ_link); }}
+                                            onClick={() => { playClick(); handleHappLink(key.happ_link, key.redirect_url); }}
                                         >
                                             {t('btn_add_happ')}
                                         </button>

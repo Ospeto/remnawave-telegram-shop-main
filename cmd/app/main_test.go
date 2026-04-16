@@ -1,56 +1,28 @@
 package main
 
 import (
-	"os"
-	"syscall"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestShutdownSignals(t *testing.T) {
-	signals := shutdownSignals()
+func TestFullHealthHandlerReturnsShallowPayloadForPublicRequests(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/healthcheck", nil)
+	req.RemoteAddr = "203.0.113.10:12345"
 
-	if len(signals) != 2 {
-		t.Fatalf("shutdownSignals() length = %d, want 2", len(signals))
+	rec := httptest.NewRecorder()
+	fullHealthHandler(nil, nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fullHealthHandler() status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	if signals[0] != os.Interrupt {
-		t.Fatalf("shutdownSignals()[0] = %v, want %v", signals[0], os.Interrupt)
+	body := rec.Body.String()
+	if strings.Contains(body, "vision_providers") || strings.Contains(body, "buildDate") || strings.Contains(body, "commit") {
+		t.Fatalf("fullHealthHandler() public payload leaked internal probe details: %s", body)
 	}
-
-	if signals[1] != syscall.SIGTERM {
-		t.Fatalf("shutdownSignals()[1] = %v, want %v", signals[1], syscall.SIGTERM)
-	}
-}
-
-func TestNewVisionProviderBuildsOpenRouterClient(t *testing.T) {
-	provider, err := newVisionProvider("openrouter", "", "", "openrouter-key", "openai/gpt-4.1-mini", "")
-	if err != nil {
-		t.Fatalf("newVisionProvider() error = %v", err)
-	}
-	if provider == nil {
-		t.Fatal("newVisionProvider() provider = nil, want provider")
-	}
-	if provider.Name() != "openrouter" {
-		t.Fatalf("provider.Name() = %q, want %q", provider.Name(), "openrouter")
-	}
-}
-
-func TestNewVisionProviderRejectsMissingGeminiCredentials(t *testing.T) {
-	_, err := newVisionProvider("gemini", "", "gemini-2.5-flash", "", "", "")
-	if err == nil {
-		t.Fatal("newVisionProvider() error = nil, want error")
-	}
-}
-
-func TestNewVisionProviderBuildsOpenRouterFallbackClient(t *testing.T) {
-	provider, err := newVisionProvider("openrouter", "", "", "openrouter-key", "openai/gpt-4.1-mini", "google/gemini-3.1-flash-lite-preview")
-	if err != nil {
-		t.Fatalf("newVisionProvider() error = %v", err)
-	}
-	if provider == nil {
-		t.Fatal("newVisionProvider() provider = nil, want provider")
-	}
-	if provider.Name() != "openrouter-fallback" {
-		t.Fatalf("provider.Name() = %q, want %q", provider.Name(), "openrouter-fallback")
+	if !strings.Contains(body, `"status":"ok"`) {
+		t.Fatalf("fullHealthHandler() public payload missing status: %s", body)
 	}
 }

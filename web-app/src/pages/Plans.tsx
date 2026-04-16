@@ -9,6 +9,7 @@ import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
 
 
 export function Plans() {
@@ -53,7 +54,6 @@ export function Plans() {
             return;
         }
 
-        const headers = { 'Authorization': `twa ${initData}` };
         setLoading(true);
         setLoadError(null);
         setAuthExpired(false);
@@ -67,11 +67,12 @@ export function Plans() {
                 return;
             }
 
-            const meData = await fetchJSON<UserData>('/api/me', { headers });
+            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
             setUserData(meData);
         } catch (err) {
             console.warn('Plans load error:', err);
             if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -99,8 +100,9 @@ export function Plans() {
         setPromoError(null);
 
         try {
+            const authHeaders = await getTelegramAuthHeaders(initData);
             const res = await fetch(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, {
-                headers: { 'Authorization': `twa ${initData}` }
+                headers: authHeaders,
             });
             if (promoRequestRef.current !== requestId) return;
 
@@ -126,6 +128,7 @@ export function Plans() {
             }
 
             if (res.status === 401) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 setPromoStatus('idle');
                 return;

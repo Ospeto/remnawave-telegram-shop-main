@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Plans } from './Plans';
-import { jsonResponse, renderWithAppProviders } from '../test/test-utils';
+import { jsonResponse, renderWithAppProviders, seedTelegramSession } from '../test/test-utils';
 
 const telegramState = vi.hoisted(() => ({
     tg: {
@@ -36,6 +36,7 @@ describe('Plans', () => {
     beforeEach(() => {
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        seedTelegramSession();
     });
 
     it('builds wallet top-up checkout links without a negative plan index', async () => {
@@ -123,9 +124,11 @@ describe('Plans', () => {
 
         fireEvent.change(input, { target: { value: 'SAVE10' } });
         fireEvent.click(applyButton);
+        await waitFor(() => expect(typeof resolveFirst).toBe('function'));
 
         fireEvent.change(input, { target: { value: 'BADCODE' } });
         fireEvent.click(applyButton);
+        await waitFor(() => expect(typeof resolveSecond).toBe('function'));
 
         resolveSecond(jsonResponse('Invalid or expired code', 404));
         await screen.findByRole('alert');

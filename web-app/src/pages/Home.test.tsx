@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Home } from './Home';
-import { jsonResponse, renderWithAppProviders } from '../test/test-utils';
+import { jsonResponse, renderWithAppProviders, seedTelegramSession } from '../test/test-utils';
 
 const telegramState = vi.hoisted(() => ({
     tg: {
@@ -36,6 +36,7 @@ describe('Home', () => {
     beforeEach(() => {
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        seedTelegramSession();
     });
 
     it('recovers after retrying a failed /api/me request', async () => {

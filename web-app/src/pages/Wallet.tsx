@@ -5,7 +5,8 @@ import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
-import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
+import { APIError, isAPIStatus } from '../lib/http';
+import { clearTelegramSession, fetchJSONWithTelegramAuth } from '../lib/auth';
 
 interface WalletData {
   balance: number;
@@ -43,16 +44,15 @@ export function Wallet() {
       return;
     }
 
-    const headers = { 'Authorization': `twa ${initData}` };
     setLoading(true);
     setLoadError(null);
     setAuthExpired(false);
 
     try {
       const [walletData, historyData, referralResult] = await Promise.all([
-        fetchJSON<WalletData>('/api/wallet', { headers }),
-        fetchJSON<Transaction[]>('/api/wallet/history?limit=10', { headers }),
-        fetchJSON<any[]>('/api/referrals', { headers })
+        fetchJSONWithTelegramAuth<WalletData>('/api/wallet', initData),
+        fetchJSONWithTelegramAuth<Transaction[]>('/api/wallet/history?limit=10', initData),
+        fetchJSONWithTelegramAuth<any[]>('/api/referrals', initData)
           .catch(() => []),
       ]);
 
@@ -62,6 +62,7 @@ export function Wallet() {
     } catch (err) {
       console.warn('Wallet load error:', err);
       if (isAPIStatus(err, 401)) {
+        clearTelegramSession();
         setAuthExpired(true);
         return;
       }

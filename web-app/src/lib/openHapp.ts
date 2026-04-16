@@ -5,6 +5,7 @@
  */
 export function openHappLink(
     happUrl: string,
+    redirectUrl: string | undefined,
     tg: { openLink: (url: string) => void } | null
 ) {
     // Strategy 1: Hidden iframe
@@ -15,10 +16,10 @@ export function openHappLink(
     setTimeout(() => iframe.remove(), 3000);
 
     // Strategy 2: tg.openLink with redirect fallback
-    const redirectUrl = `${window.location.origin}/redirect?url=${encodeURIComponent(happUrl)}`;
+    const fallbackUrl = redirectUrl ? new URL(redirectUrl, window.location.origin).toString() : happUrl;
     if (tg?.openLink) {
-        tg.openLink(redirectUrl);
+        tg.openLink(fallbackUrl);
     } else {
-        window.open(redirectUrl, '_blank');
+        window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
     }
 }

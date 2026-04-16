@@ -1,7 +1,7 @@
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Wallet } from './Wallet';
-import { jsonResponse, renderWithAppProviders } from '../test/test-utils';
+import { jsonResponse, renderWithAppProviders, seedTelegramSession } from '../test/test-utils';
 
 const telegramState = vi.hoisted(() => ({
     tg: {
@@ -37,6 +37,7 @@ describe('Wallet', () => {
     beforeEach(() => {
         fetchMock.mockReset();
         vi.stubGlobal('fetch', fetchMock);
+        seedTelegramSession();
     });
 
     it('renders wallet data even when referrals fail to load', async () => {

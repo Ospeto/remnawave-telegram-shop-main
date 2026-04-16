@@ -9,10 +9,10 @@ describe('openHappLink', () => {
 
     it('opens the server redirect page through Telegram when available', () => {
         const tg = { openLink: vi.fn() };
-        openHappLink('happ://add/https://example.com/sub', tg);
+        openHappLink('happ://add/https://example.com/sub', '/redirect?token=signed-token', tg);
 
         expect(tg.openLink).toHaveBeenCalledWith(
-            `${window.location.origin}/redirect?url=${encodeURIComponent('happ://add/https://example.com/sub')}`
+            `${window.location.origin}/redirect?token=signed-token`
         );
 
         const iframe = document.querySelector('iframe');
@@ -22,11 +22,12 @@ describe('openHappLink', () => {
     it('falls back to window.open when Telegram is unavailable', () => {
         const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
 
-        openHappLink('happ://add/https://example.com/sub', null);
+        openHappLink('happ://add/https://example.com/sub', '/redirect?token=signed-token', null);
 
         expect(windowOpen).toHaveBeenCalledWith(
-            `${window.location.origin}/redirect?url=${encodeURIComponent('happ://add/https://example.com/sub')}`,
-            '_blank'
+            `${window.location.origin}/redirect?token=signed-token`,
+            '_blank',
+            'noopener,noreferrer'
         );
     });
 });

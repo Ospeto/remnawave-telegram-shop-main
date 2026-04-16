@@ -25,3 +25,24 @@ func MaskHalf(input string) string {
 	maskedLength := length - visibleLength
 	return input[:visibleLength] + strings.Repeat("*", maskedLength)
 }
+
+func MaskTail(input string, visible int) string {
+	if input == "" {
+		return input
+	}
+	if visible <= 0 {
+		return strings.Repeat("*", len(input))
+	}
+	if len(input) <= visible {
+		return strings.Repeat("*", len(input))
+	}
+	return strings.Repeat("*", len(input)-visible) + input[len(input)-visible:]
+}
+
+func FirstToken(input string) string {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}

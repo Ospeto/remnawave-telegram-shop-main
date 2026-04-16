@@ -12,6 +12,7 @@ export interface SubscriptionKey {
     username: string;
     subscription_url: string;
     happ_link: string;
+    redirect_url?: string;
     expire_at: string | null;
     days_remaining: number;
     total_days: number;

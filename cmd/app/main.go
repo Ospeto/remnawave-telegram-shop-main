@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
+	"remnawave-tg-shop-bot/utils"
 	"strconv"
 	"strings"
 	"syscall"
@@ -613,6 +615,16 @@ func healthProbeURL() string {
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isInternalHealthcheckRequest(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"time":   time.Now().Format(time.RFC3339),
+			})
+			return
+		}
+
 		status := map[string]any{
 			"status":           "ok",
 			"db":               "ok",
@@ -676,6 +688,15 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 	})
 }
 
+func isInternalHealthcheckRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		if update.Message == nil {
@@ -687,7 +708,11 @@ func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 		if userID == adminID {
 			next(ctx, b, update)
 		} else {
-			slog.Warn("Unauthorized admin command attempt", "user_id", userID, "admin_id", adminID, "command", update.Message.Text)
+			slog.Warn(
+				"Unauthorized admin command attempt",
+				"user_id", utils.MaskHalfInt64(userID),
+				"command", utils.FirstToken(update.Message.Text),
+			)
 			// Optional: Reply to user saying unauthorized? Maybe better to stay silent security-wise, but for debugging prompt:
 			// b.SendMessage(ctx, &bot.SendMessageParams{
 			// 	ChatID: update.Message.Chat.ID,

@@ -1,6 +1,10 @@
 package api
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,5 +134,37 @@ func TestCompactSubscriptionKeysForDisplayPrefersActiveRecordForSameIdentity(t *
 	}
 	if compacted[0].Status != "active" || compacted[0].ID != 21 {
 		t.Fatalf("compactSubscriptionKeysForDisplay() kept %q ID %d, want active ID 21", compacted[0].Status, compacted[0].ID)
+	}
+}
+
+func TestBeginScreenshotVerificationRejectsExcessiveAttemptsByCustomer(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	customerID := int64(99)
+
+	for i := 0; i < maxScreenshotVerificationsPerCustomer; i++ {
+		purchaseID := int64(i + 1)
+		if err := handler.beginScreenshotVerification(purchaseID, customerID); err != nil {
+			t.Fatalf("beginScreenshotVerification() attempt %d error = %v", i+1, err)
+		}
+		handler.finishScreenshotVerification(purchaseID)
+	}
+
+	if err := handler.beginScreenshotVerification(999, customerID); err == nil {
+		t.Fatal("beginScreenshotVerification() error = nil, want per-customer throttling")
+	}
+}
+
+func TestWriteSanitizedErrorHidesWrappedDetails(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSanitizedError(rec, http.StatusInternalServerError, "Verification unavailable", errors.New("upstream timeout: token=secret"))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("writeSanitizedError() status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	if body := rec.Body.String(); body != "Verification unavailable\n" {
+		t.Fatalf("writeSanitizedError() body = %q, want sanitized public message", body)
+	}
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatal("writeSanitizedError() leaked wrapped error details")
 	}
 }

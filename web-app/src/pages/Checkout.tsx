@@ -10,6 +10,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
 
 interface PaymentProvider {
     key: string;
@@ -29,12 +30,14 @@ interface PurchaseResponse {
     invoice_type: string;
     bot_url: string;
     happ_link?: string;
+    redirect_url?: string;
 }
 
 interface VerificationResponse {
     status: string;
     message: string;
     happ_link?: string;
+    redirect_url?: string;
     test_mode?: boolean;
     shadow_passed?: boolean;
 }
@@ -110,12 +113,11 @@ export function Checkout() {
 
     const loadWalletBalance = useCallback(async () => {
         if (!initData || isWalletTopup) return;
-        const headers = { 'Authorization': `twa ${initData}` };
 
         setWalletBalanceLoading(true);
         setWalletBalanceError(null);
         try {
-            const data = await fetchJSON<{ balance?: number }>('/api/wallet', { headers });
+            const data = await fetchJSONWithTelegramAuth<{ balance?: number }>('/api/wallet', initData);
             if (typeof data.balance === 'number') {
                 setWalletBalance(data.balance);
             } else {
@@ -124,6 +126,7 @@ export function Checkout() {
             }
         } catch (err) {
             if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -166,7 +169,6 @@ export function Checkout() {
         purchaseIntentRef.current = { action: null, key: null };
 
         try {
-            const headers = { 'Authorization': `twa ${initData}` };
             const plansData = await fetchJSON<Plan[]>('/api/plans');
             const normalizedPlans = Array.isArray(plansData) ? plansData : [];
 
@@ -183,12 +185,13 @@ export function Checkout() {
                 return;
             }
 
-            const meData = await fetchJSON<UserData>('/api/me', { headers });
+            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
             setUserData(meData);
             await loadWalletBalance();
         } catch (err) {
             console.warn('Checkout load error:', err);
             if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
                 setAuthExpired(true);
                 return;
             }
@@ -236,10 +239,11 @@ export function Checkout() {
                 }
             }
 
+            const authHeaders = await getTelegramAuthHeaders(initData);
             const res = await fetch('/api/purchase', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `twa ${initData}`,
+                    ...authHeaders,
                     'Content-Type': 'application/json',
                     'Idempotency-Key': purchaseIntentRef.current.action === action && purchaseIntentRef.current.key
                         ? purchaseIntentRef.current.key
@@ -254,6 +258,7 @@ export function Checkout() {
 
             if (!res.ok) {
                 if (res.status === 401) {
+                    clearTelegramSession();
                     setAuthExpired(true);
                     return;
                 }
@@ -273,6 +278,7 @@ export function Checkout() {
                     status: 'success',
                     message: t('wallet_pay_success'),
                     happ_link: data.happ_link,
+                    redirect_url: data.redirect_url,
                 });
             }
         } catch (err: unknown) {
@@ -298,13 +304,15 @@ export function Checkout() {
         formData.append('file', file);
 
         try {
+            const authHeaders = await getTelegramAuthHeaders(initData);
             const res = await fetch(`/api/upload_screenshot?id=${purchase.purchase_id}`, {
                 method: 'POST',
-                headers: { 'Authorization': `twa ${initData}` },
+                headers: authHeaders,
                 body: formData
             });
             if (!res.ok) {
                 if (res.status === 401) {
+                    clearTelegramSession();
                     setAuthExpired(true);
                     return;
                 }
@@ -332,8 +340,8 @@ export function Checkout() {
         });
     };
 
-    const handleHappLink = (happUrl: string) => {
-        openHappLink(happUrl, tg ?? null);
+    const handleHappLink = (happUrl: string, redirectUrl?: string) => {
+        openHappLink(happUrl, redirectUrl, tg ?? null);
     };
 
     if (!initData) {
@@ -392,7 +400,7 @@ export function Checkout() {
                 {verificationResult?.happ_link && !isWalletTopup && (
                     <button
                         className="btn-primary"
-                        onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!); }}
+                        onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!, verificationResult.redirect_url); }}
                         style={{ marginTop: 12, width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
                     >
                         {t('btn_open_happ')}

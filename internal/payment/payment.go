@@ -46,6 +46,9 @@ var (
 	// ErrPurchaseFinalizationPending means fulfillment succeeded but the final DB
 	// transition to paid could not be persisted cleanly.
 	ErrPurchaseFinalizationPending = errors.New("purchase finalization is pending")
+	// ErrAwaitingReceiptVerification means the customer already has a receipt-based
+	// payment waiting for screenshot verification and should complete that flow first.
+	ErrAwaitingReceiptVerification = errors.New("customer already has a pending receipt verification")
 )
 
 func WithIdempotencyKey(ctx context.Context, key uuid.UUID) context.Context {
@@ -894,10 +897,12 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	// but is not cancelled when the parent is cancelled, making this operation
 	// safe to run after the purchase flow completes.
 	ctxRef := context.WithoutCancel(ctx)
+	customerID := utils.MaskHalfInt64(customer.ID)
+	customerTelegramID := utils.MaskHalfInt64(customer.TelegramID)
 
 	slog.Info("[REFERRAL-DEBUG] processReferralBonus called",
-		"customer_id", customer.ID,
-		"telegram_id", customer.TelegramID,
+		"customer_id", customerID,
+		"telegram_id", customerTelegramID,
 	)
 
 	referral, err := s.referralRepository.FindByReferee(ctxRef, customer.TelegramID)
@@ -911,9 +916,9 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	}
 
 	slog.Info("[REFERRAL-DEBUG] Referral record found!",
-		"referral_id", referral.ID,
-		"referrer_telegram_id", referral.ReferrerID,
-		"referee_telegram_id", referral.RefereeID,
+		"referral_id", utils.MaskHalfInt64(referral.ID),
+		"referrer_telegram_id", utils.MaskHalfInt64(referral.ReferrerID),
+		"referee_telegram_id", utils.MaskHalfInt64(referral.RefereeID),
 		"bonus_granted", referral.BonusGranted,
 		"referee_bonus_granted", referral.RefereeBonusGranted,
 	)
@@ -923,13 +928,16 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 		slog.Info("[REFERRAL-DEBUG] Crediting REFERRER...")
 		referrerCustomer, err := s.customerRepository.FindByTelegramId(ctxRef, referral.ReferrerID)
 		if err != nil || referrerCustomer == nil {
-			slog.Error("[REFERRAL-DEBUG] FAILED: referrer customer lookup failed (non-fatal)", "error", err, "referrer_id", referral.ReferrerID)
+			slog.Error(
+				"[REFERRAL-DEBUG] FAILED: referrer customer lookup failed (non-fatal)",
+				"error", err,
+				"referrer_id", utils.MaskHalfInt64(referral.ReferrerID),
+			)
 			return
 		}
 
 		slog.Info("[REFERRAL-DEBUG] Referrer found, adding balance",
-			"referrer_customer_id", referrerCustomer.ID,
-			"current_balance", referrerCustomer.Balance,
+			"referrer_customer_id", utils.MaskHalfInt64(referrerCustomer.ID),
 			"bonus_amount", ReferralBonusAmount,
 		)
 
@@ -980,7 +988,11 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			}
 			referrerTxDone = true
 
-			slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer", "referrer_id", referrerCustomer.ID, "amount", ReferralBonusAmount)
+			slog.Info(
+				"[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer",
+				"referrer_id", utils.MaskHalfInt64(referrerCustomer.ID),
+				"amount", ReferralBonusAmount,
+			)
 
 			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 				ChatID:    referrerCustomer.TelegramID,
@@ -1045,7 +1057,11 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			}
 			refereeTxDone = true
 
-			slog.Info("[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee", "referee_id", customer.ID, "amount", ReferralBonusAmount)
+			slog.Info(
+				"[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee",
+				"referee_id", customerID,
+				"amount", ReferralBonusAmount,
+			)
 
 			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
 				ChatID:    customer.TelegramID,
@@ -1272,6 +1288,23 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	if len(GetEnabledPaymentProviders()) == 0 {
 		return "", 0, fmt.Errorf("no mobile banking accounts configured")
+	}
+
+	candidate := &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         amount,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    extendKeyID,
+	}
+	if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+		return "", 0, lookupErr
+	} else if existing != nil {
+		if canReuseAwaitingVerificationPurchase(existing, candidate) {
+			slog.Info("Reusing pending mobile banking purchase", "purchase_id", utils.MaskHalfInt64(existing.ID), "customer_id", utils.MaskHalfInt64(customer.ID))
+			return "", existing.ID, nil
+		}
+		return "", 0, ErrAwaitingReceiptVerification
 	}
 
 	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
@@ -1902,7 +1935,13 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	// different apps use different names/number formats.
 	matchedProvider, matchedBy, matched := MatchPaymentRecipient(NormalizeProviderKey(info.Provider), info.PhoneNumber, info.RecipientName, 4)
 	if !matched {
-		slog.Warn("Recipient mismatch", "provider", info.Provider, "phone", info.PhoneNumber, "recipient_name", info.RecipientName, "purchase_id", purchaseID)
+		slog.Warn(
+			"Recipient mismatch",
+			"provider", info.Provider,
+			"phone", utils.MaskTail(normalizePhone(info.PhoneNumber), 4),
+			"has_recipient_name", strings.TrimSpace(info.RecipientName) != "",
+			"purchase_id", utils.MaskHalfInt64(purchaseID),
+		)
 		if testModeBypass {
 			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
 				reason:    "Wrong recipient details",
@@ -1914,8 +1953,20 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 
 	// 4. Check note for forbidden keywords
 	noteLower := strings.ToLower(info.Note)
-	if strings.Contains(noteLower, "vpn") || strings.Contains(noteLower, "outline") {
-		slog.Warn("Payment note contains forbidden keyword", "note", info.Note, "purchase_id", purchaseID)
+	matchedKeyword := ""
+	switch {
+	case strings.Contains(noteLower, "vpn"):
+		matchedKeyword = "vpn"
+	case strings.Contains(noteLower, "outline"):
+		matchedKeyword = "outline"
+	}
+	if matchedKeyword != "" {
+		slog.Warn(
+			"Payment note contains forbidden keyword",
+			"keyword", matchedKeyword,
+			"note_length", len(strings.TrimSpace(info.Note)),
+			"purchase_id", utils.MaskHalfInt64(purchaseID),
+		)
 		if testModeBypass {
 			return s.completeTestModeVerification(ctx, purchaseID, info, matchedProvider.Key, &verificationFailure{
 				reason:    "Payment note contains forbidden keyword",
@@ -1980,7 +2031,13 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		"verified_at":    now,
 	})
 
-	slog.Info("Mobile payment verified and processed", "purchase_id", purchaseID, "txn_id", info.TransactionID, "provider", matchedProvider.Key, "matched_by", matchedBy)
+	slog.Info(
+		"Mobile payment verified and processed",
+		"purchase_id", utils.MaskHalfInt64(purchaseID),
+		"txn_id", utils.MaskTail(strings.TrimSpace(info.TransactionID), 6),
+		"provider", matchedProvider.Key,
+		"matched_by", matchedBy,
+	)
 	return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
 }
 
@@ -2022,6 +2079,28 @@ func normalizePhone(phone string) string {
 	return phone
 }
 
+func canReuseAwaitingVerificationPurchase(existing, candidate *database.Purchase) bool {
+	if existing == nil || candidate == nil {
+		return false
+	}
+	if existing.InvoiceType != candidate.InvoiceType {
+		return false
+	}
+	if math.Abs(existing.Amount-candidate.Amount) > 0.01 {
+		return false
+	}
+	if existing.Days != candidate.Days || existing.TrafficLimitGB != candidate.TrafficLimitGB {
+		return false
+	}
+	if (existing.ExtendKeyID == nil) != (candidate.ExtendKeyID == nil) {
+		return false
+	}
+	if existing.ExtendKeyID != nil && candidate.ExtendKeyID != nil && *existing.ExtendKeyID != *candidate.ExtendKeyID {
+		return false
+	}
+	return true
+}
+
 // phoneMatchesSuffix checks if two phone numbers share the same last N digits.
 // This handles cases where banking apps mask/truncate the phone number.
 func phoneMatchesSuffix(expected, actual string, n int) bool {
@@ -2047,6 +2126,20 @@ func phoneMatchesSuffix(expected, actual string, n int) bool {
 func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
 	if len(GetEnabledPaymentProviders()) == 0 {
 		return "", 0, fmt.Errorf("no mobile banking accounts configured")
+	}
+
+	candidate := &database.Purchase{
+		InvoiceType: database.InvoiceTypeWalletTopUp,
+		Amount:      amount,
+	}
+	if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+		return "", 0, lookupErr
+	} else if existing != nil {
+		if canReuseAwaitingVerificationPurchase(existing, candidate) {
+			slog.Info("Reusing pending wallet top-up purchase", "purchase_id", utils.MaskHalfInt64(existing.ID), "customer_id", utils.MaskHalfInt64(customer.ID))
+			return "", existing.ID, nil
+		}
+		return "", 0, ErrAwaitingReceiptVerification
 	}
 
 	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{

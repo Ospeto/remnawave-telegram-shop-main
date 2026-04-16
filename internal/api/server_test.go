@@ -1,10 +1,18 @@
 package api
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderRedirectPageEscapesInjectedTarget(t *testing.T) {
@@ -136,4 +144,121 @@ func TestRedirectHelpers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInitDataExchangeGuardRejectsReuse(t *testing.T) {
+	guard := newInitDataExchangeGuard()
+	expiresAt := time.Now().Add(time.Minute)
+
+	if err := guard.consume("binding-key", expiresAt); err != nil {
+		t.Fatalf("consume() first call error = %v", err)
+	}
+	if err := guard.consume("binding-key", expiresAt); err == nil {
+		t.Fatal("consume() second call error = nil, want replay rejection")
+	}
+}
+
+func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
+	store := newAuthSessionStore(30 * time.Minute)
+
+	token, expiresAt, err := store.create(42, "alice", "ua:test")
+	if err != nil {
+		t.Fatalf("create() error = %v", err)
+	}
+	if token == "" {
+		t.Fatal("create() returned empty token")
+	}
+
+	session, err := store.authenticate(token, "ua:test")
+	if err != nil {
+		t.Fatalf("authenticate() error = %v", err)
+	}
+	if session.TelegramID != 42 || session.Username != "alice" {
+		t.Fatalf("authenticate() returned unexpected session: %+v", session)
+	}
+
+	refreshed, err := store.authenticate(token, "ua:test")
+	if err != nil {
+		t.Fatalf("authenticate() second call error = %v", err)
+	}
+	if !refreshed.ExpiresAt.After(expiresAt) {
+		t.Fatalf("authenticate() did not refresh expiry: original=%v refreshed=%v", expiresAt, refreshed.ExpiresAt)
+	}
+
+	if _, err := store.authenticate(token, "ua:other"); err == nil {
+		t.Fatal("authenticate() fingerprint mismatch error = nil, want rejection")
+	}
+}
+
+func TestValidateInitDataRejectsStaleSessionExchange(t *testing.T) {
+	initData := testTelegramInitData(t, "bot-token", time.Now().Add(-10*time.Minute), 42, "alice")
+
+	if _, _, _, _, err := validateInitData(initData, "bot-token", 5*time.Minute); err == nil {
+		t.Fatal("validateInitData() stale session-exchange window error = nil, want rejection")
+	}
+}
+
+func TestRedirectGrantStoreConsumesIssuedToken(t *testing.T) {
+	store := newRedirectGrantStore(2 * time.Minute)
+
+	token, err := store.issue("happ://add/https://example.com/sub", "https://example.com/sub")
+	if err != nil {
+		t.Fatalf("issue() error = %v", err)
+	}
+
+	grant, err := store.consume(token)
+	if err != nil {
+		t.Fatalf("consume() error = %v", err)
+	}
+	if grant.Target != "happ://add/https://example.com/sub" || grant.SubscriptionURL != "https://example.com/sub" {
+		t.Fatalf("consume() returned unexpected grant: %+v", grant)
+	}
+
+	if _, err := store.consume(token); err == nil {
+		t.Fatal("consume() second call error = nil, want one-time rejection")
+	}
+}
+
+func testTelegramInitData(t *testing.T, botToken string, authDate time.Time, userID int64, username string) string {
+	t.Helper()
+
+	userJSON, err := json.Marshal(map[string]any{
+		"id":       userID,
+		"username": username,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(user) error = %v", err)
+	}
+
+	values := map[string]string{
+		"auth_date": strconv.FormatInt(authDate.Unix(), 10),
+		"query_id":  "AAHdF6IQAAAAAN0XohDhrOrc",
+		"user":      string(userJSON),
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, values[key]))
+	}
+	dataCheckString := strings.Join(parts, "\n")
+
+	secretKey := hmac.New(sha256.New, []byte("WebAppData"))
+	secretKey.Write([]byte(botToken))
+	secret := secretKey.Sum(nil)
+
+	signer := hmac.New(sha256.New, secret)
+	signer.Write([]byte(dataCheckString))
+	values["hash"] = hex.EncodeToString(signer.Sum(nil))
+
+	query := url.Values{}
+	for key, value := range values {
+		query.Set(key, value)
+	}
+	return query.Encode()
 }

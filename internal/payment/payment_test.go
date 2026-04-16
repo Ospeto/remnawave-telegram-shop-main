@@ -638,3 +638,30 @@ func TestVisionDecisionToVerificationFailureMapsAskClearer(t *testing.T) {
 		t.Fatalf("visionDecisionToVerificationFailure().reasonKey = %q, want %q", failure.reasonKey, "mobile_pay_failed_unclear_screenshot")
 	}
 }
+
+func TestCanReuseAwaitingVerificationPurchase(t *testing.T) {
+	base := &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+	}
+
+	if !canReuseAwaitingVerificationPurchase(base, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+	}) {
+		t.Fatal("canReuseAwaitingVerificationPurchase() identical receipt purchase = false, want true")
+	}
+
+	if canReuseAwaitingVerificationPurchase(base, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         9000,
+		Days:           30,
+		TrafficLimitGB: 100,
+	}) {
+		t.Fatal("canReuseAwaitingVerificationPurchase() different amount = true, want false")
+	}
+}

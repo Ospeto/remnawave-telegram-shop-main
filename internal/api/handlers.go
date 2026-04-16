@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ type KeyResponse struct {
 	Username        string     `json:"username"`
 	SubscriptionURL string     `json:"subscription_url"`
 	HappLink        string     `json:"happ_link"`
+	RedirectURL     string     `json:"redirect_url,omitempty"`
 	ExpireAt        *time.Time `json:"expire_at"`
 	DaysRemaining   int        `json:"days_remaining"`
 	Status          string     `json:"status"`
@@ -78,6 +80,12 @@ type CreatePurchaseResponse struct {
 	InvoiceType      string                    `json:"invoice_type"`
 	BotURL           string                    `json:"bot_url"`
 	HappLink         string                    `json:"happ_link,omitempty"`
+	RedirectURL      string                    `json:"redirect_url,omitempty"`
+}
+
+type SessionExchangeResponse struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // WalletServiceInterface defines the interface for wallet operations
@@ -96,6 +104,7 @@ type UploadScreenshotResponse struct {
 	Message      string `json:"message"`
 	Reason       string `json:"reason,omitempty"`
 	HappLink     string `json:"happ_link,omitempty"`
+	RedirectURL  string `json:"redirect_url,omitempty"`
 	TestMode     bool   `json:"test_mode,omitempty"`
 	ShadowPassed *bool  `json:"shadow_passed,omitempty"`
 }
@@ -106,6 +115,57 @@ func uploadScreenshotFailureResponse(result *payment.VerificationResult) UploadS
 		Message: result.Reason,
 		Reason:  result.ReasonKey,
 	}
+}
+
+func writeSanitizedError(w http.ResponseWriter, status int, publicMessage string, err error) {
+	if err != nil {
+		slog.Error(publicMessage, "status", status, "error", err)
+	}
+	http.Error(w, publicMessage, status)
+}
+
+func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(authHeader, "twa ") {
+		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		return
+	}
+
+	initData := strings.TrimSpace(strings.TrimPrefix(authHeader, "twa "))
+	if initData == "" {
+		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		return
+	}
+
+	telegramID, username, bindingKey, expiresAt, err := validateInitData(initData, config.TelegramToken(), telegramSessionExchangeMaxAge)
+	if err != nil {
+		slog.Warn("Rejected Telegram session exchange", "reason", err.Error())
+		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		return
+	}
+	if err := initDataExchanges.consume(bindingKey, expiresAt); err != nil {
+		slog.Warn("Rejected reused Telegram initData", "telegram_id", telegramID)
+		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		return
+	}
+
+	token, sessionExpiresAt, err := authSessions.create(telegramID, username, requestFingerprint(r))
+	if err != nil {
+		slog.Error("Failed to create auth session", "telegram_id", telegramID, "error", err)
+		http.Error(w, "Unable to start session right now. Please try again.", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(SessionExchangeResponse{
+		Token:     token,
+		ExpiresAt: sessionExpiresAt,
+	})
 }
 
 type PurchaseStatusResponse struct {
@@ -131,17 +191,18 @@ func parsePaymentMethod(method string) (database.InvoiceType, error) {
 // --- Handler ---
 
 type APIHandler struct {
-	customerRepo        *database.CustomerRepository
-	paymentService      *payment.PaymentService
-	telegramBot         *bot.Bot
-	translation         *translation.Manager
-	subKeyRepo          *database.SubscriptionKeyRepository
-	promoCodeRepository *database.PromoCodeRepository
-	walletService       WalletServiceInterface
-	referralRepo        *database.ReferralRepository
-	screenshotMu        sync.Mutex
-	screenshotAttempts  map[int64]time.Time
-	screenshotInFlight  map[int64]struct{}
+	customerRepo               *database.CustomerRepository
+	paymentService             *payment.PaymentService
+	telegramBot                *bot.Bot
+	translation                *translation.Manager
+	subKeyRepo                 *database.SubscriptionKeyRepository
+	promoCodeRepository        *database.PromoCodeRepository
+	walletService              WalletServiceInterface
+	referralRepo               *database.ReferralRepository
+	screenshotMu               sync.Mutex
+	screenshotAttempts         map[int64]time.Time
+	customerScreenshotAttempts map[int64][]time.Time
+	screenshotInFlight         map[int64]struct{}
 }
 
 func NewAPIHandler(
@@ -155,22 +216,29 @@ func NewAPIHandler(
 	referralRepo *database.ReferralRepository,
 ) *APIHandler {
 	return &APIHandler{
-		customerRepo:        customerRepo,
-		paymentService:      paymentService,
-		telegramBot:         telegramBot,
-		translation:         tm,
-		subKeyRepo:          subKeyRepo,
-		promoCodeRepository: promoCodeRepository,
-		walletService:       walletService,
-		referralRepo:        referralRepo,
-		screenshotAttempts:  make(map[int64]time.Time),
-		screenshotInFlight:  make(map[int64]struct{}),
+		customerRepo:               customerRepo,
+		paymentService:             paymentService,
+		telegramBot:                telegramBot,
+		translation:                tm,
+		subKeyRepo:                 subKeyRepo,
+		promoCodeRepository:        promoCodeRepository,
+		walletService:              walletService,
+		referralRepo:               referralRepo,
+		screenshotAttempts:         make(map[int64]time.Time),
+		customerScreenshotAttempts: make(map[int64][]time.Time),
+		screenshotInFlight:         make(map[int64]struct{}),
 	}
 }
 
-const screenshotVerificationCooldown = 15 * time.Second
+const (
+	screenshotVerificationCooldown        = 15 * time.Second
+	screenshotVerificationWindow          = 10 * time.Minute
+	maxScreenshotVerificationsPerCustomer = 6
+)
 
-func (h *APIHandler) beginScreenshotVerification(purchaseID int64) error {
+var errScreenshotVerificationRateLimited = errors.New("too many verification attempts")
+
+func (h *APIHandler) beginScreenshotVerification(purchaseID, customerID int64) error {
 	h.screenshotMu.Lock()
 	defer h.screenshotMu.Unlock()
 
@@ -181,7 +249,20 @@ func (h *APIHandler) beginScreenshotVerification(purchaseID int64) error {
 		return fmt.Errorf("verification throttled")
 	}
 
-	h.screenshotAttempts[purchaseID] = time.Now()
+	now := time.Now()
+	recentAttempts := h.customerScreenshotAttempts[customerID][:0]
+	for _, attemptAt := range h.customerScreenshotAttempts[customerID] {
+		if now.Sub(attemptAt) < screenshotVerificationWindow {
+			recentAttempts = append(recentAttempts, attemptAt)
+		}
+	}
+	if len(recentAttempts) >= maxScreenshotVerificationsPerCustomer {
+		h.customerScreenshotAttempts[customerID] = recentAttempts
+		return errScreenshotVerificationRateLimited
+	}
+	h.customerScreenshotAttempts[customerID] = append(recentAttempts, now)
+
+	h.screenshotAttempts[purchaseID] = now
 	h.screenshotInFlight[purchaseID] = struct{}{}
 	return nil
 }
@@ -351,7 +432,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	invoiceType, err := parsePaymentMethod(req.PaymentMethod)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "Invalid payment method", http.StatusBadRequest)
 		return
 	}
 
@@ -436,7 +517,11 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
-		http.Error(w, "Failed to create purchase: "+err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
+			http.Error(w, "You already have a pending screenshot payment. Please finish it before creating another one.", http.StatusConflict)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create purchase", err)
 		return
 	}
 
@@ -499,6 +584,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		InvoiceType:      string(purchase.InvoiceType),
 		BotURL:           config.BotURL(),
 		HappLink:         happLink,
+		RedirectURL:      signedRedirectURLForTarget(happLink),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -582,6 +668,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 				Username:        k.Username,
 				SubscriptionURL: k.SubscriptionURL,
 				HappLink:        "happ://add/" + k.SubscriptionURL,
+				RedirectURL:     signedRedirectURLForTarget("happ://add/" + k.SubscriptionURL),
 				ExpireAt:        k.ExpireAt,
 				DaysRemaining:   kDays,
 				Status:          k.Status,
@@ -610,6 +697,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 			Label:           "Key 1",
 			SubscriptionURL: *customer.SubscriptionLink,
 			HappLink:        "happ://add/" + *customer.SubscriptionLink,
+			RedirectURL:     signedRedirectURLForTarget("happ://add/" + *customer.SubscriptionLink),
 			ExpireAt:        customer.ExpireAt,
 			DaysRemaining:   daysRemaining,
 			Status:          status,
@@ -773,7 +861,11 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Purchase is not awaiting verification", http.StatusConflict)
 		return
 	}
-	if err := h.beginScreenshotVerification(purchase.ID); err != nil {
+	if err := h.beginScreenshotVerification(purchase.ID, customer.ID); err != nil {
+		if errors.Is(err, errScreenshotVerificationRateLimited) {
+			http.Error(w, "Too many verification attempts. Please wait a few minutes and try again.", http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, "Verification is temporarily unavailable for this purchase", http.StatusTooManyRequests)
 		return
 	}
@@ -806,7 +898,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
 	if err != nil {
-		http.Error(w, "Verification error: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Verification is temporarily unavailable right now. Please try again.", err)
 		return
 	}
 
@@ -826,12 +918,14 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			if purchase.ExtendKeyID != nil {
 				if extendKey, kErr := h.subKeyRepo.FindByID(r.Context(), *purchase.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
 					resp.HappLink = "happ://add/" + extendKey.SubscriptionURL
+					resp.RedirectURL = signedRedirectURLForTarget(resp.HappLink)
 				}
 			} else {
 				keys, kErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
 				if kErr == nil && len(keys) > 0 {
 					latestKey := keys[0]
 					resp.HappLink = "happ://add/" + latestKey.SubscriptionURL
+					resp.RedirectURL = signedRedirectURLForTarget(resp.HappLink)
 				}
 			}
 		}
@@ -902,7 +996,7 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := h.paymentService.GetRevenueSummary(r.Context(), days)
 	if err != nil {
-		http.Error(w, "Failed to fetch revenue: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", err)
 		return
 	}
 
@@ -1002,13 +1096,13 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 
 	balance, err := h.walletService.GetBalance(r.Context(), customer.ID)
 	if err != nil {
-		http.Error(w, "Failed to get balance: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to get balance", err)
 		return
 	}
 
 	autoRenew, autoRenewDuration, err := h.walletService.GetAutoRenewStatus(r.Context(), customer.ID)
 	if err != nil {
-		http.Error(w, "Failed to get auto-renew status: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to get auto-renew status", err)
 		return
 	}
 
@@ -1057,7 +1151,7 @@ func (h *APIHandler) GetWalletHistory(w http.ResponseWriter, r *http.Request) {
 
 	history, err := h.walletService.GetTransactionHistory(r.Context(), customer.ID, limit)
 	if err != nil {
-		http.Error(w, "Failed to get transaction history: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to get transaction history", err)
 		return
 	}
 
@@ -1112,7 +1206,7 @@ func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
-		http.Error(w, "Failed to update auto-renew: "+err.Error(), http.StatusInternalServerError)
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to update auto-renew", err)
 		return
 	}
 
@@ -1160,7 +1254,7 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 
 	// SetKeyAutoRenew validates that key.customer_id == customer.ID internally.
 	if err := h.walletService.SetKeyAutoRenew(r.Context(), req.KeyID, customer.ID, req.Enabled); err != nil {
-		http.Error(w, "Failed to update key auto-renew: "+err.Error(), http.StatusBadRequest)
+		writeSanitizedError(w, http.StatusBadRequest, "Failed to update key auto-renew", err)
 		return
 	}
 

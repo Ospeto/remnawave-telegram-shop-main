@@ -19,7 +19,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -30,72 +29,6 @@ type contextKey string
 const (
 	telegramIDKey contextKey = "telegram_id"
 )
-
-type initDataBinding struct {
-	fingerprint string
-	expiresAt   time.Time
-}
-
-type initDataReplayGuard struct {
-	mu       sync.Mutex
-	bindings map[string]initDataBinding
-}
-
-func newInitDataReplayGuard() *initDataReplayGuard {
-	guard := &initDataReplayGuard{
-		bindings: make(map[string]initDataBinding),
-	}
-	go guard.cleanupLoop()
-	return guard
-}
-
-func (g *initDataReplayGuard) bind(bindingKey, fingerprint string, expiresAt time.Time) error {
-	if bindingKey == "" {
-		return nil
-	}
-
-	now := time.Now()
-	if now.After(expiresAt) {
-		return fmt.Errorf("initData expired")
-	}
-
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if binding, exists := g.bindings[bindingKey]; exists && now.Before(binding.expiresAt) {
-		if binding.fingerprint != fingerprint {
-			return fmt.Errorf("initData replay detected")
-		}
-		if expiresAt.After(binding.expiresAt) {
-			binding.expiresAt = expiresAt
-			g.bindings[bindingKey] = binding
-		}
-		return nil
-	}
-
-	g.bindings[bindingKey] = initDataBinding{
-		fingerprint: fingerprint,
-		expiresAt:   expiresAt,
-	}
-	return nil
-}
-
-func (g *initDataReplayGuard) cleanupLoop() {
-	ticker := time.NewTicker(10 * time.Minute)
-	defer ticker.Stop()
-
-	for now := range ticker.C {
-		g.mu.Lock()
-		for key, binding := range g.bindings {
-			if now.After(binding.expiresAt) {
-				delete(g.bindings, key)
-			}
-		}
-		g.mu.Unlock()
-	}
-}
-
-var replayGuard = newInitDataReplayGuard()
 
 func requestFingerprint(r *http.Request) string {
 	// Do not bind initData to client IP. Users often change network/IP after
@@ -141,6 +74,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	}
 
 	mux.HandleFunc("/api/me", withAuth(handler.GetMe))
+	mux.HandleFunc("/api/session", public(handler.CreateSession))
 	mux.HandleFunc("/api/plans", public(handler.GetPlans))
 	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
 	mux.HandleFunc("/api/upload_screenshot", withUploadAuth(handler.UploadScreenshot))
@@ -162,18 +96,19 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
-		target := r.URL.Query().Get("url")
-		if target == "" {
-			http.Error(w, "Missing url parameter", http.StatusBadRequest)
+		token := strings.TrimSpace(r.URL.Query().Get("token"))
+		if token == "" {
+			http.Error(w, "Missing redirect token", http.StatusBadRequest)
 			return
 		}
-		if !isSupportedRedirectTarget(target) {
-			http.Error(w, "Unsupported URL scheme", http.StatusBadRequest)
-			return
-		}
-		subURL := extractRedirectSubscriptionURL(target)
 
-		page, err := renderRedirectPage(target, subURL)
+		grant, err := redirectGrants.consume(token)
+		if err != nil {
+			http.Error(w, "Redirect link expired. Please reopen the app and try again.", http.StatusBadRequest)
+			return
+		}
+
+		page, err := renderRedirectPage(grant.Target, grant.SubscriptionURL)
 		if err != nil {
 			http.Error(w, "Failed to render redirect page", http.StatusInternalServerError)
 			return
@@ -373,31 +308,24 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			// Try query param for dev convenience? No, stick to header
-			http.Error(w, "Missing Authorization header", http.StatusUnauthorized)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if !strings.HasPrefix(authHeader, "twa ") {
-			http.Error(w, "Unsupported Authorization scheme", http.StatusUnauthorized)
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		// Expected format: "twa <initData>" from Telegram Web App frontend
-		initData := strings.TrimPrefix(authHeader, "twa ")
-
-		telegramID, username, bindingKey, expiresAt, err := validateInitData(initData, config.TelegramToken())
+		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+		session, err := authSessions.authenticate(token, requestFingerprint(r))
 		if err != nil {
-			http.Error(w, "Invalid initData: "+err.Error(), http.StatusUnauthorized)
-			return
-		}
-		if err := replayGuard.bind(bindingKey, requestFingerprint(r), expiresAt); err != nil {
-			http.Error(w, "Invalid initData: "+err.Error(), http.StatusUnauthorized)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), telegramIDKey, telegramID)
-		if username != "" {
-			ctx = context.WithValue(ctx, payment.UsernameCtxKey, username)
+		ctx := context.WithValue(r.Context(), telegramIDKey, session.TelegramID)
+		if session.Username != "" {
+			ctx = context.WithValue(ctx, payment.UsernameCtxKey, session.Username)
 		}
 		next(w, r.WithContext(ctx))
 	}
@@ -405,7 +333,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // validateInitData validates the Telegram Web App initData and returns the user,
 // a stable replay-binding key, and the initData expiry.
-func validateInitData(initData string, botToken string) (int64, string, string, time.Time, error) {
+func validateInitData(initData string, botToken string, maxAge time.Duration) (int64, string, string, time.Time, error) {
 	// Parse query string
 	values, err := url.ParseQuery(initData)
 	if err != nil {
@@ -443,7 +371,7 @@ func validateInitData(initData string, botToken string) (int64, string, string, 
 	h.Write([]byte(dataCheckString))
 	computedHash := hex.EncodeToString(h.Sum(nil))
 
-	if computedHash != hash {
+	if !hmac.Equal([]byte(computedHash), []byte(hash)) {
 		return 0, "", "", time.Time{}, fmt.Errorf("hash mismatch")
 	}
 
@@ -456,7 +384,11 @@ func validateInitData(initData string, botToken string) (int64, string, string, 
 	if err != nil {
 		return 0, "", "", time.Time{}, fmt.Errorf("invalid auth_date")
 	}
-	if time.Now().Unix()-authDate > 86400 {
+	now := time.Now()
+	if maxAge > 0 && now.Sub(time.Unix(authDate, 0)) > maxAge {
+		return 0, "", "", time.Time{}, fmt.Errorf("initData expired")
+	}
+	if now.Unix()-authDate > 86400 {
 		return 0, "", "", time.Time{}, fmt.Errorf("initData expired")
 	}
 	expiresAt := time.Unix(authDate, 0).Add(24 * time.Hour)
