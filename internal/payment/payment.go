@@ -1699,10 +1699,20 @@ func (s *PaymentService) completeTestModeVerification(
 
 	if err := s.ProcessPurchaseById(ctx, purchaseID); err != nil {
 		slog.Error("Error processing verified mobile purchase (test mode)", "purchase_id", purchaseID, "error", err)
-		if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), storedTxID); delErr != nil {
-			slog.Error("Error deleting test-mode mobile payment record after failure", "purchase_id", purchaseID, "error", delErr)
+
+		shadowPassedCopy := shadowPassed
+		shadowLabel := "failed"
+		if shadowPassed {
+			shadowLabel = "passed"
 		}
-		return nil, err
+
+		return &VerificationResult{
+			Success:        true,
+			Reason:         fmt.Sprintf("Test mode auto-approved. Shadow verification %s. Fulfillment failed: %v", shadowLabel, err),
+			ReasonKey:      "mobile_pay_test_fulfillment_failed",
+			TestModeBypass: true,
+			ShadowPassed:   &shadowPassedCopy,
+		}, nil
 	}
 
 	now := time.Now()
