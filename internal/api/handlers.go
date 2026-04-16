@@ -198,9 +198,32 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 	}
 
 	compacted := make([]database.SubscriptionKey, 0, len(keys))
-	groupToIndex := make(map[string]int)
+	identityToIndex := make(map[string]int)
 
 	isNewer := func(candidate, current database.SubscriptionKey) bool {
+		statusRank := func(status string) int {
+			switch status {
+			case "active":
+				return 3
+			case "expired":
+				return 2
+			case "deleted":
+				return 0
+			default:
+				return 1
+			}
+		}
+
+		if candidateRank, currentRank := statusRank(candidate.Status), statusRank(current.Status); candidateRank != currentRank {
+			return candidateRank > currentRank
+		}
+
+		if candidate.ExpireAt != nil && current.ExpireAt == nil {
+			return true
+		}
+		if candidate.ExpireAt == nil && current.ExpireAt != nil {
+			return false
+		}
 		if candidate.ExpireAt != nil && current.ExpireAt != nil {
 			if candidate.ExpireAt.After(*current.ExpireAt) {
 				return true
@@ -220,18 +243,31 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 		return candidate.ID > current.ID
 	}
 
+	identity := func(key database.SubscriptionKey) (string, bool) {
+		if url := strings.TrimSpace(key.SubscriptionURL); url != "" {
+			return "url|" + url, true
+		}
+		if key.RemnawaveUUID != uuid.Nil {
+			return "uuid|" + key.RemnawaveUUID.String(), true
+		}
+		return "", false
+	}
+
 	for _, key := range keys {
-		if key.Status == "active" && key.ExpireAt != nil {
-			groupKey := fmt.Sprintf("%d|%s|%s", key.TrafficLimitGB, key.Status, key.ExpireAt.UTC().Format("2006-01-02"))
-			if idx, exists := groupToIndex[groupKey]; exists {
-				if isNewer(key, compacted[idx]) {
-					compacted[idx] = key
-				}
-				continue
-			}
-			groupToIndex[groupKey] = len(compacted)
+		id, ok := identity(key)
+		if !ok {
+			compacted = append(compacted, key)
+			continue
 		}
 
+		if idx, exists := identityToIndex[id]; exists {
+			if isNewer(key, compacted[idx]) {
+				compacted[idx] = key
+			}
+			continue
+		}
+
+		identityToIndex[id] = len(compacted)
 		compacted = append(compacted, key)
 	}
 

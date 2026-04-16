@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
+import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
+import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 
 interface WalletData {
   balance: number;
@@ -23,7 +25,7 @@ interface Transaction {
 }
 
 export function Wallet() {
-  const { tg, initData } = useTelegram();
+  const { tg, initData, close } = useTelegram();
   const { t } = useLanguage();
   const navigate = useNavigate();
 
@@ -31,7 +33,8 @@ export function Wallet() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [referrals, setReferrals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [authExpired, setAuthExpired] = useState(false);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
   const loadWalletData = useCallback(async () => {
@@ -42,24 +45,15 @@ export function Wallet() {
 
     const headers = { 'Authorization': `twa ${initData}` };
     setLoading(true);
-    setLoadError(false);
+    setLoadError(null);
+    setAuthExpired(false);
 
     try {
-      const [walletRes, historyRes, referralResult] = await Promise.all([
-        fetch('/api/wallet', { headers }),
-        fetch('/api/wallet/history?limit=10', { headers }),
-        fetch('/api/referrals', { headers })
-          .then(async (res) => res.ok ? res.json() : [])
+      const [walletData, historyData, referralResult] = await Promise.all([
+        fetchJSON<WalletData>('/api/wallet', { headers }),
+        fetchJSON<Transaction[]>('/api/wallet/history?limit=10', { headers }),
+        fetchJSON<any[]>('/api/referrals', { headers })
           .catch(() => []),
-      ]);
-
-      if (!walletRes.ok || !historyRes.ok) {
-        throw new Error('Failed to load wallet data');
-      }
-
-      const [walletData, historyData] = await Promise.all([
-        walletRes.json(),
-        historyRes.json(),
       ]);
 
       setWallet(walletData);
@@ -67,11 +61,19 @@ export function Wallet() {
       setReferrals(Array.isArray(referralResult) ? referralResult : []);
     } catch (err) {
       console.warn('Wallet load error:', err);
-      setLoadError(true);
+      if (isAPIStatus(err, 401)) {
+        setAuthExpired(true);
+        return;
+      }
+      if (err instanceof APIError && err.body) {
+        setLoadError(err.body);
+        return;
+      }
+      setLoadError(t('wallet_error'));
     } finally {
       setLoading(false);
     }
-  }, [initData]);
+  }, [initData, t]);
 
   useEffect(() => {
     if (!tg) return;
@@ -114,10 +116,23 @@ export function Wallet() {
 
   if (loading) return <LoadingScreen message={t('loading_wallet')} />;
 
+  if (authExpired) {
+    return (
+      <SessionExpiredScreen
+        title={t('session_expired_title')}
+        message={t('session_expired_desc')}
+        reloadLabel={t('session_expired_reload')}
+        closeLabel={t('session_expired_close')}
+        onReload={() => { window.location.reload(); }}
+        onClose={() => { close(); }}
+      />
+    );
+  }
+
   if (loadError || !wallet) {
     return (
       <ErrorScreen
-        message={t('wallet_error')}
+        message={loadError || t('wallet_error')}
         onRetry={() => { void loadWalletData(); }}
         retryLabel={t('retry')}
       />

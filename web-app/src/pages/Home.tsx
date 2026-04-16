@@ -4,40 +4,50 @@ import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
+import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
 import { UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
-
-const fetcher = (url: string, headers: HeadersInit) =>
-    fetch(url, { headers }).then(res => {
-        if (!res.ok) throw new Error(`${res.status}`);
-        return res.json();
-    });
+import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 
 export function Home() {
-    const { initData, tg } = useTelegram();
+    const { initData, tg, close } = useTelegram();
     const { t, language, setLanguage } = useLanguage();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [authExpired, setAuthExpired] = useState(false);
     const [copiedId, setCopiedId] = useState<number | null>(null);
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
     const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
     const { playClick } = useMXBrownSound();
 
-    const loadData = useCallback(() => {
+    const loadData = useCallback(async () => {
         if (!initData) { setLoading(false); return; }
 
         const currentAuthHeaders = { 'Authorization': `twa ${initData}` };
 
         setLoading(true);
         setError(null);
-        fetcher('/api/me', currentAuthHeaders)
-            .then(setData)
-            .catch(err => setError(`${err.name}: ${err.message}`))
-            .finally(() => setLoading(false));
+        setAuthExpired(false);
+        try {
+            const meData = await fetchJSON<UserData>('/api/me', { headers: currentAuthHeaders });
+            setData(meData);
+        } catch (err) {
+            if (isAPIStatus(err, 401)) {
+                setAuthExpired(true);
+                return;
+            }
+            if (err instanceof APIError) {
+                setError(err.body || `HTTP ${err.status}`);
+                return;
+            }
+            setError(err instanceof Error ? err.message : 'Unknown error');
+        } finally {
+            setLoading(false);
+        }
     }, [initData]);
 
     useEffect(() => {
@@ -45,7 +55,7 @@ export function Home() {
     }, [tg]);
 
     useEffect(() => {
-        loadData();
+        void loadData();
     }, [loadData]);
 
     const handleCopy = (url: string, id: number) => {
@@ -81,6 +91,10 @@ export function Home() {
                 },
                 body: JSON.stringify({ key_id: keyId, enabled: !currentValue }),
             });
+            if (res.status === 401) {
+                setAuthExpired(true);
+                return;
+            }
             if (res.ok) {
                 // Optimistic update — flip the local state immediately
                 setData(prev => {
@@ -117,9 +131,13 @@ export function Home() {
                 setTrialError(t('trial_already_used'));
                 return;
             }
+            if (res.status === 401) {
+                setAuthExpired(true);
+                return;
+            }
             if (!res.ok) throw new Error(`${res.status}`);
             // Re-fetch data instead of reloading the page
-            loadData();
+            await loadData();
         } catch {
             setTrialError(t('trial_error'));
         } finally {
@@ -132,6 +150,18 @@ export function Home() {
     };
 
     if (loading) return <LoadingScreen message={t('loading')} />;
+    if (authExpired) {
+        return (
+            <SessionExpiredScreen
+                title={t('session_expired_title')}
+                message={t('session_expired_desc')}
+                reloadLabel={t('session_expired_reload')}
+                closeLabel={t('session_expired_close')}
+                onReload={() => { window.location.reload(); }}
+                onClose={() => { close(); }}
+            />
+        );
+    }
     if (!initData) return (
         <div className="screen-center">
             <div style={{ fontSize: 48 }}>📱</div>
@@ -142,7 +172,7 @@ export function Home() {
     if (error) return (
         <ErrorScreen
             message={`${t('error_prefix')} ${error}`}
-            onRetry={loadData}
+            onRetry={() => { void loadData(); }}
             retryLabel={t('retry')}
         />
     );
@@ -311,14 +341,18 @@ export function Home() {
                                 }}
                             >
                                 {/* Key header */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <div>
-                                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: 'var(--font-h2)', letterSpacing: '-0.3px' }}>{key.label || key.username}</div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+                                    <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                                        <div style={{ fontWeight: 'var(--weight-bold)', fontSize: 'var(--font-h2)', letterSpacing: '-0.3px', wordBreak: 'break-word', lineHeight: 1.25 }}>
+                                            {key.label || key.username}
+                                        </div>
                                         {key.username && key.label && (
-                                            <div className="text-hint" style={{ fontSize: 'var(--font-caption)', marginTop: 2 }}>{key.username}</div>
+                                            <div className="text-hint" style={{ fontSize: 'var(--font-caption)', marginTop: 2, wordBreak: 'break-word', lineHeight: 1.25 }}>
+                                                {key.username}
+                                            </div>
                                         )}
                                     </div>
-                                    <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`}>
+                                    <span className={`badge ${key.status === 'active' ? 'badge-active' : 'badge-expired'}`} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
                                         {key.status === 'active' ? t('key_active') : t('key_expired')}
                                     </span>
                                 </div>

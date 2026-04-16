@@ -15,10 +15,15 @@
   --tg-bg: var(--tg-theme-bg-color, #0f0f1a);
   --tg-text: var(--tg-theme-text-color, #ffffff);
   --tg-hint: var(--tg-theme-hint-color, #7c7c8a);
-  --tg-link: var(--tg-theme-link-color, #5ebbff);
-  --tg-btn: var(--tg-theme-button-color, #5ebbff);
+  --tg-link: var(--tg-theme-link-color, #3f8ae0);
+  --tg-btn: var(--tg-theme-button-color, #0a66d9);
   --tg-btn-text: var(--tg-theme-button-text-color, #ffffff);
   --tg-secondary: var(--tg-theme-secondary-bg-color, #1a1a2e);
+  --btn-primary-bg: #0a66d9;
+  --btn-primary-text: #ffffff;
+  --accent-color: #0a66d9;
+  --focus-ring: #5ebbff;
+  --focus-ring-soft: rgba(94, 187, 255, 0.35);
 
   /* Typography Scale */
   --font-h1: 20px;
@@ -104,8 +109,13 @@
 body.theme-light {
   --tg-bg: #f2f2f7;
   --tg-text: #1c1c1e;
-  --tg-hint: #8e8e93;
+  --tg-hint: #636366;
   --tg-secondary: #e5e5ea;
+  --btn-primary-bg: #005ec2;
+  --btn-primary-text: #ffffff;
+  --accent-color: #005ec2;
+  --focus-ring: #005ec2;
+  --focus-ring-soft: rgba(0, 94, 194, 0.22);
 
   /* Cards */
   --card-bg: #ffffff;
@@ -241,8 +251,8 @@ body.theme-light {
 
 /* Buttons */
 .btn-primary {
-  background: var(--tg-btn);
-  color: var(--tg-btn-text);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
   border: none;
   border-radius: 14px;
   padding: 12px 20px;
@@ -260,6 +270,13 @@ body.theme-light {
 .btn-primary:active {
   transform: scale(0.96);
   opacity: 0.9;
+}
+
+/* Visible keyboard focus for all critical controls */
+:where(button, a, input, textarea, select, [role='button']):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--focus-ring-soft);
 }
 
 .btn-secondary {
@@ -368,8 +385,8 @@ body.theme-light {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: var(--tg-btn);
-  color: var(--tg-btn-text);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
   display: flex;
   align-items: center;
   justify-content: center;

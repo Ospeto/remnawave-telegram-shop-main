@@ -4,14 +4,15 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
+import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
-
+import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 
 
 export function Plans() {
-    const { tg, initData } = useTelegram();
+    const { tg, initData, close } = useTelegram();
     const { t, language } = useLanguage();
     const navigate = useNavigate();
     const { playClick } = useMXBrownSound();
@@ -24,6 +25,8 @@ export function Plans() {
     const [discountPercent, setDiscountPercent] = useState<number>(0);
     const [appliedPromoCode, setAppliedPromoCode] = useState('');
     const [loadError, setLoadError] = useState<string | null>(null);
+    const [promoError, setPromoError] = useState<string | null>(null);
+    const [authExpired, setAuthExpired] = useState(false);
     const promoRequestRef = useRef(0);
 
     const extendKeyId = searchParams.get('extend');
@@ -53,76 +56,106 @@ export function Plans() {
         const headers = { 'Authorization': `twa ${initData}` };
         setLoading(true);
         setLoadError(null);
+        setAuthExpired(false);
 
         try {
-            const [plansRes, meRes] = await Promise.all([
-                fetch('/api/plans'),
-                fetch('/api/me', { headers }),
-            ]);
-
-            if (!plansRes.ok) {
-                throw new Error(await plansRes.text() || 'Failed to load plans');
-            }
-            if (!meRes.ok) {
-                throw new Error(await meRes.text() || 'Failed to load user data');
-            }
-
-            const [plansData, meData] = await Promise.all([
-                plansRes.json(),
-                meRes.json(),
-            ]);
-
+            const plansData = await fetchJSON<Plan[]>('/api/plans');
             setPlans(Array.isArray(plansData) ? plansData : []);
+
+            if (isWalletTopup) {
+                setUserData(null);
+                return;
+            }
+
+            const meData = await fetchJSON<UserData>('/api/me', { headers });
             setUserData(meData);
         } catch (err) {
             console.warn('Plans load error:', err);
+            if (isAPIStatus(err, 401)) {
+                setAuthExpired(true);
+                return;
+            }
+            if (err instanceof APIError && err.body) {
+                setLoadError(err.body);
+                return;
+            }
             setLoadError(t('plans_load_error'));
         } finally {
             setLoading(false);
         }
-    }, [initData, t]);
+    }, [initData, isWalletTopup, t]);
 
     useEffect(() => {
         void loadPlans();
     }, [loadPlans]);
 
-    const handleApplyPromo = () => {
+    const handleApplyPromo = async () => {
         const normalizedCode = promoCode.trim();
         if (!normalizedCode || !initData) return;
 
         const requestId = promoRequestRef.current + 1;
         promoRequestRef.current = requestId;
         setPromoStatus('validating');
-        fetch(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, {
-            headers: { 'Authorization': `twa ${initData}` }
-        })
-            .then(async res => {
-                if (promoRequestRef.current !== requestId) return;
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.valid) {
-                        setPromoStatus('valid');
-                        setDiscountPercent(data.discount_percent);
-                        setAppliedPromoCode(data.code);
-                    } else {
-                        setPromoStatus('invalid');
-                        setDiscountPercent(0);
-                        setAppliedPromoCode('');
-                    }
+        setPromoError(null);
+
+        try {
+            const res = await fetch(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, {
+                headers: { 'Authorization': `twa ${initData}` }
+            });
+            if (promoRequestRef.current !== requestId) return;
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.valid) {
+                    setPromoStatus('valid');
+                    setDiscountPercent(data.discount_percent);
+                    setAppliedPromoCode(data.code);
                 } else {
                     setPromoStatus('invalid');
                     setDiscountPercent(0);
                     setAppliedPromoCode('');
                 }
-            })
-            .catch(() => {
-                if (promoRequestRef.current !== requestId) return;
+                return;
+            }
+
+            if (res.status === 404) {
                 setPromoStatus('invalid');
                 setDiscountPercent(0);
                 setAppliedPromoCode('');
-            });
+                return;
+            }
+
+            if (res.status === 401) {
+                setAuthExpired(true);
+                setPromoStatus('idle');
+                return;
+            }
+
+            setPromoStatus('idle');
+            setDiscountPercent(0);
+            setAppliedPromoCode('');
+            setPromoError(t('promo_service_unavailable'));
+        } catch {
+            if (promoRequestRef.current !== requestId) return;
+            setPromoStatus('idle');
+            setDiscountPercent(0);
+            setAppliedPromoCode('');
+            setPromoError(t('promo_service_unavailable'));
+        }
     };
 
+    if (authExpired) {
+        return (
+            <SessionExpiredScreen
+                title={t('session_expired_title')}
+                message={t('session_expired_desc')}
+                reloadLabel={t('session_expired_reload')}
+                closeLabel={t('session_expired_close')}
+                onReload={() => { window.location.reload(); }}
+                onClose={() => { close(); }}
+            />
+        );
+    }
     if (!initData) {
         return (
             <div className="screen-center">
@@ -137,7 +170,7 @@ export function Plans() {
         return (
             <ErrorScreen
                 message={loadError}
-                onRetry={loadPlans}
+                onRetry={() => { void loadPlans(); }}
                 retryLabel={t('retry')}
             />
         );
@@ -225,14 +258,17 @@ export function Plans() {
                             const next = e.target.value;
                             setPromoCode(next);
                             if (next !== appliedPromoCode) {
-                            setPromoStatus('idle');
-                            setDiscountPercent(0);
-                            setAppliedPromoCode('');
-                            promoRequestRef.current += 1;
-                        }
-                    }}
+                                setPromoStatus('idle');
+                                setPromoError(null);
+                                setDiscountPercent(0);
+                                setAppliedPromoCode('');
+                                promoRequestRef.current += 1;
+                            }
+                        }}
                         placeholder={t('promo_placeholder')}
                         aria-label={t('promo_placeholder')}
+                        aria-invalid={promoStatus === 'invalid' || promoError !== null}
+                        aria-describedby={(promoStatus === 'valid' || promoStatus === 'invalid' || promoError) ? 'promo-feedback' : undefined}
                         style={{
                             flex: 1,
                             background: 'var(--input-bg)',
@@ -241,15 +277,10 @@ export function Plans() {
                             padding: '10px 12px',
                             color: 'var(--tg-text)',
                             fontSize: 14,
-                            outline: 'none',
-                            // Replace outline:none with a custom focus ring
-                            boxShadow: 'none',
                         }}
-                        onFocus={e => (e.target.style.border = '1px solid var(--input-focus-border)')}
-                        onBlur={e => (e.target.style.border = '1px solid var(--input-border)')}
                     />
                     <button
-                        onClick={() => { playClick(); handleApplyPromo(); }}
+                        onClick={() => { playClick(); void handleApplyPromo(); }}
                         disabled={promoStatus === 'validating' || !promoCode.trim()}
                         className="btn-secondary"
                         style={{
@@ -263,13 +294,18 @@ export function Plans() {
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'valid' && (
-                <div role="status" style={{ color: 'var(--color-success)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                <div id="promo-feedback" role="status" style={{ color: 'var(--color-success)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_valid', { percent: String(discountPercent) })}
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'invalid' && (
-                <div role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                <div id="promo-feedback" role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_invalid')}
+                </div>
+            )}
+            {!isWalletTopup && promoError && (
+                <div id="promo-feedback" role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
+                    {promoError}
                 </div>
             )}
 

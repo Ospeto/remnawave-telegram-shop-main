@@ -4,10 +4,12 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
+import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
+import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 
 interface PaymentProvider {
     key: string;
@@ -41,7 +43,7 @@ type CheckoutAction = 'manual' | 'wallet' | 'topup';
 
 export function Checkout() {
     const { planIndex } = useParams();
-    const { tg, initData } = useTelegram();
+    const { tg, initData, close } = useTelegram();
     const { t } = useLanguage();
     const { playClick } = useMXBrownSound();
     const navigate = useNavigate();
@@ -70,9 +72,12 @@ export function Checkout() {
 
     // Wallet payment state
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
+    const [walletBalanceLoading, setWalletBalanceLoading] = useState(false);
+    const [walletBalanceError, setWalletBalanceError] = useState<string | null>(null);
     const [creatingPurchase, setCreatingPurchase] = useState(false);
     const [selectedAction, setSelectedAction] = useState<CheckoutAction | null>(null);
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
+    const [authExpired, setAuthExpired] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const purchaseIntentRef = useRef<{ action: CheckoutAction | null; key: string | null }>({ action: null, key: null });
@@ -103,6 +108,32 @@ export function Checkout() {
         return () => tg.BackButton.offClick(handleBack);
     }, [tg, handleBack]);
 
+    const loadWalletBalance = useCallback(async () => {
+        if (!initData || isWalletTopup) return;
+        const headers = { 'Authorization': `twa ${initData}` };
+
+        setWalletBalanceLoading(true);
+        setWalletBalanceError(null);
+        try {
+            const data = await fetchJSON<{ balance?: number }>('/api/wallet', { headers });
+            if (typeof data.balance === 'number') {
+                setWalletBalance(data.balance);
+            } else {
+                setWalletBalance(null);
+                setWalletBalanceError(t('wallet_balance_unavailable'));
+            }
+        } catch (err) {
+            if (isAPIStatus(err, 401)) {
+                setAuthExpired(true);
+                return;
+            }
+            setWalletBalance(null);
+            setWalletBalanceError(t('wallet_balance_unavailable'));
+        } finally {
+            setWalletBalanceLoading(false);
+        }
+    }, [initData, isWalletTopup, t]);
+
     const loadCheckoutData = useCallback(async () => {
         if (!initData) {
             setLoading(false);
@@ -129,47 +160,47 @@ export function Checkout() {
         setSelectedAction(null);
         setSelectedProvider(null);
         setWalletPayError(null);
+        setWalletBalanceError(null);
         setWalletBalance(null);
+        setAuthExpired(false);
         purchaseIntentRef.current = { action: null, key: null };
 
         try {
             const headers = { 'Authorization': `twa ${initData}` };
-            const [plansRes, meRes] = await Promise.all([
-                fetch('/api/plans'),
-                fetch('/api/me', { headers }),
-            ]);
+            const plansData = await fetchJSON<Plan[]>('/api/plans');
+            const normalizedPlans = Array.isArray(plansData) ? plansData : [];
 
-            if (!plansRes.ok) {
-                throw new Error(t('plans_load_error'));
-            }
-            if (!meRes.ok) {
-                throw new Error(t('plans_load_error'));
+            if (!isWalletTopup && parsedPlanIndex >= normalizedPlans.length) {
+                setLoadError(t('invalid_plan_selected'));
+                return;
             }
 
-            const [plansData, meData] = await Promise.all([
-                plansRes.json(),
-                meRes.json(),
-            ]);
+            setPlans(normalizedPlans);
 
-            setPlans(Array.isArray(plansData) ? plansData : []);
+            if (isWalletTopup) {
+                setUserData(null);
+                setWalletBalanceLoading(false);
+                return;
+            }
+
+            const meData = await fetchJSON<UserData>('/api/me', { headers });
             setUserData(meData);
-
-            void fetch('/api/wallet', { headers })
-                .then(async (res) => {
-                    if (!res.ok) return;
-                    const data = await res.json();
-                    if (typeof data.balance === 'number') {
-                        setWalletBalance(data.balance);
-                    }
-                })
-                .catch(() => { });
+            await loadWalletBalance();
         } catch (err) {
             console.warn('Checkout load error:', err);
+            if (isAPIStatus(err, 401)) {
+                setAuthExpired(true);
+                return;
+            }
+            if (err instanceof APIError && err.body) {
+                setLoadError(err.body);
+                return;
+            }
             setLoadError(err instanceof Error && err.message ? err.message : t('plans_load_error'));
         } finally {
             setLoading(false);
         }
-    }, [hasValidTopUpAmount, initData, isWalletTopup, parsedPlanIndex, planIndex, t]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, parsedPlanIndex, planIndex, t]);
 
     useEffect(() => {
         void loadCheckoutData();
@@ -222,6 +253,10 @@ export function Checkout() {
             });
 
             if (!res.ok) {
+                if (res.status === 401) {
+                    setAuthExpired(true);
+                    return;
+                }
                 const text = await res.text();
                 throw new Error(text || t('creating_purchase'));
             }
@@ -269,6 +304,14 @@ export function Checkout() {
                 body: formData
             });
             if (!res.ok) {
+                if (res.status === 401) {
+                    setAuthExpired(true);
+                    return;
+                }
+                if (res.status === 429) {
+                    setVerificationResult({ status: 'failed', message: t('verify_retry_wait') });
+                    return;
+                }
                 const errText = await res.text();
                 throw new Error(errText || `Upload failed (${res.status})`);
             }
@@ -300,6 +343,19 @@ export function Checkout() {
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Wavy Private Server Shop</h1>
                 <p className="text-hint" style={{ margin: 0 }}>{t('open_in_tg')}</p>
             </div>
+        );
+    }
+
+    if (authExpired) {
+        return (
+            <SessionExpiredScreen
+                title={t('session_expired_title')}
+                message={t('session_expired_desc')}
+                reloadLabel={t('session_expired_reload')}
+                closeLabel={t('session_expired_close')}
+                onReload={() => { window.location.reload(); }}
+                onClose={() => { close(); }}
+            />
         );
     }
 
@@ -473,7 +529,7 @@ export function Checkout() {
                             <button
                                 className="btn-primary"
                                 onClick={() => { playClick(); void createPurchase('wallet'); }}
-                                disabled={creatingPurchase || !canPayWithWallet}
+                                disabled={creatingPurchase || !canPayWithWallet || walletBalanceLoading || walletBalanceError !== null}
                                 style={{ width: '100%', background: 'var(--color-success)', opacity: creatingPurchase && selectedAction === 'wallet' ? 0.7 : (!canPayWithWallet ? 0.5 : 1) }}
                             >
                                 {creatingPurchase && selectedAction === 'wallet'
@@ -482,13 +538,34 @@ export function Checkout() {
                             </button>
                         )}
 
-                        {canShowWalletOption && walletBalance === null && (
+                        {canShowWalletOption && walletBalanceLoading && (
+                            <div className="text-hint" style={{ fontSize: 12 }}>
+                                {t('wallet_balance_loading')}
+                            </div>
+                        )}
+
+                        {canShowWalletOption && walletBalanceError && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                <div className="text-hint" style={{ fontSize: 12 }}>
+                                    {walletBalanceError}
+                                </div>
+                                <button
+                                    className="btn-secondary"
+                                    onClick={() => { playClick(); void loadWalletBalance(); }}
+                                    style={{ width: '100%' }}
+                                >
+                                    {t('wallet_balance_retry')}
+                                </button>
+                            </div>
+                        )}
+
+                        {canShowWalletOption && !walletBalanceLoading && !walletBalanceError && walletBalance === null && (
                             <div className="text-hint" style={{ fontSize: 12 }}>
                                 {t('wallet_balance_unavailable')}
                             </div>
                         )}
 
-                        {canShowWalletOption && walletBalance !== null && !canPayWithWallet && (
+                        {canShowWalletOption && !walletBalanceLoading && !walletBalanceError && walletBalance !== null && !canPayWithWallet && (
                             <div className="text-hint" style={{ fontSize: 12 }}>
                                 {t('wallet_balance_low')}
                             </div>

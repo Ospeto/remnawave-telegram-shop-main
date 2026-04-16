@@ -8,6 +8,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'error_prefix': 'Error: ',
         'powered_by': 'Wavy Private Server',
         'open_in_tg': 'Open inside Telegram to use this app',
+        'session_expired_title': 'Session expired',
+        'session_expired_desc': 'Your Telegram session is no longer valid. Reload or reopen this Mini App from Telegram.',
+        'session_expired_reload': 'Reload Mini App',
+        'session_expired_close': 'Close',
         'buy_button': 'Buy New Key',
 
         // ── Navigation ──
@@ -80,6 +84,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'create_payment_request': 'Create payment request',
         'pay_with_mobile_banking': 'Pay via mobile banking',
         'wallet_balance_unavailable': 'Wallet balance unavailable',
+        'wallet_balance_loading': 'Checking wallet balance...',
+        'wallet_balance_retry': 'Retry wallet balance',
         'wallet_balance_low': 'Wallet balance is not enough for wallet payment',
         'top_up_amount': '{{amount}} {{currency}}',
         'subtitle_extending': 'Extending: {{label}}',
@@ -135,6 +141,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_tip_extend': 'Go back to check your updated expiry date and remaining data.',
         'success_tip_new': 'Tap "Open in Happ Proxy" above to start using your VPN instantly, or copy the key link for any other VPN app.',
         'verify_error_tip': '💡 Common fixes: make sure the amount and receiver phone/account name match, and that the screenshot clearly shows the transaction confirmation (not just a balance screen).',
+        'verify_retry_wait': 'Verification is temporarily busy. Please wait a few seconds and try again.',
 
         // ── Wallet ──
         'wallet_title': 'Wavy Wallet',
@@ -202,6 +209,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'promo_validating': 'Checking...',
         'promo_valid': '🎉 Code applied — {{percent}}% off your order!',
         'promo_invalid': '❌ Code not found or has expired',
+        'promo_service_unavailable': 'Promo validation is temporarily unavailable. Please try again.',
     },
 
     my: {
@@ -211,6 +219,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'error_prefix': 'ချို့ယွင်းချက်: ',
         'powered_by': 'Wavy Private Server',
         'open_in_tg': 'ဤ App အား Telegram အတွင်းမှသာ အသုံးပြုနိုင်ပါသည်',
+        'session_expired_title': 'Session သက်တမ်းကုန်သွားပါပြီ',
+        'session_expired_desc': 'Telegram session မမှန်ကန်တော့ပါ။ Mini App ကို ပြန်ဖွင့်ပါ သို့မဟုတ် Telegram မှ ပြန်ဝင်ပါ။',
+        'session_expired_reload': 'Mini App ပြန်ဖွင့်မည်',
+        'session_expired_close': 'ပိတ်မည်',
         'buy_button': 'Key အသစ်ဝယ်ရန်',
 
         // ── Navigation ──
@@ -283,6 +295,8 @@ export const translations: Record<Language, Record<string, string>> = {
         'create_payment_request': 'ငွေပေးချေမှု တောင်းဆိုမှု ဖန်တီးရန်',
         'pay_with_mobile_banking': 'Mobile banking ဖြင့် ပေးချေမည်',
         'wallet_balance_unavailable': 'Wallet လက်ကျန်ငွေ မရရှိနိုင်ပါ',
+        'wallet_balance_loading': 'Wallet လက်ကျန်ငွေ စစ်ဆေးနေပါသည်...',
+        'wallet_balance_retry': 'Wallet လက်ကျန် ပြန်စစ်မည်',
         'wallet_balance_low': 'Wallet လက်ကျန်ငွေ မလုံလောက်ပါ',
         'top_up_amount': '{{amount}} {{currency}}',
         'subtitle_extending': 'သက်တမ်းတိုးမည့် Key: {{label}}',
@@ -338,6 +352,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'success_tip_extend': 'နောက်သို့ ပြန်ထွက်၍ Key ၏ သက်တမ်းကုန်ဆုံးရက်နှင့် ကျန်ရှိ Data ကို စစ်ဆေးနိုင်ပါသည်။',
         'success_tip_new': 'အောက်ပါ "Happ Proxy သို့ ဝင်ရောက်ရန်" ကို နှိပ်၍ VPN အား ချက်ချင်း စတင်ခလုပ်နှိပ်၍ အသုံးပြုနိုင်ပါသည်။ သို့မဟုတ် Key လင့်ခ်ကို အခြား VPN App တွင် ထည့်သွင်းအသုံးပြုနိုင်ပါသည်။',
         'verify_error_tip': '💡 ဖြေရှင်းရန် အကြံပြုချက်: လွှဲပြောင်းသည့် ငွေပမာဏနှင့် receiver ၏ ဖုန်းနံပါတ် သို့မဟုတ် account name တို့ကို စစ်ဆေးပါ။ ထို့ပြင် Screenshot သည် (လက်ကျန်ငွေပြသော ပုံမဟုတ်ဘဲ) Transaction အတည်ပြုပြေစာ ဖြစ်ရန် လိုအပ်ပါသည်။',
+        'verify_retry_wait': 'အတည်ပြုစနစ် ခေတ္တအလုပ်များနေပါသည်။ စက္ကန့်အနည်းငယ်စောင့်ပြီး ထပ်မံကြိုးစားပါ။',
 
         // ── Wallet ──
         'wallet_title': 'Wavy Wallet',
@@ -405,5 +420,6 @@ export const translations: Record<Language, Record<string, string>> = {
         'promo_validating': 'စစ်ဆေးနေပါသည်...',
         'promo_valid': '🎉 Code အတည်ပြုပြီးဖြစ်ပါသည်။ {{percent}}% လျှော့ဈေး ရရှိပါမည်!',
         'promo_invalid': '❌ Code မှားယွင်းနေသည် သို့မဟုတ် သက်တမ်းကုန်ဆုံးသွားပါပြီ',
+        'promo_service_unavailable': 'Promo code စစ်ဆေးမှု ခေတ္တမရနိုင်ပါ။ ပြန်လည်ကြိုးစားပါ။',
     }
 };
