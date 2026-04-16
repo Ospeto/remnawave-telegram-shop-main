@@ -29,6 +29,14 @@ interface PurchaseResponse {
     happ_link?: string;
 }
 
+interface VerificationResponse {
+    status: string;
+    message: string;
+    happ_link?: string;
+    test_mode?: boolean;
+    shadow_passed?: boolean;
+}
+
 type CheckoutAction = 'manual' | 'wallet' | 'topup';
 
 export function Checkout() {
@@ -56,7 +64,7 @@ export function Checkout() {
     const [loadError, setLoadError] = useState<string | null>(null);
     const [purchaseError, setPurchaseError] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
-    const [verificationResult, setVerificationResult] = useState<{ status: string, message: string, happ_link?: string } | null>(null);
+    const [verificationResult, setVerificationResult] = useState<VerificationResponse | null>(null);
     const [phoneCopied, setPhoneCopied] = useState<string | null>(null);
     const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
 
@@ -265,7 +273,7 @@ export function Checkout() {
                 throw new Error(errText || `Upload failed (${res.status})`);
             }
             const data = await res.json();
-            setVerificationResult(data);
+            setVerificationResult(data as VerificationResponse);
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : 'Upload failed. Please try again.';
             setVerificationResult({ status: 'failed', message: msg });
@@ -315,6 +323,15 @@ export function Checkout() {
                 <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
                     {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
                 </p>
+
+                {verificationResult?.test_mode && (
+                    <TipBox
+                        variant={verificationResult.shadow_passed === false ? 'warning' : 'info'}
+                        icon={verificationResult.shadow_passed === false ? '🧪' : '✅'}
+                    >
+                        {verificationResult.message}
+                    </TipBox>
+                )}
 
                 {verificationResult?.happ_link && !isWalletTopup && (
                     <button

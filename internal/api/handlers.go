@@ -91,10 +91,12 @@ type WalletServiceInterface interface {
 }
 
 type UploadScreenshotResponse struct {
-	Status   string `json:"status"`
-	Message  string `json:"message"`
-	Reason   string `json:"reason,omitempty"`
-	HappLink string `json:"happ_link,omitempty"`
+	Status       string `json:"status"`
+	Message      string `json:"message"`
+	Reason       string `json:"reason,omitempty"`
+	HappLink     string `json:"happ_link,omitempty"`
+	TestMode     bool   `json:"test_mode,omitempty"`
+	ShadowPassed *bool  `json:"shadow_passed,omitempty"`
 }
 
 func uploadScreenshotFailureResponse(result *payment.VerificationResult) UploadScreenshotResponse {
@@ -721,6 +723,13 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	if result.Success {
 		resp.Status = "success"
 		resp.Message = "Payment verified successfully!"
+		if strings.TrimSpace(result.Reason) != "" {
+			resp.Message = result.Reason
+		}
+		if result.TestModeBypass {
+			resp.TestMode = true
+			resp.ShadowPassed = result.ShadowPassed
+		}
 		// Look up the latest subscription key for this customer to build Happ deep link
 		if h.subKeyRepo != nil {
 			if purchase.ExtendKeyID != nil {

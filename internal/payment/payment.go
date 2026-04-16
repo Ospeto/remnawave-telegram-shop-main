@@ -1481,6 +1481,11 @@ type VerificationResult struct {
 	Success   bool
 	Reason    string
 	ReasonKey string // translation key
+	// TestModeBypass is true when the purchase was auto-approved by test mode.
+	TestModeBypass bool
+	// ShadowPassed reports whether strict verification checks passed while in test mode.
+	// Nil means "not applicable" (normal mode).
+	ShadowPassed *bool
 }
 
 const (
@@ -1586,6 +1591,155 @@ func buildVisionProviderAuthAlert(providerErr *gemini.ProviderError) string {
 	)
 }
 
+type verificationFailure struct {
+	reason    string
+	reasonKey string
+}
+
+func (vf *verificationFailure) isSet() bool {
+	if vf == nil {
+		return false
+	}
+	return strings.TrimSpace(vf.reason) != "" || strings.TrimSpace(vf.reasonKey) != ""
+}
+
+func formatShadowFailureReason(vf *verificationFailure) string {
+	if vf == nil || !vf.isSet() {
+		return "shadow_pass"
+	}
+
+	parts := make([]string, 0, 2)
+	if key := strings.TrimSpace(vf.reasonKey); key != "" {
+		parts = append(parts, key)
+	}
+	if reason := strings.TrimSpace(vf.reason); reason != "" {
+		parts = append(parts, reason)
+	}
+	if len(parts) == 0 {
+		return "shadow_fail"
+	}
+
+	return "shadow_fail: " + strings.Join(parts, " | ")
+}
+
+func (s *PaymentService) isAdminTestPurchase(ctx context.Context, purchase *database.Purchase) bool {
+	if !s.IsTestMode() || purchase == nil || s.customerRepository == nil {
+		return false
+	}
+
+	customer, err := s.customerRepository.FindById(ctx, purchase.CustomerID)
+	if err != nil {
+		slog.Warn("Test mode bypass disabled for this verification due to customer lookup failure", "purchase_id", purchase.ID, "error", err)
+		return false
+	}
+	if customer == nil {
+		slog.Warn("Test mode bypass disabled for this verification because purchase customer is missing", "purchase_id", purchase.ID)
+		return false
+	}
+
+	adminTelegramID := config.GetAdminTelegramId()
+	isAdminPurchase := customer.TelegramID == adminTelegramID
+	if !isAdminPurchase {
+		slog.Info("Test mode is enabled but bypass was not applied for non-admin purchase", "purchase_id", purchase.ID, "customer_id", customer.ID)
+	}
+
+	return isAdminPurchase
+}
+
+func (s *PaymentService) completeTestModeVerification(
+	ctx context.Context,
+	purchaseID int64,
+	info *gemini.PaymentInfo,
+	preferredProvider string,
+	failure *verificationFailure,
+) (*VerificationResult, error) {
+	if s.mobilePaymentRepo == nil {
+		return nil, fmt.Errorf("mobile payment repository is not configured")
+	}
+
+	baseTxID := "TEST_NO_TXN"
+	provider := NormalizeProviderKey(strings.TrimSpace(preferredProvider))
+	phone := ""
+	amount := 0.0
+	note := ""
+
+	if info != nil {
+		if txID := strings.TrimSpace(info.TransactionID); txID != "" {
+			baseTxID = txID
+		}
+		if provider == "" {
+			provider = NormalizeProviderKey(info.Provider)
+		}
+		phone = info.PhoneNumber
+		amount = info.Amount
+		note = info.Note
+	}
+
+	if provider == "" {
+		provider = "test_mode"
+	}
+
+	storedTxID := fmt.Sprintf("%s_%d", baseTxID, time.Now().UnixNano())
+	shadowPassed := failure == nil || !failure.isSet()
+
+	_, err := s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
+		PurchaseID:      purchaseID,
+		TransactionID:   storedTxID,
+		Provider:        provider,
+		PhoneNumber:     phone,
+		Amount:          amount,
+		Note:            note,
+		Verified:        shadowPassed,
+		RejectionReason: formatShadowFailureReason(failure),
+	})
+	if err != nil {
+		slog.Error("Error recording mobile payment (test mode)", "purchase_id", purchaseID, "error", err)
+		return nil, err
+	}
+
+	if err := s.ProcessPurchaseById(ctx, purchaseID); err != nil {
+		slog.Error("Error processing verified mobile purchase (test mode)", "purchase_id", purchaseID, "error", err)
+		if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), storedTxID); delErr != nil {
+			slog.Error("Error deleting test-mode mobile payment record after failure", "purchase_id", purchaseID, "error", delErr)
+		}
+		return nil, err
+	}
+
+	now := time.Now()
+	_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
+		"transaction_id": storedTxID,
+		"payment_method": provider,
+		"payment_phone":  phone,
+		"verified_at":    now,
+	})
+
+	shadowPassedCopy := shadowPassed
+	if shadowPassed {
+		return &VerificationResult{
+			Success:        true,
+			Reason:         "Test mode auto-approved. Shadow verification passed.",
+			ReasonKey:      "mobile_pay_success",
+			TestModeBypass: true,
+			ShadowPassed:   &shadowPassedCopy,
+		}, nil
+	}
+
+	reason := "Test mode auto-approved. Shadow verification failed."
+	if failure != nil {
+		if detailed := strings.TrimSpace(failure.reason); detailed != "" {
+			reason = fmt.Sprintf("Test mode auto-approved. Shadow verification failed: %s", detailed)
+		}
+	}
+
+	return &VerificationResult{
+		Success:        true,
+		Reason:         reason,
+		ReasonKey:      "mobile_pay_test_shadow_failed",
+		TestModeBypass: true,
+		ShadowPassed:   &shadowPassedCopy,
+	}, nil
+}
+
 func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int64, imageBytes []byte, mimeType string) (*VerificationResult, error) {
 	if s.paymentAnalyzer == nil {
 		return &VerificationResult{Success: false, Reason: "Mobile banking not configured", ReasonKey: "mobile_pay_failed_generic"}, nil
@@ -1608,6 +1762,8 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	if purchase.Status == database.PurchaseStatusPaid {
 		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
+
+	testModeBypass := s.isAdminTestPurchase(ctx, purchase)
 
 	geminiProviders := make([]gemini.ConfiguredProvider, 0, len(enabledProviders))
 	for _, provider := range enabledProviders {
@@ -1635,7 +1791,19 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		slog.Error("Mobile payment analysis failed", logAttrs...)
 		if providerErr, ok := openRouterAuthFailure(err); ok {
 			s.notifyOpenRouterAuthFailure(ctx, providerErr)
+			if testModeBypass {
+				return s.completeTestModeVerification(ctx, purchaseID, nil, "", &verificationFailure{
+					reason:    mobilePayProviderAuthFailureMessage,
+					reasonKey: mobilePayProviderAuthReasonKey,
+				})
+			}
 			return providerAuthVerificationResult(), nil
+		}
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, nil, "", &verificationFailure{
+				reason:    "Could not analyze screenshot",
+				reasonKey: "mobile_pay_failed_generic",
+			})
 		}
 		return &VerificationResult{Success: false, Reason: "Could not analyze screenshot", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
@@ -1653,60 +1821,25 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 			"provider", info.Provider,
 			"outcome", "semantic_negative",
 		)
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
+				reason:    "Screenshot does not appear to be a valid payment confirmation",
+				reasonKey: "mobile_pay_failed_generic",
+			})
+		}
 		return &VerificationResult{Success: false, Reason: "Screenshot does not appear to be a valid payment confirmation", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
 
 	// 1. Check transaction ID not empty
 	if strings.TrimSpace(info.TransactionID) == "" {
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
+				reason:    "No transaction ID found",
+				reasonKey: "mobile_pay_failed_generic",
+			})
+		}
 		return &VerificationResult{Success: false, Reason: "No transaction ID found", ReasonKey: "mobile_pay_failed_generic"}, nil
 	}
-
-	// === TEST MODE BYPASS ===
-	// In Test Mode, we accept:
-	// 1. "Magic" Transaction ID (bypasses everything)
-	// 2. Any valid-looking receipt (bypasses duplicate/amount checks)
-	if s.IsTestMode() {
-		isMagic := strings.TrimSpace(info.TransactionID) == testTransactionID
-		slog.Info("Test Mode processing", "purchase_id", purchaseID, "is_magic", isMagic)
-
-		// Record verification
-		// Append random suffix to transaction ID to avoid duplicate key violations on multiple tests
-		storedTxID := fmt.Sprintf("%s_%d", info.TransactionID, time.Now().UnixNano())
-
-		_, err = s.mobilePaymentRepo.Create(ctx, &database.MobilePaymentVerification{
-			PurchaseID:    purchaseID,
-			TransactionID: storedTxID,
-			Provider:      info.Provider,
-			PhoneNumber:   info.PhoneNumber,
-			Amount:        info.Amount,
-			Note:          info.Note,
-			Verified:      true,
-		})
-		if err != nil {
-			slog.Error("Error recording mobile payment (test mode)", "error", err)
-			return nil, err
-		}
-
-		err = s.ProcessPurchaseById(ctx, purchaseID)
-		if err != nil {
-			slog.Error("Error processing verified mobile purchase (test mode)", "error", err)
-			if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), storedTxID); delErr != nil {
-				slog.Error("Error deleting test-mode mobile payment record after failure", "error", delErr)
-			}
-			return nil, err
-		}
-
-		now := time.Now()
-		_ = s.purchaseRepository.UpdateFields(ctx, purchaseID, map[string]interface{}{
-			"transaction_id": storedTxID,
-			"payment_method": info.Provider,
-			"payment_phone":  info.PhoneNumber,
-			"verified_at":    now,
-		})
-
-		return &VerificationResult{Success: true, ReasonKey: "mobile_pay_success"}, nil
-	}
-	// ========================
 
 	// 2. Check for duplicate transaction ID
 	exists, err := s.mobilePaymentRepo.ExistsByTransactionID(ctx, info.TransactionID)
@@ -1715,6 +1848,12 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return nil, err
 	}
 	if exists {
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
+				reason:    "Duplicate transaction ID",
+				reasonKey: "mobile_pay_failed_duplicate",
+			})
+		}
 		return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: "mobile_pay_failed_duplicate"}, nil
 	}
 
@@ -1724,6 +1863,12 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	matchedProvider, matchedBy, matched := MatchPaymentRecipient(NormalizeProviderKey(info.Provider), info.PhoneNumber, info.RecipientName, 4)
 	if !matched {
 		slog.Warn("Recipient mismatch", "provider", info.Provider, "phone", info.PhoneNumber, "recipient_name", info.RecipientName, "purchase_id", purchaseID)
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
+				reason:    "Wrong recipient details",
+				reasonKey: "mobile_pay_failed_phone",
+			})
+		}
 		return &VerificationResult{Success: false, Reason: "Wrong recipient details", ReasonKey: "mobile_pay_failed_phone"}, nil
 	}
 
@@ -1731,6 +1876,12 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	noteLower := strings.ToLower(info.Note)
 	if strings.Contains(noteLower, "vpn") || strings.Contains(noteLower, "outline") {
 		slog.Warn("Payment note contains forbidden keyword", "note", info.Note, "purchase_id", purchaseID)
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, matchedProvider.Key, &verificationFailure{
+				reason:    "Payment note contains forbidden keyword",
+				reasonKey: "mobile_pay_failed_note",
+			})
+		}
 		return &VerificationResult{Success: false, Reason: "Payment note contains forbidden keyword", ReasonKey: "mobile_pay_failed_note"}, nil
 	}
 
@@ -1738,11 +1889,21 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	expectedAmount := purchase.Amount
 	if math.Abs(info.Amount-expectedAmount) > 0.5 {
 		slog.Warn("Amount mismatch", "expected", expectedAmount, "got", info.Amount, "purchase_id", purchaseID)
+		if testModeBypass {
+			return s.completeTestModeVerification(ctx, purchaseID, info, matchedProvider.Key, &verificationFailure{
+				reason:    fmt.Sprintf("Amount mismatch: expected %.0f, got %.0f", expectedAmount, info.Amount),
+				reasonKey: "mobile_pay_failed_amount",
+			})
+		}
 		return &VerificationResult{
 			Success:   false,
 			Reason:    fmt.Sprintf("Amount mismatch: expected %.0f, got %.0f", expectedAmount, info.Amount),
 			ReasonKey: "mobile_pay_failed_amount",
 		}, nil
+	}
+
+	if testModeBypass {
+		return s.completeTestModeVerification(ctx, purchaseID, info, matchedProvider.Key, nil)
 	}
 
 	// All checks passed — record verification and process

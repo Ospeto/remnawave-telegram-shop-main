@@ -225,6 +225,48 @@ func TestBuildVisionProviderAuthAlertEscapesHTML(t *testing.T) {
 	}
 }
 
+func TestFormatShadowFailureReason(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure *verificationFailure
+		want    string
+	}{
+		{
+			name:    "nil failure means shadow pass",
+			failure: nil,
+			want:    "shadow_pass",
+		},
+		{
+			name:    "empty failure means shadow pass",
+			failure: &verificationFailure{},
+			want:    "shadow_pass",
+		},
+		{
+			name: "reason key only",
+			failure: &verificationFailure{
+				reasonKey: "mobile_pay_failed_amount",
+			},
+			want: "shadow_fail: mobile_pay_failed_amount",
+		},
+		{
+			name: "reason and reason key",
+			failure: &verificationFailure{
+				reason:    "Amount mismatch: expected 12000, got 10000",
+				reasonKey: "mobile_pay_failed_amount",
+			},
+			want: "shadow_fail: mobile_pay_failed_amount | Amount mismatch: expected 12000, got 10000",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatShadowFailureReason(tt.failure); got != tt.want {
+				t.Fatalf("formatShadowFailureReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizePhone(t *testing.T) {
 	tests := []struct {
 		name  string
