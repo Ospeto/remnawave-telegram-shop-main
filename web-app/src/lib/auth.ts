@@ -11,6 +11,9 @@ interface StoredTelegramSession {
 }
 
 const TELEGRAM_SESSION_KEY = 'telegram_api_session_v1';
+const SESSION_TOKEN_HEADER = 'X-Session-Token';
+const SESSION_EXPIRES_HEADER = 'X-Session-Expires-At';
+const inFlightSessionExchanges = new Map<string, Promise<TelegramSessionResponse>>();
 
 function readStoredSession(): StoredTelegramSession | null {
     const raw = sessionStorage.getItem(TELEGRAM_SESSION_KEY);
@@ -41,15 +44,39 @@ function storeSession(session: TelegramSessionResponse) {
     }));
 }
 
+function updateStoredSessionFromResponse(response: Response) {
+    const token = response.headers.get(SESSION_TOKEN_HEADER);
+    const expiresAt = response.headers.get(SESSION_EXPIRES_HEADER);
+    if (!token || !expiresAt) return;
+
+    storeSession({
+        token,
+        expires_at: expiresAt,
+    });
+}
+
 async function exchangeTelegramSession(initData: string): Promise<TelegramSessionResponse> {
-    const session = await fetchJSON<TelegramSessionResponse>('/api/session', {
+    const existing = inFlightSessionExchanges.get(initData);
+    if (existing) {
+        return existing;
+    }
+
+    const request = fetchJSON<TelegramSessionResponse>('/api/session', {
         method: 'POST',
         headers: {
             Authorization: `twa ${initData}`,
         },
+    }).then((session) => {
+        storeSession(session);
+        return session;
+    }).finally(() => {
+        if (inFlightSessionExchanges.get(initData) === request) {
+            inFlightSessionExchanges.delete(initData);
+        }
     });
-    storeSession(session);
-    return session;
+
+    inFlightSessionExchanges.set(initData, request);
+    return request;
 }
 
 export function clearTelegramSession() {
@@ -75,26 +102,49 @@ function mergeHeaders(headers: Record<string, string>, init?: RequestInit): Head
     return merged;
 }
 
+async function executeAuthorizedFetch(
+    input: RequestInfo | URL,
+    initData: string,
+    init?: RequestInit,
+): Promise<Response> {
+    const authHeaders = await getTelegramAuthHeaders(initData);
+    const response = await fetch(input, {
+        ...init,
+        headers: mergeHeaders(authHeaders, init),
+    });
+    updateStoredSessionFromResponse(response);
+    return response;
+}
+
+export async function fetchWithTelegramAuth(
+    input: RequestInfo | URL,
+    initData: string,
+    init?: RequestInit,
+): Promise<Response> {
+    let response = await executeAuthorizedFetch(input, initData, init);
+    if (response.status !== 401) {
+        return response;
+    }
+
+    clearTelegramSession();
+    response = await executeAuthorizedFetch(input, initData, init);
+    return response;
+}
+
 export async function fetchJSONWithTelegramAuth<T>(
     input: RequestInfo | URL,
     initData: string,
     init?: RequestInit,
 ): Promise<T> {
-    const execute = async () => {
-        const authHeaders = await getTelegramAuthHeaders(initData);
-        return fetchJSON<T>(input, {
-            ...init,
-            headers: mergeHeaders(authHeaders, init),
-        });
-    };
-
-    try {
-        return await execute();
-    } catch (error) {
-        if (error instanceof APIError && error.status === 401) {
-            clearTelegramSession();
-            return execute();
+    const response = await fetchWithTelegramAuth(input, initData, init);
+    if (!response.ok) {
+        let body = '';
+        try {
+            body = await response.text();
+        } catch {
+            body = '';
         }
-        throw error;
+        throw new APIError(response.status, body);
     }
+    return response.json() as Promise<T>;
 }

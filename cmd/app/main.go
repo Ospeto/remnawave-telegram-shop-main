@@ -103,6 +103,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	api.ConfigureStateStores(pool, config.TelegramToken())
 
 	err = database.RunMigrations(ctx, &database.MigrationConfig{Direction: "up", MigrationsPath: "./db/migrations", Steps: 0}, pool)
 	if err != nil {

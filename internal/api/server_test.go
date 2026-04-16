@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -147,21 +148,21 @@ func TestRedirectHelpers(t *testing.T) {
 }
 
 func TestInitDataExchangeGuardRejectsReuse(t *testing.T) {
-	guard := newInitDataExchangeGuard()
+	guard := newMemoryInitDataExchangeGuard()
 	expiresAt := time.Now().Add(time.Minute)
 
-	if err := guard.consume("binding-key", expiresAt); err != nil {
+	if err := guard.consume(context.Background(), "binding-key", expiresAt); err != nil {
 		t.Fatalf("consume() first call error = %v", err)
 	}
-	if err := guard.consume("binding-key", expiresAt); err == nil {
+	if err := guard.consume(context.Background(), "binding-key", expiresAt); err == nil {
 		t.Fatal("consume() second call error = nil, want replay rejection")
 	}
 }
 
 func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
-	store := newAuthSessionStore(30 * time.Minute)
+	store := newSignedAuthSessionStore([]byte("test-secret"), 30*time.Minute)
 
-	token, expiresAt, err := store.create(42, "alice", "ua:test")
+	token, expiresAt, err := store.create(context.Background(), 42, "alice", "ua:test")
 	if err != nil {
 		t.Fatalf("create() error = %v", err)
 	}
@@ -169,15 +170,18 @@ func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
 		t.Fatal("create() returned empty token")
 	}
 
-	session, err := store.authenticate(token, "ua:test")
+	session, err := store.authenticate(context.Background(), token, "ua:test")
 	if err != nil {
 		t.Fatalf("authenticate() error = %v", err)
 	}
 	if session.TelegramID != 42 || session.Username != "alice" {
 		t.Fatalf("authenticate() returned unexpected session: %+v", session)
 	}
+	if session.Token == token {
+		t.Fatal("authenticate() did not rotate bearer token")
+	}
 
-	refreshed, err := store.authenticate(token, "ua:test")
+	refreshed, err := store.authenticate(context.Background(), session.Token, "ua:test")
 	if err != nil {
 		t.Fatalf("authenticate() second call error = %v", err)
 	}
@@ -185,7 +189,7 @@ func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
 		t.Fatalf("authenticate() did not refresh expiry: original=%v refreshed=%v", expiresAt, refreshed.ExpiresAt)
 	}
 
-	if _, err := store.authenticate(token, "ua:other"); err == nil {
+	if _, err := store.authenticate(context.Background(), session.Token, "ua:other"); err == nil {
 		t.Fatal("authenticate() fingerprint mismatch error = nil, want rejection")
 	}
 }
@@ -198,8 +202,8 @@ func TestValidateInitDataRejectsStaleSessionExchange(t *testing.T) {
 	}
 }
 
-func TestRedirectGrantStoreConsumesIssuedToken(t *testing.T) {
-	store := newRedirectGrantStore(2 * time.Minute)
+func TestRedirectGrantStoreValidatesSignedToken(t *testing.T) {
+	store := newSignedRedirectGrantStore([]byte("test-secret"), 2*time.Minute)
 
 	token, err := store.issue("happ://add/https://example.com/sub", "https://example.com/sub")
 	if err != nil {
@@ -213,9 +217,20 @@ func TestRedirectGrantStoreConsumesIssuedToken(t *testing.T) {
 	if grant.Target != "happ://add/https://example.com/sub" || grant.SubscriptionURL != "https://example.com/sub" {
 		t.Fatalf("consume() returned unexpected grant: %+v", grant)
 	}
+}
+
+func TestRedirectGrantStoreRejectsExpiredToken(t *testing.T) {
+	store := newSignedRedirectGrantStore([]byte("test-secret"), time.Second)
+
+	token, err := store.issue("happ://add/https://example.com/sub", "https://example.com/sub")
+	if err != nil {
+		t.Fatalf("issue() error = %v", err)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
 
 	if _, err := store.consume(token); err == nil {
-		t.Fatal("consume() second call error = nil, want one-time rejection")
+		t.Fatal("consume() expired token error = nil, want rejection")
 	}
 }
 

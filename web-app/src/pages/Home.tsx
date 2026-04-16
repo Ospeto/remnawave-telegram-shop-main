@@ -10,7 +10,7 @@ import { UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -83,11 +83,9 @@ export function Home() {
         if (!initData || togglingAutoRenewId === keyId) return;
         setTogglingAutoRenewId(keyId);
         try {
-            const authHeaders = await getTelegramAuthHeaders(initData);
-            const res = await fetch('/api/keys/autorenew', {
+            const res = await fetchWithTelegramAuth('/api/keys/autorenew', initData, {
                 method: 'POST',
                 headers: {
-                    ...authHeaders,
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ key_id: keyId, enabled: !currentValue }),
@@ -125,10 +123,8 @@ export function Home() {
         setTrialLoading(true);
         setTrialError(null);
         try {
-            const authHeaders = await getTelegramAuthHeaders(initData);
-            const res = await fetch('/api/trial', {
+            const res = await fetchWithTelegramAuth('/api/trial', initData, {
                 method: 'POST',
-                headers: authHeaders,
             });
             if (res.status === 409) {
                 setTrialError(t('trial_already_used'));

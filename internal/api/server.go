@@ -272,6 +272,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+		w.Header().Set("Access-Control-Expose-Headers", sessionTokenHeader+", "+sessionExpiresHeader)
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -317,11 +318,13 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		session, err := authSessions.authenticate(token, requestFingerprint(r))
+		session, err := authSessions.authenticate(r.Context(), token, requestFingerprint(r))
 		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		w.Header().Set(sessionTokenHeader, session.Token)
+		w.Header().Set(sessionExpiresHeader, session.ExpiresAt.UTC().Format(time.RFC3339))
 
 		ctx := context.WithValue(r.Context(), telegramIDKey, session.TelegramID)
 		if session.Username != "" {

@@ -105,11 +105,11 @@ describe('Checkout', () => {
 
             const [, options] = purchaseCall as [string, RequestInit];
             const body = JSON.parse(String(options.body));
-            const headers = options.headers as Record<string, string>;
+            const headers = new Headers(options.headers);
             expect(body.payment_method).toBe('wallet_topup');
             expect(body.amount).toBe(5000);
             expect(body.plan_index).toBeUndefined();
-            expect(headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/i);
+            expect(headers.get('Idempotency-Key')).toMatch(/^[0-9a-f-]{36}$/i);
         });
     });
 

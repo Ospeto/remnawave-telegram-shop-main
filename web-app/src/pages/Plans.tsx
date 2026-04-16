@@ -9,7 +9,7 @@ import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 
 export function Plans() {
@@ -100,10 +100,7 @@ export function Plans() {
         setPromoError(null);
 
         try {
-            const authHeaders = await getTelegramAuthHeaders(initData);
-            const res = await fetch(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, {
-                headers: authHeaders,
-            });
+            const res = await fetchWithTelegramAuth(`/api/promo/validate?code=${encodeURIComponent(normalizedCode)}`, initData);
             if (promoRequestRef.current !== requestId) return;
 
             if (res.ok) {

@@ -148,13 +148,13 @@ func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
 		return
 	}
-	if err := initDataExchanges.consume(bindingKey, expiresAt); err != nil {
+	if err := initDataExchanges.consume(r.Context(), bindingKey, expiresAt); err != nil {
 		slog.Warn("Rejected reused Telegram initData", "telegram_id", telegramID)
 		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
 		return
 	}
 
-	token, sessionExpiresAt, err := authSessions.create(telegramID, username, requestFingerprint(r))
+	token, sessionExpiresAt, err := authSessions.create(r.Context(), telegramID, username, requestFingerprint(r))
 	if err != nil {
 		slog.Error("Failed to create auth session", "telegram_id", telegramID, "error", err)
 		http.Error(w, "Unable to start session right now. Please try again.", http.StatusInternalServerError)

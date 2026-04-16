@@ -10,7 +10,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, getTelegramAuthHeaders } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 interface PaymentProvider {
     key: string;
@@ -239,11 +239,9 @@ export function Checkout() {
                 }
             }
 
-            const authHeaders = await getTelegramAuthHeaders(initData);
-            const res = await fetch('/api/purchase', {
+            const res = await fetchWithTelegramAuth('/api/purchase', initData, {
                 method: 'POST',
                 headers: {
-                    ...authHeaders,
                     'Content-Type': 'application/json',
                     'Idempotency-Key': purchaseIntentRef.current.action === action && purchaseIntentRef.current.key
                         ? purchaseIntentRef.current.key
@@ -304,10 +302,8 @@ export function Checkout() {
         formData.append('file', file);
 
         try {
-            const authHeaders = await getTelegramAuthHeaders(initData);
-            const res = await fetch(`/api/upload_screenshot?id=${purchase.purchase_id}`, {
+            const res = await fetchWithTelegramAuth(`/api/upload_screenshot?id=${purchase.purchase_id}`, initData, {
                 method: 'POST',
-                headers: authHeaders,
                 body: formData
             });
             if (!res.ok) {

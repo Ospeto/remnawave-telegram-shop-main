@@ -1,14 +1,17 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
-const redirectGrantTTL = 2 * time.Minute
+const (
+	redirectGrantTTL     = 24 * time.Hour
+	redirectGrantPurpose = "redirect_grant"
+)
 
 type redirectGrant struct {
 	Target          string
@@ -16,61 +19,70 @@ type redirectGrant struct {
 	ExpiresAt       time.Time
 }
 
-type redirectGrantStore struct {
-	mu     sync.Mutex
-	ttl    time.Duration
-	grants map[string]redirectGrant
+type redirectGrantStore interface {
+	issue(target, subscriptionURL string) (string, error)
+	consume(token string) (redirectGrant, error)
 }
 
-func newRedirectGrantStore(ttl time.Duration) *redirectGrantStore {
-	return &redirectGrantStore{
+type signedRedirectGrantStore struct {
+	secret []byte
+	ttl    time.Duration
+}
+
+type signedRedirectGrantPayload struct {
+	Purpose         string `json:"purpose"`
+	Target          string `json:"target"`
+	SubscriptionURL string `json:"subscription_url"`
+	ExpiresAt       int64  `json:"exp"`
+}
+
+func newSignedRedirectGrantStore(secret []byte, ttl time.Duration) *signedRedirectGrantStore {
+	return &signedRedirectGrantStore{
+		secret: append([]byte(nil), secret...),
 		ttl:    ttl,
-		grants: make(map[string]redirectGrant),
 	}
 }
 
-func (s *redirectGrantStore) issue(target, subscriptionURL string) (string, error) {
-	token, err := randomToken(24)
+func (s *signedRedirectGrantStore) issue(target, subscriptionURL string) (string, error) {
+	expiresAt := time.Now().Add(s.ttl)
+	payload, err := json.Marshal(signedRedirectGrantPayload{
+		Purpose:         redirectGrantPurpose,
+		Target:          target,
+		SubscriptionURL: subscriptionURL,
+		ExpiresAt:       expiresAt.Unix(),
+	})
 	if err != nil {
 		return "", err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.cleanupLocked(time.Now())
-	s.grants[token] = redirectGrant{
-		Target:          target,
-		SubscriptionURL: subscriptionURL,
-		ExpiresAt:       time.Now().Add(s.ttl),
-	}
-	return token, nil
+	return signStateToken(s.secret, payload)
 }
 
-func (s *redirectGrantStore) consume(token string) (redirectGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-	s.cleanupLocked(now)
-
-	grant, ok := s.grants[token]
-	if !ok {
+func (s *signedRedirectGrantStore) consume(token string) (redirectGrant, error) {
+	var payload signedRedirectGrantPayload
+	if err := verifyStateToken(s.secret, token, &payload); err != nil {
 		return redirectGrant{}, fmt.Errorf("redirect token not found")
 	}
-	delete(s.grants, token)
-	if now.After(grant.ExpiresAt) {
+	if payload.Purpose != redirectGrantPurpose {
+		return redirectGrant{}, fmt.Errorf("redirect token not found")
+	}
+	grant := redirectGrant{
+		Target:          payload.Target,
+		SubscriptionURL: payload.SubscriptionURL,
+		ExpiresAt:       time.Unix(payload.ExpiresAt, 0),
+	}
+	if time.Now().After(grant.ExpiresAt) {
 		return redirectGrant{}, fmt.Errorf("redirect token expired")
 	}
-	return grant, nil
-}
-
-func (s *redirectGrantStore) cleanupLocked(now time.Time) {
-	for token, grant := range s.grants {
-		if now.After(grant.ExpiresAt) {
-			delete(s.grants, token)
-		}
+	if !isSupportedRedirectTarget(grant.Target) {
+		return redirectGrant{}, fmt.Errorf("redirect token not found")
 	}
+	if !isAllowedRedirectSubscriptionURL(grant.SubscriptionURL) {
+		return redirectGrant{}, fmt.Errorf("redirect token not found")
+	}
+	if extractRedirectSubscriptionURL(grant.Target) != grant.SubscriptionURL {
+		return redirectGrant{}, fmt.Errorf("redirect token not found")
+	}
+	return grant, nil
 }
 
 func signedRedirectURLForTarget(target string) string {
@@ -98,4 +110,4 @@ func isAllowedRedirectSubscriptionURL(raw string) bool {
 	return strings.EqualFold(parsed.Scheme, "https") && parsed.Host != ""
 }
 
-var redirectGrants = newRedirectGrantStore(redirectGrantTTL)
+var redirectGrants redirectGrantStore = newSignedRedirectGrantStore([]byte("wavy-dev-state-secret"), redirectGrantTTL)

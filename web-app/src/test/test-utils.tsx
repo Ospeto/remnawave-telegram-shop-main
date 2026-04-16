@@ -24,10 +24,15 @@ export function renderWithAppProviders(routes: RouteConfig[], initialEntries: st
     );
 }
 
-export function jsonResponse(data: unknown, status = 200): Response {
+export function jsonResponse(data: unknown, status = 200, headersInit?: HeadersInit): Response {
+    const headers = new Headers(headersInit);
+    if (!headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+    }
     return {
         ok: status >= 200 && status < 300,
         status,
+        headers,
         json: async () => data,
         text: async () => typeof data === 'string' ? data : JSON.stringify(data),
     } as Response;
