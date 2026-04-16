@@ -456,6 +456,10 @@ Important restore note:
 
 There are two backup paths in this repository.
 
+For VPS-to-VPS migration and rollback sequencing, follow:
+
+- [docs/PRODUCTION_MIGRATION_RUNBOOK.md](docs/PRODUCTION_MIGRATION_RUNBOOK.md)
+
 ### 1. Bot-Managed DB Backups
 
 The running bot can create scheduled or on-demand PostgreSQL backups into the `/backups` volume.

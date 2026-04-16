@@ -175,6 +175,35 @@ env_set() {
     fi
 }
 
+compose_project_name() {
+    local name
+    name="$(basename "$SCRIPT_DIR" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+|_+$//g')"
+    if [[ -z "$name" ]]; then
+        name="default"
+    fi
+    echo "$name"
+}
+
+resolve_caddy_data_volume() {
+    local project candidate
+    project="$(compose_project_name)"
+
+    for candidate in "${project}_caddy_data" "caddy_data" "remnawave-shop_caddy_data"; do
+        if docker volume inspect "$candidate" >/dev/null 2>&1; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    candidate="$(docker volume ls --format '{{.Name}}' | grep -E '(^|_)caddy_data$' | head -n1 || true)"
+    if [[ -n "$candidate" ]]; then
+        echo "$candidate"
+        return 0
+    fi
+
+    echo "${project}_caddy_data"
+}
+
 # Escape single quotes for safe SQL literal usage.
 sql_escape() {
     printf "%s" "$1" | sed "s/'/''/g"
@@ -926,8 +955,10 @@ do_backup() {
     local temp_dir="${backup_dir}/temp_${timestamp}"
     mkdir -p "$temp_dir"
 
-    # Source .env to get DB creds
-    export $(grep -v '^#' "$ENV_FILE" | xargs)
+    # Read only the DB credentials we need; avoids breaking on .env values with spaces.
+    local POSTGRES_USER POSTGRES_DB
+    POSTGRES_USER="$(env_get "POSTGRES_USER" "postgres")"
+    POSTGRES_DB="$(env_get "POSTGRES_DB" "postgres")"
 
     # 1. Backup Database
     print_info "Backing up database..."
@@ -945,8 +976,15 @@ do_backup() {
 
     # 2. Backup Caddy Data (Volume)
     print_info "Backing up Caddy certificates..."
-    # Run a temporary container to mount the volume and tar it
-    docker run --rm -v caddy_data:/data -v "${temp_dir}:/backup" alpine tar czf /backup/caddy_data.tar.gz -C /data . || true
+    # Detect current caddy volume name (project-prefixed or plain) and snapshot it when present.
+    local caddy_volume
+    caddy_volume="$(resolve_caddy_data_volume)"
+    if docker volume inspect "$caddy_volume" >/dev/null 2>&1; then
+        docker run --rm -v "${caddy_volume}:/data" -v "${temp_dir}:/backup" alpine tar czf /backup/caddy_data.tar.gz -C /data . || true
+        print_info "Caddy data source volume: ${caddy_volume}"
+    else
+        print_info "No Caddy data volume found; skipping certificate backup."
+    fi
 
     # 3. Copy files
     cp "$ENV_FILE" "${temp_dir}/.env"
@@ -1034,23 +1072,30 @@ do_restore() {
     # Restore Caddy Data
     if [[ -f "${temp_restore_dir}/caddy_data.tar.gz" ]]; then
         print_info "Restoring Caddy data (certs)..."
+        local caddy_volume
+        caddy_volume="$(resolve_caddy_data_volume)"
         # Create volume if not exists
-        docker volume create caddy_data >/dev/null 2>&1 || true
+        docker volume create "$caddy_volume" >/dev/null 2>&1 || true
         # Populate
-        docker run --rm -v caddy_data:/data -v "${temp_restore_dir}:/backup" alpine sh -c "cd /data && rm -rn * && tar xzf /backup/caddy_data.tar.gz"
-        print_success "Caddy data restored"
+        docker run --rm -v "${caddy_volume}:/data" -v "${temp_restore_dir}:/backup" alpine sh -c "cd /data && find . -mindepth 1 -maxdepth 1 -exec rm -rf {} + && tar xzf /backup/caddy_data.tar.gz"
+        print_success "Caddy data restored (${caddy_volume})"
     fi
 
     # Restore Database
     if [[ -f "${temp_restore_dir}/db_dump.sql" ]]; then
         print_info "Restoring Database (this may take a moment)..."
+
+        local POSTGRES_USER POSTGRES_DB
+        POSTGRES_USER="$(env_get "POSTGRES_USER" "postgres")"
+        POSTGRES_DB="$(env_get "POSTGRES_DB" "postgres")"
+
         # Start DB only
         $COMPOSE_CMD up -d db
         
         # Wait for DB
         print_info "Waiting for database to be ready..."
         local retries=0
-        while ! docker exec remnawave-telegram-shop-db pg_isready -U postgres >/dev/null 2>&1; do
+        while ! docker exec remnawave-telegram-shop-db pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; do
             sleep 2
             ((retries++))
             if [[ $retries -gt 30 ]]; then
@@ -1063,9 +1108,6 @@ do_restore() {
         # Safest is to drop and recreate DB or schema public.
         # But for portability, let's just run psql. If dump has IF NOT EXISTS, it might skip.
         # Usually full restore requires clean DB.
-        
-        # Source env for vars
-        export $(grep -v '^#' "$ENV_FILE" | xargs)
         
         # Force clean public schema
         docker exec remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
