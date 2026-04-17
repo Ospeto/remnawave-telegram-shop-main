@@ -28,6 +28,7 @@ type SubscriptionKey struct {
 	LastAutoRenewedAt    *time.Time `db:"last_auto_renewed_at"`
 	AutoRenewNotifiedAt  *time.Time `db:"auto_renew_notified_at"`
 	AutoRenewPlanDays    *int       `db:"auto_renew_plan_days"`
+	AutoRenewPlanTraffic *int       `db:"auto_renew_plan_traffic_gb"`
 	AutoRenewClaimedAt   *time.Time `db:"auto_renew_claimed_at"`
 }
 
@@ -63,7 +64,7 @@ var subKeyColumns = []string{
 	"id", "customer_id", "remnawave_uuid", "username",
 	"subscription_url", "expire_at", "status", "created_at", "label",
 	"traffic_limit_gb", "auto_renew", "expiration_notified_at", "last_auto_renewed_at", "auto_renew_notified_at",
-	"auto_renew_plan_days", "auto_renew_claimed_at",
+	"auto_renew_plan_days", "auto_renew_plan_traffic_gb", "auto_renew_claimed_at",
 }
 
 func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
@@ -72,7 +73,7 @@ func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
-		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
+		&k.AutoRenewPlanDays, &k.AutoRenewPlanTraffic, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -89,7 +90,7 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
-		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
+		&k.AutoRenewPlanDays, &k.AutoRenewPlanTraffic, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan subscription_key row: %w", err)
@@ -99,8 +100,8 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 
 func (r *SubscriptionKeyRepository) Create(ctx context.Context, key *SubscriptionKey) (int64, error) {
 	query := sq.Insert("subscription_key").
-		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb", "auto_renew_plan_days").
-		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB, key.AutoRenewPlanDays).
+		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb", "auto_renew_plan_days", "auto_renew_plan_traffic_gb").
+		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB, key.AutoRenewPlanDays, key.AutoRenewPlanTraffic).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -205,6 +206,20 @@ func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, 
 func (r *SubscriptionKeyRepository) UpdateSubscriptionURL(ctx context.Context, id int64, url string) error {
 	query := sq.Update("subscription_key").
 		Set("subscription_url", url).
+		Where(sq.Eq{"id": id}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, sql, args...)
+	return err
+}
+
+func (r *SubscriptionKeyRepository) UpdateTrafficLimit(ctx context.Context, id int64, trafficLimitGB int) error {
+	query := sq.Update("subscription_key").
+		Set("traffic_limit_gb", trafficLimitGB).
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -403,13 +418,13 @@ func (r *SubscriptionKeyRepository) MarkKeyAutoRenewNotified(ctx context.Context
 	return nil
 }
 
-func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, trafficLimitGB int) error {
+func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, planTrafficGB int) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE subscription_key
 		 SET auto_renew_plan_days = $1,
-		     traffic_limit_gb = $2
+		     auto_renew_plan_traffic_gb = $2
 		 WHERE id = $3`,
-		days, trafficLimitGB, keyID)
+		days, planTrafficGB, keyID)
 	if err != nil {
 		return fmt.Errorf("failed to update auto-renew plan: %w", err)
 	}

@@ -249,12 +249,14 @@ func (j *Job) handleBlockedRenewal(ctx context.Context, customer *database.Custo
 }
 
 func findConfiguredRenewalPlan(key database.SubscriptionKey) (*config.Plan, error) {
-	if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 {
+	if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 || key.AutoRenewPlanTraffic == nil {
 		return nil, errAutoRenewPlanUnknown
 	}
 
+	trafficGB := *key.AutoRenewPlanTraffic
+
 	for _, plan := range config.Plans() {
-		if plan.Days == *key.AutoRenewPlanDays && plan.TrafficLimitGB == key.TrafficLimitGB {
+		if plan.Days == *key.AutoRenewPlanDays && plan.TrafficLimitGB == trafficGB {
 			planCopy := plan
 			return &planCopy, nil
 		}

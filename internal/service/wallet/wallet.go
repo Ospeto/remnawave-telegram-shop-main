@@ -181,7 +181,7 @@ func (s *WalletService) SetKeyAutoRenew(ctx context.Context, keyID int64, custom
 		if key == nil || key.CustomerID != customerID {
 			return fmt.Errorf("key %d not found or not owned by this customer", keyID)
 		}
-		if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 {
+		if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 || key.AutoRenewPlanTraffic == nil {
 			return ErrAutoRenewPlanUnknown
 		}
 	}

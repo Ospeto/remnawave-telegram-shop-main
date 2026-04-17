@@ -29,8 +29,13 @@ func TestFindConfiguredRenewalPlan(t *testing.T) {
 			wantErr: errAutoRenewPlanUnknown,
 		},
 		{
+			name:    "missing configured renewal traffic is unknown",
+			key:     database.SubscriptionKey{TrafficLimitGB: fiftyGB, AutoRenewPlanDays: intPtr(30)},
+			wantErr: errAutoRenewPlanUnknown,
+		},
+		{
 			name:    "configured plan no longer exists",
-			key:     database.SubscriptionKey{TrafficLimitGB: fiftyGB, AutoRenewPlanDays: intPtr(9999)},
+			key:     database.SubscriptionKey{TrafficLimitGB: fiftyGB, AutoRenewPlanDays: intPtr(9999), AutoRenewPlanTraffic: intPtr(fiftyGB)},
 			wantErr: errAutoRenewPlanUnavailable,
 		},
 	}
@@ -54,8 +59,9 @@ func TestFindConfiguredRenewalPlan(t *testing.T) {
 
 	expected := plans[0]
 	got, err := findConfiguredRenewalPlan(database.SubscriptionKey{
-		TrafficLimitGB:    expected.TrafficLimitGB,
-		AutoRenewPlanDays: intPtr(expected.Days),
+		TrafficLimitGB:       expected.TrafficLimitGB,
+		AutoRenewPlanDays:    intPtr(expected.Days),
+		AutoRenewPlanTraffic: intPtr(expected.TrafficLimitGB),
 	})
 	if err != nil {
 		t.Fatalf("findConfiguredRenewalPlan() error = %v, want nil", err)
@@ -65,6 +71,32 @@ func TestFindConfiguredRenewalPlan(t *testing.T) {
 	}
 	if got.Label != expected.Label || got.Days != expected.Days || got.Price != expected.Price || got.TrafficLimitGB != expected.TrafficLimitGB {
 		t.Fatalf("findConfiguredRenewalPlan() = %+v, want %+v", got, expected)
+	}
+}
+
+func TestFindConfiguredRenewalPlanPrefersStoredRenewalTraffic(t *testing.T) {
+	plans := config.Plans()
+	if len(plans) == 0 {
+		t.Skip("config plans are not loaded in this test environment")
+	}
+
+	expected := plans[0]
+	currentTraffic := expected.TrafficLimitGB * 2
+	renewalTraffic := expected.TrafficLimitGB
+
+	got, err := findConfiguredRenewalPlan(database.SubscriptionKey{
+		TrafficLimitGB:       currentTraffic,
+		AutoRenewPlanDays:    intPtr(expected.Days),
+		AutoRenewPlanTraffic: intPtr(renewalTraffic),
+	})
+	if err != nil {
+		t.Fatalf("findConfiguredRenewalPlan() error = %v, want nil", err)
+	}
+	if got == nil {
+		t.Fatal("findConfiguredRenewalPlan() = nil, want plan")
+	}
+	if got.Days != expected.Days || got.TrafficLimitGB != expected.TrafficLimitGB {
+		t.Fatalf("findConfiguredRenewalPlan() = %+v, want traffic %d days %d", got, expected.TrafficLimitGB, expected.Days)
 	}
 }
 

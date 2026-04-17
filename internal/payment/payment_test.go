@@ -10,6 +10,7 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/gemini"
 
+	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/google/uuid"
 	"github.com/jackc/pgconn"
 )
@@ -155,6 +156,91 @@ func TestSupportsScreenshotVerification(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAccumulatedTrafficLimitGB(t *testing.T) {
+	const gib = 1073741824
+
+	tests := []struct {
+		name             string
+		existing         database.SubscriptionKey
+		updatedUser      *remapi.User
+		purchasedTraffic int
+		want             int
+	}{
+		{
+			name:             "falls back to local accumulation when remnawave limit missing",
+			existing:         database.SubscriptionKey{TrafficLimitGB: 100},
+			updatedUser:      &remapi.User{},
+			purchasedTraffic: 100,
+			want:             200,
+		},
+		{
+			name:     "prefers remnawave reported total when available",
+			existing: database.SubscriptionKey{TrafficLimitGB: 100},
+			updatedUser: &remapi.User{
+				TrafficLimitBytes: remapi.NewOptInt(200 * gib),
+			},
+			purchasedTraffic: 100,
+			want:             200,
+		},
+		{
+			name:             "keeps unlimited when existing key is unlimited",
+			existing:         database.SubscriptionKey{TrafficLimitGB: 0},
+			updatedUser:      &remapi.User{},
+			purchasedTraffic: 100,
+			want:             0,
+		},
+		{
+			name:     "keeps unlimited when remnawave reports unlimited",
+			existing: database.SubscriptionKey{TrafficLimitGB: 100},
+			updatedUser: &remapi.User{
+				TrafficLimitBytes: remapi.NewOptInt(0),
+			},
+			purchasedTraffic: 100,
+			want:             0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := accumulatedTrafficLimitGB(tt.existing, tt.updatedUser, tt.purchasedTraffic); got != tt.want {
+				t.Fatalf("accumulatedTrafficLimitGB() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSyncedTrafficLimit(t *testing.T) {
+	const gib = 1073741824
+
+	t.Run("missing remote traffic keeps local limit and skips persistence", func(t *testing.T) {
+		limitBytes, limitGB, persist := syncedTrafficLimit(100, remapi.User{})
+		if limitBytes != 100*gib {
+			t.Fatalf("syncedTrafficLimit() limitBytes = %d, want %d", limitBytes, 100*gib)
+		}
+		if limitGB != 100 {
+			t.Fatalf("syncedTrafficLimit() limitGB = %d, want 100", limitGB)
+		}
+		if persist {
+			t.Fatal("syncedTrafficLimit() persist = true, want false")
+		}
+	})
+
+	t.Run("remote traffic overrides local value when present", func(t *testing.T) {
+		limitBytes, limitGB, persist := syncedTrafficLimit(100, remapi.User{
+			TrafficLimitBytes: remapi.NewOptInt(200 * gib),
+		})
+		if limitBytes != 200*gib {
+			t.Fatalf("syncedTrafficLimit() limitBytes = %d, want %d", limitBytes, 200*gib)
+		}
+		if limitGB != 200 {
+			t.Fatalf("syncedTrafficLimit() limitGB = %d, want 200", limitGB)
+		}
+		if !persist {
+			t.Fatal("syncedTrafficLimit() persist = false, want true")
+		}
+	})
 }
 
 func TestCreatePurchaseRejectsCryptoPay(t *testing.T) {

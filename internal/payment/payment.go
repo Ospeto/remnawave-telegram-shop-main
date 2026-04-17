@@ -100,6 +100,37 @@ func SupportsScreenshotVerification(invoiceType database.InvoiceType) bool {
 	}
 }
 
+func trafficLimitGBFromBytes(limitBytes int) int {
+	if limitBytes <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(limitBytes) / 1073741824.0))
+}
+
+func accumulatedTrafficLimitGB(existing database.SubscriptionKey, updatedUser *remapi.User, purchasedTrafficGB int) int {
+	if updatedUser != nil && updatedUser.TrafficLimitBytes.IsSet() {
+		return trafficLimitGBFromBytes(updatedUser.TrafficLimitBytes.Value)
+	}
+
+	if existing.TrafficLimitGB == 0 || purchasedTrafficGB == 0 {
+		return 0
+	}
+
+	return existing.TrafficLimitGB + purchasedTrafficGB
+}
+
+func syncedTrafficLimit(localLimitGB int, remoteUser remapi.User) (limitBytes int, limitGB int, persist bool) {
+	limitBytes = localLimitGB * 1073741824
+	limitGB = localLimitGB
+	if !remoteUser.TrafficLimitBytes.IsSet() {
+		return limitBytes, limitGB, false
+	}
+
+	limitBytes = remoteUser.TrafficLimitBytes.Value
+	limitGB = trafficLimitGBFromBytes(limitBytes)
+	return limitBytes, limitGB, true
+}
+
 // syncCacheEntry stores a snapshot of synced keys with an expiry.
 type syncCacheEntry struct {
 	keys      []KeyStats
@@ -417,12 +448,12 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 			}
 		}
 
-		// Build stats object
-		limit := 0
-		if remoteUser.TrafficLimitBytes.IsSet() {
-			limit = remoteUser.TrafficLimitBytes.Value
+		limit, limitGB, persistTrafficLimit := syncedTrafficLimit(localKey.TrafficLimitGB, remoteUser)
+		if persistTrafficLimit && localKey.TrafficLimitGB != limitGB {
+			_ = s.subKeyRepo.UpdateTrafficLimit(ctx, localKey.ID, limitGB)
 		}
 
+		// Build stats object
 		stats := KeyStats{
 			ID:                localKey.ID,
 			TrafficUsedBytes:  remoteUser.UserTraffic.UsedTrafficBytes,
@@ -459,7 +490,6 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		if label == "" {
 			label = fmt.Sprintf("key_%s", remoteUser.UUID.String()[:8])
 		}
-
 		createdID, createErr := s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
 			CustomerID:      customerID,
 			RemnawaveUUID:   remoteUser.UUID,
@@ -887,6 +917,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
 			return err
 		}
+		newTrafficLimitGB := accumulatedTrafficLimitGB(*existingKey, remnawaveUser, purchase.TrafficLimitGB)
 		// Update the subscription_key expiry
 		if s.subKeyRepo != nil {
 			if err := s.subKeyRepo.UpdateExpiry(ctx, existingKey.ID, remnawaveUser.ExpireAt); err != nil {
@@ -894,6 +925,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			}
 			if err := s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl); err != nil {
 				slog.Error("Failed to update subscription URL (non-fatal)", "key_id", existingKey.ID, "error", err)
+			}
+			if err := s.subKeyRepo.UpdateTrafficLimit(ctx, existingKey.ID, newTrafficLimitGB); err != nil {
+				slog.Error("Failed to update key traffic limit (non-fatal)", "key_id", existingKey.ID, "error", err)
 			}
 			if err := s.subKeyRepo.UpdateAutoRenewPlan(ctx, existingKey.ID, purchase.Days, purchase.TrafficLimitGB); err != nil {
 				slog.Error("Failed to update key renewal plan (non-fatal)", "key_id", existingKey.ID, "error", err)
@@ -932,15 +966,17 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				txnSuffix = fmt.Sprintf("%04d", purchase.ID%10000)
 			}
 			label := fmt.Sprintf("wavy_%s_%d", txnSuffix, customer.TelegramID)
+			planTrafficGB := purchase.TrafficLimitGB
 			_, err := s.subKeyRepo.Create(ctx, &database.SubscriptionKey{
-				CustomerID:      customer.ID,
-				RemnawaveUUID:   remnawaveUser.UUID,
-				Username:        remnawaveUser.Username,
-				SubscriptionURL: remnawaveUser.SubscriptionUrl,
-				ExpireAt:        &remnawaveUser.ExpireAt,
-				Status:          "active",
-				Label:           label,
-				TrafficLimitGB:  purchase.TrafficLimitGB,
+				CustomerID:           customer.ID,
+				RemnawaveUUID:        remnawaveUser.UUID,
+				Username:             remnawaveUser.Username,
+				SubscriptionURL:      remnawaveUser.SubscriptionUrl,
+				ExpireAt:             &remnawaveUser.ExpireAt,
+				Status:               "active",
+				Label:                label,
+				TrafficLimitGB:       purchase.TrafficLimitGB,
+				AutoRenewPlanTraffic: &planTrafficGB,
 				AutoRenewPlanDays: func() *int {
 					days := purchase.Days
 					return &days
