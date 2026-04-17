@@ -51,6 +51,8 @@ var (
 	ErrAwaitingReceiptVerification = errors.New("customer already has a pending receipt verification")
 	// ErrInvalidPromoCode means the supplied promo code cannot be honored for a new purchase.
 	ErrInvalidPromoCode = errors.New("invalid or expired promo code")
+	// ErrCryptoPayDisabled means the crypto checkout rail is intentionally unavailable.
+	ErrCryptoPayDisabled = errors.New("crypto payments are disabled")
 )
 
 func WithIdempotencyKey(ctx context.Context, key uuid.UUID) context.Context {
@@ -87,6 +89,15 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func SupportsScreenshotVerification(invoiceType database.InvoiceType) bool {
+	switch invoiceType {
+	case database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletTopUp:
+		return true
+	default:
+		return false
+	}
 }
 
 // syncCacheEntry stores a snapshot of synced keys with an expiry.
@@ -1252,7 +1263,7 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
-		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoCode, extendKeyID)
+		return "", 0, ErrCryptoPayDisabled
 	case database.InvoiceTypeMobileBanking:
 		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID, extendKeyID)
 	case database.InvoiceTypeWalletTopUp:
@@ -1309,6 +1320,10 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 }
 
 func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
+	if s.cryptoPayClient == nil {
+		return "", 0, ErrCryptoPayDisabled
+	}
+
 	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeCrypto,
 		Status:         database.PurchaseStatusNew,
@@ -1946,6 +1961,13 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	// Guard: prevent re-verification of already-paid purchases
 	if purchase.Status == database.PurchaseStatusPaid {
 		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
+	}
+	if !SupportsScreenshotVerification(purchase.InvoiceType) {
+		return &VerificationResult{
+			Success:   false,
+			Reason:    "This purchase must be completed with its original payment method",
+			ReasonKey: "mobile_pay_failed_generic",
+		}, nil
 	}
 
 	testModeBypass := s.isAdminTestPurchase(ctx, purchase)

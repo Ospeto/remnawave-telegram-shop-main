@@ -11,7 +11,6 @@ import (
 	"remnawave-tg-shop-bot/internal/api"
 	"remnawave-tg-shop-bot/internal/cache"
 	"remnawave-tg-shop-bot/internal/config"
-	"remnawave-tg-shop-bot/internal/cryptopay"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/gemini"
 	"remnawave-tg-shop-bot/internal/handler"
@@ -20,7 +19,6 @@ import (
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/service/autorenew"
 	"remnawave-tg-shop-bot/internal/service/backup"
-	"remnawave-tg-shop-bot/internal/service/invoicechecker"
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
@@ -121,7 +119,6 @@ func main() {
 	// Initialize repositories first
 	// walletTxRepo is already Init at line 68
 
-	cryptoPayClient := cryptopay.NewCryptoPayClient(config.CryptoPayUrl(), config.CryptoPayToken())
 	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
 
 	// Mobile banking / screenshot analyzer
@@ -179,28 +176,10 @@ func main() {
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, cryptoPayClient, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, nil, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
 
 	// Initialize WalletService second (depends on PaymentService)
 	walletService := wallet.NewWalletService(paymentService, customerRepository, purchaseRepository, remnawaveClient, b, tm, subKeyRepo, walletTxRepo)
-
-	if config.IsCryptoPayEnabled() {
-		invoiceJob := invoicechecker.New(purchaseRepository, cryptoPayClient, paymentService)
-		cryptoInvoiceCron := cron.New(
-			cron.WithSeconds(),
-			cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
-		)
-		_, err = cryptoInvoiceCron.AddFunc("*/5 * * * * *", func() {
-			runCronJob(ctx, "invoice_checker", 4*time.Second, func(cronCtx context.Context) {
-				invoiceJob.Run(cronCtx)
-			})
-		})
-		if err != nil {
-			panic(err)
-		}
-		cryptoInvoiceCron.Start()
-		defer cryptoInvoiceCron.Stop()
-	}
 
 	subService := notification.NewSubscriptionService(subKeyRepo, customerRepository, b, tm)
 
@@ -317,7 +296,7 @@ func main() {
 	})
 
 	mobilePayCache := cache.NewCache(1 * time.Hour)
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, cryptoPayClient, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, nil, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
 	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)
@@ -452,6 +431,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.Handle("/readyz", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
 
@@ -612,7 +592,7 @@ func healthProbeURL() string {
 			port = parsed
 		}
 	}
-	return fmt.Sprintf("http://127.0.0.1:%d/healthcheck", port)
+	return fmt.Sprintf("http://127.0.0.1:%d/readyz", port)
 }
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
@@ -650,13 +630,15 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 			}
 		}
 
-		// Analyzer health check is non-blocking and does not affect overall status.
 		if analyzer != nil {
 			gCtx, gCancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer gCancel()
 			readiness := analyzer.Readiness(gCtx)
 			status["vision_analyzer"] = readiness.Status
 			status["vision_providers"] = readiness.Providers
+			if readiness.Status != "ok" {
+				status["status"] = "fail"
+			}
 			if geminiStatus, ok := readiness.Providers["gemini"]; ok {
 				status["gemini"] = geminiStatus
 			} else {

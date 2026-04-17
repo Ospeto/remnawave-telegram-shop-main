@@ -67,7 +67,7 @@ func TestParsePaymentMethod(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "default", input: "", want: "mobile_banking"},
-		{name: "crypto", input: "crypto", want: "crypto"},
+		{name: "crypto disabled", input: "crypto", wantErr: true},
 		{name: "wallet", input: "wallet", want: "wallet_payment"},
 		{name: "topup", input: "wallet_topup", want: "wallet_topup"},
 		{name: "unknown", input: "bogus", wantErr: true},

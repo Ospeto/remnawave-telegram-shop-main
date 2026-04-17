@@ -65,8 +65,8 @@ After editing plans, you must restart the bot:
 ## Payment Methods
 
 ### CryptoPay
--   **Setup**: Enable in `setup.sh`, provide `CRYPTO_PAY_TOKEN`.
--   **Usage**: Fully automated. User clicks "Pay", sends crypto, bot detects tx, plan activates immediately.
+-   Crypto checkout is currently disabled in this runtime.
+-   Leave `CRYPTO_PAY_ENABLED=false` unless you deliberately restore that payment rail later.
 
 ### Mobile Banking (Manual / AI)
 -   **Setup**: Enable in `setup.sh`, set `MOBILE_BANKING_PHONE` and `OPENROUTER_API_KEY`. Add `OPENROUTER_FALLBACK_MODEL` if you want a fallback model on the same OpenRouter account.
@@ -77,6 +77,10 @@ After editing plans, you must restart the bot:
     4.  **AI Verification**: OpenRouter reads the screenshot first. If configured, a second OpenRouter model such as `google/gemini-3.1-flash-lite-preview` is used as fallback on provider-side failures.
     5.  **Success**: Bot activates plan automatically.
     6.  **Failure**: Bot asks user to try again or contact support.
+
+### Key Monitoring
+-   `/readyz` now fails when database, Remnawave, or screenshot-verification providers are unhealthy.
+-   `/healthcheck` returns the same readiness decision in JSON, so expired OpenRouter or Gemini keys show up as `503` instead of staying green.
 
 ### Wallet System
 -   Users can "Top Up" their internal balance using Crypto or Mobile Banking.

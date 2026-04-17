@@ -99,12 +99,6 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 func (h Handler) buildPaymentMethodKeyboard(langCode string, planIdx string) [][]models.InlineKeyboardButton {
 	var keyboard [][]models.InlineKeyboardButton
 
-	if config.IsCryptoPayEnabled() {
-		keyboard = append(keyboard, []models.InlineKeyboardButton{
-			{Text: h.translation.GetText(langCode, "crypto_button"), CallbackData: fmt.Sprintf("%s?plan=%s&invoiceType=%s", CallbackPayment, planIdx, database.InvoiceTypeCrypto)},
-		})
-	}
-
 	if config.IsMobileBankingEnabled() {
 		keyboard = append(keyboard, []models.InlineKeyboardButton{
 			{Text: h.translation.GetText(langCode, "mobile_banking_button"), CallbackData: fmt.Sprintf("%s?plan=%s&invoiceType=%s", CallbackPayment, planIdx, database.InvoiceTypeMobileBanking)},
@@ -156,12 +150,12 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	ctxWithUsername = payment.WithIdempotencyKey(ctxWithUsername, uuid.NewSHA1(uuid.NameSpaceURL, []byte("telegram-callback:"+update.CallbackQuery.ID)))
 	langCode := update.CallbackQuery.From.LanguageCode
 
-	if invoiceType == database.InvoiceTypeMobileBanking {
+	switch invoiceType {
+	case database.InvoiceTypeMobileBanking:
 		h.handleMobileBankingPayment(ctxWithUsername, b, callback, plan, customer, planIdx, langCode)
-		return
+	default:
+		slog.Warn("Rejected unavailable payment method callback", "invoice_type", invoiceType, "telegram_id", callback.Chat.ID)
 	}
-
-	h.handleCryptoPayment(ctxWithUsername, b, callback, plan, customer, planIdx, langCode)
 }
 
 func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {

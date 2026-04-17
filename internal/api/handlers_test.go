@@ -211,3 +211,28 @@ func TestUpdateAutoRenewReturnsGone(t *testing.T) {
 		t.Fatalf("UpdateAutoRenew() body = %q, want deprecation message", rec.Body.String())
 	}
 }
+
+func TestValidateScreenshotUploadAccessRejectsCryptoPurchase(t *testing.T) {
+	purchase := &database.Purchase{
+		ID:          10,
+		CustomerID:  5,
+		Status:      database.PurchaseStatusPending,
+		InvoiceType: database.InvoiceTypeCrypto,
+	}
+	customer := &database.Customer{
+		ID:         5,
+		TelegramID: 42,
+	}
+
+	status, message, ok := validateScreenshotUploadAccess(purchase, customer, 42)
+
+	if ok {
+		t.Fatal("validateScreenshotUploadAccess() ok = true, want false for crypto purchase")
+	}
+	if status != http.StatusConflict {
+		t.Fatalf("validateScreenshotUploadAccess() status = %d, want %d", status, http.StatusConflict)
+	}
+	if !strings.Contains(strings.ToLower(message), "does not accept screenshot") {
+		t.Fatalf("validateScreenshotUploadAccess() message = %q, want screenshot rejection", message)
+	}
+}

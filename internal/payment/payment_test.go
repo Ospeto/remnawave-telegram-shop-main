@@ -136,6 +136,36 @@ func TestApplyDiscountPercentRoundsToNearestWholeAmount(t *testing.T) {
 	}
 }
 
+func TestSupportsScreenshotVerification(t *testing.T) {
+	tests := []struct {
+		name        string
+		invoiceType database.InvoiceType
+		want        bool
+	}{
+		{name: "mobile banking", invoiceType: database.InvoiceTypeMobileBanking, want: true},
+		{name: "wallet topup", invoiceType: database.InvoiceTypeWalletTopUp, want: true},
+		{name: "crypto", invoiceType: database.InvoiceTypeCrypto, want: false},
+		{name: "wallet payment", invoiceType: database.InvoiceTypeWalletPayment, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SupportsScreenshotVerification(tt.invoiceType); got != tt.want {
+				t.Fatalf("SupportsScreenshotVerification(%q) = %v, want %v", tt.invoiceType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreatePurchaseRejectsCryptoPay(t *testing.T) {
+	service := &PaymentService{}
+
+	_, _, err := service.CreatePurchase(context.Background(), 10000, 30, 0, &database.Customer{ID: 1}, database.InvoiceTypeCrypto, "")
+	if !errors.Is(err, ErrCryptoPayDisabled) {
+		t.Fatalf("CreatePurchase() error = %v, want %v", err, ErrCryptoPayDisabled)
+	}
+}
+
 func TestOpenRouterAuthFailure(t *testing.T) {
 	tests := []struct {
 		name string

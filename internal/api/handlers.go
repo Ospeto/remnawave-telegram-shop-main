@@ -219,8 +219,6 @@ func parsePaymentMethod(method string) (database.InvoiceType, error) {
 	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "", "mobile_banking":
 		return database.InvoiceTypeMobileBanking, nil
-	case "crypto":
-		return database.InvoiceTypeCrypto, nil
 	case "wallet":
 		return database.InvoiceTypeWalletPayment, nil
 	case "wallet_topup":
@@ -313,6 +311,22 @@ func (h *APIHandler) finishScreenshotVerification(purchaseID int64) {
 	h.screenshotMu.Lock()
 	defer h.screenshotMu.Unlock()
 	delete(h.screenshotInFlight, purchaseID)
+}
+
+func validateScreenshotUploadAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
+	if purchase == nil {
+		return http.StatusNotFound, "Purchase not found", false
+	}
+	if customer == nil || customer.TelegramID != telegramID || purchase.CustomerID != customer.ID {
+		return http.StatusNotFound, "Purchase not found", false
+	}
+	if purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
+		return http.StatusConflict, "Purchase is not awaiting verification", false
+	}
+	if !payment.SupportsScreenshotVerification(purchase.InvoiceType) {
+		return http.StatusConflict, "This purchase does not accept screenshot verification", false
+	}
+	return 0, "", true
 }
 
 func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []database.SubscriptionKey {
@@ -900,12 +914,12 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
-	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
+	if err != nil {
 		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
 	}
-	if purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
-		http.Error(w, "Purchase is not awaiting verification", http.StatusConflict)
+	if status, message, ok := validateScreenshotUploadAccess(purchase, customer, telegramID); !ok {
+		http.Error(w, message, status)
 		return
 	}
 	if err := h.beginScreenshotVerification(purchase.ID, customer.ID); err != nil {

@@ -282,9 +282,9 @@ The full template lives in [.env.sample](.env.sample).
 
 | Variable | Purpose |
 | --- | --- |
-| `CRYPTO_PAY_ENABLED` | Enable or disable Crypto Pay |
-| `CRYPTO_PAY_TOKEN` | Crypto Pay API token |
-| `CRYPTO_PAY_URL` | Crypto Pay API base URL |
+| `CRYPTO_PAY_ENABLED` | Legacy flag. Keep `false` unless you are reintroducing crypto checkout intentionally |
+| `CRYPTO_PAY_TOKEN` | Legacy Crypto Pay API token |
+| `CRYPTO_PAY_URL` | Legacy Crypto Pay API base URL |
 
 #### Mobile Banking
 
@@ -367,9 +367,8 @@ This matters when you put another private reverse proxy in front of the bot or C
 
 ### Crypto Pay
 
-- customer creates an invoice
-- the invoice checker confirms payment
-- the purchase is fulfilled automatically
+- crypto checkout is currently disabled in this runtime
+- keep the config unset unless you plan to restore that payment rail in a future change
 
 ### Mobile Banking
 
@@ -383,7 +382,9 @@ The current runtime includes:
 
 - retry and fallback support for screenshot analyzers
 - throttling for repeated screenshot uploads on the same purchase
+- readiness failure when screenshot verification providers are degraded
 - safer handling of overlapping verification attempts
+- screenshot uploads are limited to receipt-based purchases only
 
 ### Wallet
 
@@ -522,9 +523,10 @@ Recommended restore workflow:
 ### Health Endpoints
 
 - `/livez`: liveness probe
-- `/healthcheck`: dependency-aware health check for database, Remnawave, and vision readiness
+- `/readyz`: readiness probe for database, Remnawave, and screenshot verification providers
+- `/healthcheck`: dependency-aware JSON health report with the same readiness decision
 
-The Docker healthcheck uses `/livez` on `127.0.0.1:${HEALTH_CHECK_PORT}`.
+The Docker healthcheck uses `/readyz` on `127.0.0.1:${HEALTH_CHECK_PORT}`.
 
 ### Logs
 
