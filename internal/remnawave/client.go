@@ -266,6 +266,19 @@ func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalT
 	return r.updateUser(ctx, existingUser, newTraffic, days)
 }
 
+func (r *Client) DeleteUser(ctx context.Context, userUUID uuid.UUID) error {
+	_, err := r.client.Users().DeleteUser(ctx, userUUID.String())
+	if err == nil {
+		return nil
+	}
+
+	if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+		return nil
+	}
+
+	return err
+}
+
 func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, trafficLimit int, days int) (*remapi.User, error) {
 
 	newExpire := getNewExpire(days, existingUser.ExpireAt)

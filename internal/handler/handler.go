@@ -6,6 +6,7 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/service/healthcheck"
 	appSync "remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
 	"sync"
@@ -26,6 +27,7 @@ type Handler struct {
 	referralRepository  *database.ReferralRepository
 	promoCodeRepository *database.PromoCodeRepository
 	appConfigRepository *database.AppConfigRepository
+	healthcheckService  *healthcheck.Service
 	cache               *cache.Cache
 	mobilePayCache      *cache.Cache // telegramID → purchaseID for pending mobile screenshots
 
@@ -49,6 +51,7 @@ func NewHandler(
 	referralRepository *database.ReferralRepository,
 	promoCodeRepository *database.PromoCodeRepository,
 	appConfigRepository *database.AppConfigRepository,
+	healthcheckService *healthcheck.Service,
 	cache *cache.Cache,
 	mobilePayCache *cache.Cache,
 ) *Handler {
@@ -64,6 +67,7 @@ func NewHandler(
 		referralRepository:  referralRepository,
 		promoCodeRepository: promoCodeRepository,
 		appConfigRepository: appConfigRepository,
+		healthcheckService:  healthcheckService,
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
 		limiters:            make(map[int64]*rate.Limiter),

@@ -48,7 +48,7 @@ The dashboard is organized into:
 - `Overview`: revenue, transactions, provider status, backup health
 - `Payments`: provider settings, referral bonus, receiver status
 - `Backups`: run backups, inspect status, manage schedule, restore guidance
-- `Operations`: sync, notifications, test mode, fallback commands
+- `Operations`: sync, run the synthetic E2E canary, notifications, test mode, fallback commands
 
 Most older slash commands still exist as hidden emergency fallbacks, but they are no longer the main operator UX.
 

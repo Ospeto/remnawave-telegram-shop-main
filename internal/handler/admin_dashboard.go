@@ -333,7 +333,8 @@ func (h Handler) renderAdminScreen(ctx context.Context, screen string) (string, 
 		}
 		return header + "\n\n<b>Operations</b>\nRun admin tasks that affect runtime behavior.", [][]models.InlineKeyboardButton{
 			{adminButton("Sync Now", "action", "sync"), adminButton("Notify User", "flow", string(adminFlowNotify))},
-			{adminButton(testLabel, "confirm", "test", testAction), adminButton("Help", "action", "help")},
+			{adminButton("Run E2E Check", "action", "healthcheck"), adminButton(testLabel, "confirm", "test", testAction)},
+			{adminButton("Help", "action", "help")},
 			{adminButton("Fallback Commands", "screen", screenAdminFallbacks)},
 			{adminButton("Home", "screen", screenAdminHome), adminButton("Refresh", "screen", screenAdminOperations)},
 		}
@@ -453,6 +454,8 @@ func (h Handler) handleAdminActionCallback(ctx context.Context, b *bot.Bot, upda
 		})
 	case "sync":
 		h.runAdminCommand(ctx, b, update, "/sync")
+	case "healthcheck":
+		h.runAdminCommand(ctx, b, update, "/healthbot run")
 	case "help":
 		h.runAdminCommand(ctx, b, update, "/help")
 	}
@@ -639,6 +642,8 @@ func (h Handler) runAdminCommand(ctx context.Context, b *bot.Bot, update *models
 		h.RestoreCommandHandler(ctx, b, synthetic)
 	case "/test":
 		h.TestCommandHandler(ctx, b, synthetic)
+	case "/healthbot":
+		h.HealthcheckCommandHandler(ctx, b, synthetic)
 	case "/notify", "/noti":
 		h.NotiCommandHandler(ctx, b, synthetic)
 	}

@@ -19,6 +19,7 @@ import (
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/service/autorenew"
 	"remnawave-tg-shop-bot/internal/service/backup"
+	"remnawave-tg-shop-bot/internal/service/healthcheck"
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
@@ -296,7 +297,17 @@ func main() {
 	})
 
 	mobilePayCache := cache.NewCache(1 * time.Hour)
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, nil, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, messageCache, mobilePayCache)
+	botHealthcheck := healthcheck.NewService(healthcheck.ServiceOptions{
+		Analyzer:            paymentAnalyzer,
+		Customers:           customerRepository,
+		Payments:            paymentService,
+		SubscriptionKeys:    subKeyRepo,
+		RemnawaveUsers:      remnawaveClient,
+		SyntheticTelegramID: healthcheck.DefaultSyntheticTelegramID(config.GetAdminTelegramId()),
+		CanaryDays:          1,
+		CanaryTrafficGB:     1,
+	})
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, nil, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, botHealthcheck, messageCache, mobilePayCache)
 	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)
@@ -389,6 +400,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/restore", bot.MatchTypePrefix, h.RestoreCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/sync", bot.MatchTypeExact, h.SyncUsersCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/test", bot.MatchTypePrefix, h.TestCommandHandler, isAdminMiddleware)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/healthbot", bot.MatchTypePrefix, h.HealthcheckCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/noti", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/notify", bot.MatchTypePrefix, h.NotiCommandHandler, isAdminMiddleware)
 

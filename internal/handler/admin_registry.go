@@ -26,6 +26,7 @@ var publicBotCommandDefs = []botCommandDef{
 
 var adminBotCommandDefs = []botCommandDef{
 	{Command: "admin", English: "Open admin dashboard", Russian: "Открыть панель администратора"},
+	{Command: "healthbot", English: "Run bot E2E healthcheck", Russian: "Запустить сквозную проверку бота"},
 	{Command: "help", English: "Show admin help", Russian: "Показать помощь администратора"},
 	{Command: "start", English: "Open the main menu", Russian: "Открыть главное меню"},
 	{Command: "connect", English: "Open connection options", Russian: "Показать способы подключения"},
@@ -36,6 +37,7 @@ var adminFallbackCommandDefs = []fallbackCommandDef{
 	{Usage: "/restore list", Description: "Show local backup files for offline/manual restore"},
 	{Usage: "/sync", Description: "Run a user sync immediately"},
 	{Usage: "/test enable|disable", Description: "Toggle payment test mode"},
+	{Usage: "/healthbot run", Description: "Run a synthetic end-to-end bot healthcheck"},
 	{Usage: "/notify <telegram_id>", Description: "Send a subscription notification to one user"},
 	{Usage: "/transactions [N]", Description: "Show the latest paid purchases"},
 	{Usage: "/revenue", Description: "Show revenue summary"},
@@ -51,7 +53,7 @@ var adminDashboardSections = []string{
 	"Overview: revenue, transactions, provider status, backup health",
 	"Payments: update provider details, disable providers, set referral bonus",
 	"Backups: run backups, inspect status, manage schedule, view restore guidance",
-	"Operations: sync users, send notifications, manage test mode, view fallback commands",
+	"Operations: sync users, run the E2E canary, send notifications, manage test mode, view fallback commands",
 }
 
 func PublicBotCommands(lang string) []models.BotCommand {

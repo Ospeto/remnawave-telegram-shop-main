@@ -13,7 +13,7 @@ The dashboard is organized into four sections:
 - `Overview`: revenue, recent transactions, provider status, backup health
 - `Payments`: update provider phone/name, disable providers, adjust referral bonus
 - `Backups`: run backups, inspect status, manage schedule, view restore guidance
-- `Operations`: sync users, send notifications, toggle test mode, review fallbacks
+- `Operations`: sync users, run the synthetic E2E canary, send notifications, toggle test mode, review fallbacks
 
 Most older admin slash commands still exist as hidden emergency fallbacks, but they are no longer the primary way to operate the bot.
 
@@ -23,6 +23,7 @@ Hidden fallbacks:
 - `/restore list`
 - `/sync`
 - `/test enable|disable`
+- `/healthbot run`
 - `/notify <telegram_id>`
 - `/setreferralbonus <amount>`
 - `/setphone <provider> <number>`
@@ -81,6 +82,7 @@ After editing plans, you must restart the bot:
 ### Key Monitoring
 -   `/readyz` now fails when database, Remnawave, or screenshot-verification providers are unhealthy.
 -   `/healthcheck` returns the same readiness decision in JSON, so expired OpenRouter or Gemini keys show up as `503` instead of staying green.
+-   `/admin` -> `Operations` -> `Run E2E Check` or `/healthbot run` triggers a synthetic bot canary that checks analyzer readiness and a disposable fulfillment flow.
 
 ### Wallet System
 -   Users can "Top Up" their internal balance using Crypto or Mobile Banking.
