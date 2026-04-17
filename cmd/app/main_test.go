@@ -67,3 +67,35 @@ func TestFullHealthHandlerFailsWhenAnalyzerIsDegraded(t *testing.T) {
 		t.Fatalf("fullHealthHandler() body missing fail status: %s", body)
 	}
 }
+
+func TestVersionedMiniAppURLAddsBuildVersion(t *testing.T) {
+	originalCommit, originalBuildDate, originalVersion := Commit, BuildDate, Version
+	t.Cleanup(func() {
+		Commit, BuildDate, Version = originalCommit, originalBuildDate, originalVersion
+	})
+
+	Commit = "1cfd86c"
+	BuildDate = "2026-04-17T20:45:40Z"
+	Version = "dev"
+
+	got := versionedMiniAppURL("https://mini-92-112-127-10.sslip.io/")
+	if got != "https://mini-92-112-127-10.sslip.io/?v=1cfd86c" {
+		t.Fatalf("versionedMiniAppURL() = %q, want %q", got, "https://mini-92-112-127-10.sslip.io/?v=1cfd86c")
+	}
+}
+
+func TestVersionedMiniAppURLPreservesExistingQuery(t *testing.T) {
+	originalCommit, originalBuildDate, originalVersion := Commit, BuildDate, Version
+	t.Cleanup(func() {
+		Commit, BuildDate, Version = originalCommit, originalBuildDate, originalVersion
+	})
+
+	Commit = ""
+	BuildDate = "2026-04-17T20:45:40Z"
+	Version = "dev"
+
+	got := versionedMiniAppURL("https://mini-92-112-127-10.sslip.io/plans?foo=bar")
+	if got != "https://mini-92-112-127-10.sslip.io/plans?foo=bar&v=2026-04-17T20%3A45%3A40Z" {
+		t.Fatalf("versionedMiniAppURL() = %q, want existing query preserved", got)
+	}
+}

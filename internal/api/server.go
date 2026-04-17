@@ -131,10 +131,14 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 		// If the requested file exists, serve it directly
 		path := "./web-app/dist" + r.URL.Path
 		if _, err := os.Stat(path); err == nil {
+			if strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/" {
+				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			}
 			fs.ServeHTTP(w, r)
 			return
 		}
 		// Otherwise serve index.html for SPA routing
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		http.ServeFile(w, r, "./web-app/dist/index.html")
 	})
 }

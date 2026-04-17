@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"remnawave-tg-shop-bot/internal/api"
@@ -49,6 +50,28 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func versionedMiniAppURL(rawURL string) string {
+	base := strings.TrimSpace(rawURL)
+	if base == "" {
+		return ""
+	}
+
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+
+	version := firstNonEmpty(strings.TrimSpace(Commit), strings.TrimSpace(BuildDate), strings.TrimSpace(Version))
+	if version == "" {
+		return base
+	}
+
+	query := u.Query()
+	query.Set("v", version)
+	u.RawQuery = query.Encode()
+	return u.String()
 }
 
 func newVisionProvider(providerName, geminiAPIKey, geminiModel, openRouterAPIKey, openRouterModel, openRouterFallbackModel string) (gemini.Provider, error) {
@@ -317,15 +340,17 @@ func main() {
 
 	miniAppURL := strings.TrimSpace(config.GetMiniAppURL())
 	if miniAppURL != "" {
+		menuButtonURL := versionedMiniAppURL(miniAppURL)
 		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
 			MenuButton: &models.MenuButtonWebApp{
 				Type: models.MenuButtonTypeWebApp,
 				Text: "ဒီမှာဝယ်ပါ",
 				WebApp: models.WebAppInfo{
-					URL: miniAppURL,
+					URL: menuButtonURL,
 				},
 			},
 		})
+		slog.Info("Configured Mini App menu button", "url", menuButtonURL)
 	} else {
 		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
 			MenuButton: &models.MenuButtonCommands{
