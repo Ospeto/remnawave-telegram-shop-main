@@ -13,21 +13,22 @@ import (
 )
 
 type SubscriptionKey struct {
-	ID                  int64      `db:"id"`
-	CustomerID          int64      `db:"customer_id"`
-	RemnawaveUUID       uuid.UUID  `db:"remnawave_uuid"`
-	Username            string     `db:"username"`
-	SubscriptionURL     string     `db:"subscription_url"`
-	ExpireAt            *time.Time `db:"expire_at"`
-	Status              string     `db:"status"`
-	CreatedAt           time.Time  `db:"created_at"`
-	Label               string     `db:"label"`
-	TrafficLimitGB      int        `db:"traffic_limit_gb"`
-	AutoRenew           bool       `db:"auto_renew"`
-	LastAutoRenewedAt   *time.Time `db:"last_auto_renewed_at"`
-	AutoRenewNotifiedAt *time.Time `db:"auto_renew_notified_at"`
-	AutoRenewPlanDays   *int       `db:"auto_renew_plan_days"`
-	AutoRenewClaimedAt  *time.Time `db:"auto_renew_claimed_at"`
+	ID                   int64      `db:"id"`
+	CustomerID           int64      `db:"customer_id"`
+	RemnawaveUUID        uuid.UUID  `db:"remnawave_uuid"`
+	Username             string     `db:"username"`
+	SubscriptionURL      string     `db:"subscription_url"`
+	ExpireAt             *time.Time `db:"expire_at"`
+	Status               string     `db:"status"`
+	CreatedAt            time.Time  `db:"created_at"`
+	Label                string     `db:"label"`
+	TrafficLimitGB       int        `db:"traffic_limit_gb"`
+	AutoRenew            bool       `db:"auto_renew"`
+	ExpirationNotifiedAt *time.Time `db:"expiration_notified_at"`
+	LastAutoRenewedAt    *time.Time `db:"last_auto_renewed_at"`
+	AutoRenewNotifiedAt  *time.Time `db:"auto_renew_notified_at"`
+	AutoRenewPlanDays    *int       `db:"auto_renew_plan_days"`
+	AutoRenewClaimedAt   *time.Time `db:"auto_renew_claimed_at"`
 }
 
 type SubscriptionKeyRepository struct {
@@ -40,10 +41,14 @@ func NewSubscriptionKeyRepository(pool *pgxpool.Pool) *SubscriptionKeyRepository
 
 func PrimarySubscriptionKey(keys []SubscriptionKey) *SubscriptionKey {
 	var best *SubscriptionKey
+	now := time.Now()
 
 	for i := range keys {
 		key := &keys[i]
 		if key.Status == "deleted" || key.ExpireAt == nil {
+			continue
+		}
+		if key.ExpireAt.Before(now) {
 			continue
 		}
 		if best == nil || key.ExpireAt.After(*best.ExpireAt) || (key.ExpireAt.Equal(*best.ExpireAt) && key.CreatedAt.After(best.CreatedAt)) {
@@ -57,7 +62,7 @@ func PrimarySubscriptionKey(keys []SubscriptionKey) *SubscriptionKey {
 var subKeyColumns = []string{
 	"id", "customer_id", "remnawave_uuid", "username",
 	"subscription_url", "expire_at", "status", "created_at", "label",
-	"traffic_limit_gb", "auto_renew", "last_auto_renewed_at", "auto_renew_notified_at",
+	"traffic_limit_gb", "auto_renew", "expiration_notified_at", "last_auto_renewed_at", "auto_renew_notified_at",
 	"auto_renew_plan_days", "auto_renew_claimed_at",
 }
 
@@ -66,7 +71,7 @@ func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
 	err := row.Scan(
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
-		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
@@ -83,7 +88,7 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 	err := rows.Scan(
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
-		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
@@ -171,6 +176,7 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 	query := sq.Update("subscription_key").
 		Set("expire_at", expireAt).
 		Set("status", "active").
+		Set("expiration_notified_at", nil).
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -329,6 +335,7 @@ func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startD
 			sq.NotEq{"expire_at": nil},
 			sq.GtOrEq{"expire_at": startDate},
 			sq.LtOrEq{"expire_at": endDate},
+			sq.Eq{"expiration_notified_at": nil},
 		}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -352,6 +359,17 @@ func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startD
 		keys = append(keys, *k)
 	}
 	return keys, rows.Err()
+}
+
+func (r *SubscriptionKeyRepository) MarkExpirationNotified(ctx context.Context, keyID int64, notifiedAt time.Time) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE subscription_key SET expiration_notified_at = $1 WHERE id = $2`,
+		notifiedAt, keyID,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to mark expiration notified: %w", err)
+	}
+	return nil
 }
 
 // MarkKeyAutoRenewed stamps the successful renewal marker and clears the

@@ -20,6 +20,7 @@
   "channel_button": "📢 Announcements",
   "tos_button": "Terms of Service",
   "subscription_expiring": "⚠️ <b>Your key expires soon</b>\n\nYour VPN key will expire on <b>%s</b>.\nExtend now to stay connected without interruption.",
+  "subscription_expiring_key": "⚠️ <b>Your key expires soon</b>\n\nKey <b>%s</b> will expire on <b>%s</b>.\nExtend now to stay connected without interruption.",
   "renew_subscription_button": "🔄 Extend Key",
   "trial_button": "🎁 Start Free Trial",
   "trial_activated": "✅ Trial activated — your free key is ready!",

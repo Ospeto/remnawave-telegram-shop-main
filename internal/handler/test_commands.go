@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"remnawave-tg-shop-bot/internal/database"
 	"strconv"
 	"strings"
 
@@ -99,7 +100,16 @@ func (h *Handler) NotiCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		return
 	}
 
-	err = h.subscriptionService.SendNotification(ctx, keys[0], *customer)
+	key := primaryNotifiableKey(keys)
+	if key == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "Customer has no active subscription keys.",
+		})
+		return
+	}
+
+	err = h.subscriptionService.SendNotification(ctx, *key, *customer)
 	if err != nil {
 		slog.Error("Failed to send test notification", "error", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
@@ -113,4 +123,8 @@ func (h *Handler) NotiCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		ChatID: update.Message.Chat.ID,
 		Text:   fmt.Sprintf("✅ Notification sent to %d successfully.", telegramID),
 	})
+}
+
+func primaryNotifiableKey(keys []database.SubscriptionKey) *database.SubscriptionKey {
+	return database.PrimarySubscriptionKey(keys)
 }

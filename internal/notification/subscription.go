@@ -19,6 +19,7 @@ type customerRepository interface {
 
 type subscriptionKeyRepository interface {
 	FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]database.SubscriptionKey, error)
+	MarkExpirationNotified(ctx context.Context, keyID int64, notifiedAt time.Time) error
 }
 
 type SubscriptionService struct {
@@ -88,6 +89,14 @@ func (s *SubscriptionService) ProcessSubscriptionExpirationWithContext(ctx conte
 			continue
 		}
 
+		if err := s.subKeyRepo.MarkExpirationNotified(ctx, key.ID, time.Now()); err != nil {
+			slog.Error("Failed to persist expiration notification marker",
+				"key_id", key.ID,
+				"customer_id", customer.ID,
+				"error", err)
+			continue
+		}
+
 		notifiedCount++
 		slog.Info("Notification sent successfully",
 			"key_id", key.ID,
@@ -101,9 +110,10 @@ func (s *SubscriptionService) ProcessSubscriptionExpirationWithContext(ctx conte
 func (s *SubscriptionService) getExpiringSubscriptions(ctx context.Context) ([]database.SubscriptionKey, error) {
 	now := time.Now()
 
-	// Notify strictly for keys expiring exactly between 2 and 3 days from now
-	// This prevents spamming the user every day (3 days, 2 days, 1 day)
-	startDate := now.Add(2 * 24 * time.Hour)
+	// Notify once when the key enters the next-3-days window.
+	// Keys are filtered durably by expiration_notified_at in the repository,
+	// so a missed cron run can still notify later without daily spam.
+	startDate := now
 	endDate := now.Add(3 * 24 * time.Hour)
 
 	return s.subKeyRepo.FindExpiringKeys(ctx, startDate, endDate)
@@ -114,21 +124,7 @@ func (s *SubscriptionService) SendNotification(ctx context.Context, key database
 		return fmt.Errorf("subscription key %d has no expiration date", key.ID)
 	}
 
-	expireDate := key.ExpireAt.Format("02.01.2006")
-
-	messageText := fmt.Sprintf(
-		s.tm.GetText(customer.Language, "subscription_expiring_key"),
-		key.Label,
-		expireDate,
-	)
-
-	// Fallback to legacy string if specific key translation is missing
-	if messageText == "subscription_expiring_key" {
-		messageText = fmt.Sprintf(
-			s.tm.GetText(customer.Language, "subscription_expiring"),
-			expireDate,
-		)
-	}
+	messageText := s.notificationMessageText(key, customer)
 
 	var replyMarkup *models.InlineKeyboardMarkup
 	if config.GetMiniAppURL() != "" {
@@ -165,4 +161,17 @@ func (s *SubscriptionService) SendNotification(ctx context.Context, key database
 	})
 
 	return err
+}
+
+func (s *SubscriptionService) notificationMessageText(key database.SubscriptionKey, customer database.Customer) string {
+	expireDate := key.ExpireAt.Format("02.01.2006")
+
+	keyTemplate := s.tm.GetText(customer.Language, "subscription_expiring_key")
+	legacyTemplate := s.tm.GetText(customer.Language, "subscription_expiring")
+
+	if keyTemplate != "subscription_expiring_key" {
+		return fmt.Sprintf(keyTemplate, key.Label, expireDate)
+	}
+
+	return fmt.Sprintf(legacyTemplate, expireDate)
 }

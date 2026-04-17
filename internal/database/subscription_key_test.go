@@ -72,3 +72,32 @@ func TestPrimarySubscriptionKeyBreaksExpiryTiesByCreatedAt(t *testing.T) {
 		t.Fatalf("PrimarySubscriptionKey() id = %d, want 2", got.ID)
 	}
 }
+
+func TestPrimarySubscriptionKeySkipsExpiredKeys(t *testing.T) {
+	now := time.Now()
+	expired := now.Add(-1 * time.Hour)
+	active := now.Add(24 * time.Hour)
+
+	keys := []SubscriptionKey{
+		{
+			ID:        1,
+			ExpireAt:  &expired,
+			Status:    "active",
+			CreatedAt: now,
+		},
+		{
+			ID:        2,
+			ExpireAt:  &active,
+			Status:    "active",
+			CreatedAt: now.Add(-1 * time.Hour),
+		},
+	}
+
+	got := PrimarySubscriptionKey(keys)
+	if got == nil {
+		t.Fatal("PrimarySubscriptionKey() = nil, want non-expired key")
+	}
+	if got.ID != 2 {
+		t.Fatalf("PrimarySubscriptionKey() id = %d, want 2", got.ID)
+	}
+}
