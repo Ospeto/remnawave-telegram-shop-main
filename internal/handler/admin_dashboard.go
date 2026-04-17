@@ -19,6 +19,7 @@ const (
 	screenAdminHome              = "home"
 	screenAdminOverview          = "overview"
 	screenAdminPayments          = "payments"
+	screenAdminPromos            = "promos"
 	screenAdminPaymentsSetPhone  = "payments_setphone"
 	screenAdminPaymentsSetName   = "payments_setname"
 	screenAdminPaymentsDisable   = "payments_disablephone"
@@ -37,6 +38,7 @@ const (
 	adminQuickSyncUsers        = "🔁 Sync Users"
 	adminQuickBackupStatus     = "💾 Backup Status"
 	adminQuickBackupList       = "📂 Backup List"
+	adminQuickHealthcheck      = "🩺 E2E Check"
 	adminQuickEnableTest       = "🧪 Enable Test Mode"
 	adminQuickDisableTest      = "🛑 Disable Test Mode"
 	adminQuickOpenDashboard    = "🧭 Dashboard"
@@ -55,6 +57,8 @@ const (
 	adminFlowSetName        adminFlowKind = "set_name"
 	adminFlowBackupSchedule adminFlowKind = "backup_schedule"
 	adminFlowNotify         adminFlowKind = "notify"
+	adminFlowAddPromo       adminFlowKind = "add_promo"
+	adminFlowDeletePromo    adminFlowKind = "delete_promo"
 )
 
 type adminFlowState struct {
@@ -221,6 +225,17 @@ func buildAdminInputCommand(flow adminFlowState, input string) (string, error) {
 			return "", fmt.Errorf("invalid Telegram ID")
 		}
 		return "/notify " + input, nil
+	case adminFlowAddPromo:
+		fields := strings.Fields(input)
+		if len(fields) != 4 {
+			return "", fmt.Errorf("send: <code>name discount%% durationdays maxusescode</code>")
+		}
+		return "/addpromo " + strings.Join(fields, " "), nil
+	case adminFlowDeletePromo:
+		if strings.Contains(input, " ") {
+			return "", fmt.Errorf("promo code must be a single token")
+		}
+		return "/deletepromo " + input, nil
 	default:
 		return "", fmt.Errorf("unknown admin flow")
 	}
@@ -306,6 +321,12 @@ func (h Handler) renderAdminScreen(ctx context.Context, screen string) (string, 
 			{adminButton("Disable Provider", "screen", screenAdminPaymentsDisable), adminButton("Clear Name", "screen", screenAdminPaymentsClearName)},
 			{adminButton("Home", "screen", screenAdminHome), adminButton("Refresh", "screen", screenAdminPayments)},
 		}
+	case screenAdminPromos:
+		return header + "\n\n<b>Promos</b>\nCreate, inspect, and remove promo codes without memorizing fallback syntax.", [][]models.InlineKeyboardButton{
+			{adminButton("List Promos", "action", "listpromos"), adminButton("Create Promo", "flow", string(adminFlowAddPromo))},
+			{adminButton("Delete Promo", "flow", string(adminFlowDeletePromo)), adminButton("Promo Format", "action", "promos", "guide")},
+			{adminButton("Home", "screen", screenAdminHome), adminButton("Refresh", "screen", screenAdminPromos)},
+		}
 	case screenAdminPaymentsSetPhone:
 		return header + "\n\n<b>Set Phone</b>\nChoose a provider, then send the new phone number as your next message.", providerSelectionKeyboard("flow", string(adminFlowSetPhone), screenAdminPayments)
 	case screenAdminPaymentsSetName:
@@ -345,8 +366,9 @@ func (h Handler) renderAdminScreen(ctx context.Context, screen string) (string, 
 	default:
 		return header + "\n\n<b>Dashboard</b>\nChoose a section to operate the bot.", [][]models.InlineKeyboardButton{
 			{adminButton("Overview", "screen", screenAdminOverview), adminButton("Payments", "screen", screenAdminPayments)},
-			{adminButton("Backups", "screen", screenAdminBackups), adminButton("Operations", "screen", screenAdminOperations)},
-			{adminButton("Help", "action", "help"), adminButton("Refresh", "screen", screenAdminHome)},
+			{adminButton("Promos", "screen", screenAdminPromos), adminButton("Backups", "screen", screenAdminBackups)},
+			{adminButton("Operations", "screen", screenAdminOperations), adminButton("Help", "action", "help")},
+			{adminButton("Refresh", "screen", screenAdminHome)},
 		}
 	}
 }
@@ -361,11 +383,12 @@ func providerSelectionKeyboard(mode string, action string, backScreen string) []
 
 func adminQuickActionKeyboard() [][]models.KeyboardButton {
 	return [][]models.KeyboardButton{
+		{{Text: adminQuickOpenDashboard}, {Text: adminQuickHealthcheck}},
 		{{Text: adminQuickRevenue}, {Text: adminQuickTransactions}},
 		{{Text: adminQuickProviders}, {Text: adminQuickSyncUsers}},
 		{{Text: adminQuickBackupStatus}, {Text: adminQuickBackupList}},
 		{{Text: adminQuickEnableTest}, {Text: adminQuickDisableTest}},
-		{{Text: adminQuickOpenDashboard}, {Text: adminQuickHelp}},
+		{{Text: adminQuickHelp}},
 		{{Text: adminQuickHideKeyboard}},
 	}
 }
@@ -384,6 +407,8 @@ func adminQuickActionCommand(text string) (string, bool) {
 		return "/backup status", true
 	case adminQuickBackupList:
 		return "/backup list", true
+	case adminQuickHealthcheck:
+		return "/healthbot run", true
 	case adminQuickEnableTest:
 		return "/test enable", true
 	case adminQuickDisableTest:
@@ -445,6 +470,14 @@ func (h Handler) handleAdminActionCallback(ctx context.Context, b *bot.Bot, upda
 		h.runAdminCommand(ctx, b, update, "/backup status")
 	case "backup:list":
 		h.runAdminCommand(ctx, b, update, "/backup list")
+	case "listpromos":
+		h.runAdminCommand(ctx, b, update, "/listpromos")
+	case "promos:guide":
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    update.CallbackQuery.Message.Message.Chat.ID,
+			Text:      "Create promo format:\n<code>name discount% durationdays maxusescode</code>\nExample:\n<code>sale50 50% 10days 100code</code>\n\nDelete promo format:\n<code>PROMOCODE</code>",
+			ParseMode: models.ParseModeHTML,
+		})
 	case "restore:list":
 		h.runAdminCommand(ctx, b, update, "/restore list")
 	case "restore:guidance":
@@ -486,6 +519,12 @@ func (h Handler) handleAdminFlowCallback(ctx context.Context, b *bot.Bot, update
 	case adminFlowNotify:
 		state.ReturnScreen = screenAdminOperations
 		title = "Send the target Telegram ID.\nExample: <code>123456789</code>"
+	case adminFlowAddPromo:
+		state.ReturnScreen = screenAdminPromos
+		title = "Send the promo in this format:\n<code>name discount% durationdays maxusescode</code>\nExample:\n<code>sale50 50% 10days 100code</code>"
+	case adminFlowDeletePromo:
+		state.ReturnScreen = screenAdminPromos
+		title = "Send the promo code to delete.\nExample: <code>SALE50</code>"
 	case adminFlowSetPhone, adminFlowSetName:
 		if len(parts) < 2 {
 			return
@@ -626,6 +665,12 @@ func (h Handler) runAdminCommand(ctx context.Context, b *bot.Bot, update *models
 		h.TransactionsCommandHandler(ctx, b, synthetic)
 	case "/phones":
 		h.PhonesCommandHandler(ctx, b, synthetic)
+	case "/addpromo":
+		h.AddPromoCommandHandler(ctx, b, synthetic)
+	case "/listpromos":
+		h.ListPromosCommandHandler(ctx, b, synthetic)
+	case "/deletepromo":
+		h.DeletePromoCommandHandler(ctx, b, synthetic)
 	case "/setreferralbonus":
 		h.SetReferralBonusCommandHandler(ctx, b, synthetic)
 	case "/setphone":

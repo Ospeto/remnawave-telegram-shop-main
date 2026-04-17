@@ -13,6 +13,7 @@ func TestAdminQuickActionCommandMapping(t *testing.T) {
 		{label: adminQuickSyncUsers, wantCmd: "/sync"},
 		{label: adminQuickBackupStatus, wantCmd: "/backup status"},
 		{label: adminQuickBackupList, wantCmd: "/backup list"},
+		{label: adminQuickHealthcheck, wantCmd: "/healthbot run"},
 		{label: adminQuickEnableTest, wantCmd: "/test enable"},
 		{label: adminQuickDisableTest, wantCmd: "/test disable"},
 		{label: adminQuickOpenDashboard, wantCmd: adminQuickActionDashboard},

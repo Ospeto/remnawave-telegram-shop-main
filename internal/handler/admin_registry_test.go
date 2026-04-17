@@ -14,14 +14,17 @@ func TestPublicBotCommandsDefaultToEnglish(t *testing.T) {
 
 func TestAdminBotCommandsIncludeDashboard(t *testing.T) {
 	commands := AdminBotCommands("ru")
-	if len(commands) == 0 {
-		t.Fatal("AdminBotCommands() returned no commands")
+	if len(commands) != 3 {
+		t.Fatalf("AdminBotCommands() len = %d, want 3", len(commands))
 	}
 	if commands[0].Command != "admin" {
 		t.Fatalf("AdminBotCommands() first command = %q, want admin", commands[0].Command)
 	}
 	if commands[0].Description == "" {
 		t.Fatal("AdminBotCommands() admin description is empty")
+	}
+	if commands[1].Command != "healthbot" || commands[2].Command != "help" {
+		t.Fatalf("AdminBotCommands() = %#v, want admin/healthbot/help", commands)
 	}
 }
 
@@ -64,6 +67,18 @@ func TestBuildAdminInputCommand(t *testing.T) {
 			want:  "/notify 12345678",
 		},
 		{
+			name:  "add promo",
+			flow:  adminFlowState{Kind: adminFlowAddPromo},
+			input: "sale50 50% 10days 100code",
+			want:  "/addpromo sale50 50% 10days 100code",
+		},
+		{
+			name:  "delete promo",
+			flow:  adminFlowState{Kind: adminFlowDeletePromo},
+			input: "SALE50",
+			want:  "/deletepromo SALE50",
+		},
+		{
 			name:    "invalid schedule",
 			flow:    adminFlowState{Kind: adminFlowBackupSchedule},
 			input:   "25:00",
@@ -73,6 +88,12 @@ func TestBuildAdminInputCommand(t *testing.T) {
 			name:    "invalid notify",
 			flow:    adminFlowState{Kind: adminFlowNotify},
 			input:   "abc",
+			wantErr: true,
+		},
+		{
+			name:    "invalid add promo",
+			flow:    adminFlowState{Kind: adminFlowAddPromo},
+			input:   "sale50 50%",
 			wantErr: true,
 		},
 	}

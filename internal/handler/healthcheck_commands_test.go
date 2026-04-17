@@ -27,6 +27,25 @@ func TestRenderAdminScreenIncludesHealthcheckAction(t *testing.T) {
 	}
 }
 
+func TestRenderAdminHomeIncludesPromosSection(t *testing.T) {
+	text, keyboard := Handler{}.renderAdminScreen(nil, screenAdminHome)
+	if !strings.Contains(text, "Dashboard") {
+		t.Fatalf("renderAdminScreen() text = %q, want dashboard copy", text)
+	}
+
+	found := false
+	for _, row := range keyboard {
+		for _, button := range row {
+			if button.Text == "Promos" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("renderAdminScreen() missing Promos button on home screen")
+	}
+}
+
 func TestFormatHealthcheckReport(t *testing.T) {
 	report := &hc.Report{
 		Success:  true,
