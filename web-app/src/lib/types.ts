@@ -38,4 +38,15 @@ export interface UserData {
     referral_stats_unavailable?: boolean;
     referral_bonus_amount?: number;
     bot_url?: string;
+    is_admin?: boolean;
+}
+
+export interface AdminPromo {
+    code: string;
+    discount_percent: number;
+    max_uses: number;
+    used_count: number;
+    valid_until: string;
+    created_at: string;
+    status?: 'active' | 'expired' | 'exhausted';
 }

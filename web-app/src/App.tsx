@@ -3,6 +3,7 @@ import { Home } from './pages/Home';
 import { Plans } from './pages/Plans';
 import { Checkout } from './pages/Checkout';
 import { Wallet } from './pages/Wallet';
+import { AdminPromos } from './pages/AdminPromos';
 
 import { ThemeProvider } from './lib/ThemeProvider';
 
@@ -12,6 +13,7 @@ function App() {
             <BrowserRouter>
                 <Routes>
                     <Route path="/" element={<Home />} />
+                    <Route path="/admin/promos" element={<AdminPromos />} />
                     <Route path="/plans" element={<Plans />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/checkout" element={<Checkout />} />

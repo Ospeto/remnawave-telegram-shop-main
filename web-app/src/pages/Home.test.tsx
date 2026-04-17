@@ -87,4 +87,48 @@ describe('Home', () => {
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
         expect(screen.queryByText(/Referrals/)).toBeNull();
     });
+
+    it('shows an admin promo card only for admins', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: true,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/promos', element: <div>Promo Admin</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /Promo Codes/i })).toBeTruthy();
+    });
+
+    it('hides the admin promo card for non-admin users', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: false,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/promos', element: <div>Promo Admin</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
+    });
 });

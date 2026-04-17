@@ -81,6 +81,8 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
+	mux.HandleFunc("/api/admin/promos", withAdmin(handler.AdminPromos))
+	mux.HandleFunc("/api/admin/promos/", withAdmin(handler.DeleteAdminPromo))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
 
 	// Wallet endpoints

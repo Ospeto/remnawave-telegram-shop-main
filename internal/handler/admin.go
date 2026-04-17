@@ -10,6 +10,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/payment"
+	appPromo "remnawave-tg-shop-bot/internal/promo"
 	"remnawave-tg-shop-bot/internal/service/backup"
 
 	"github.com/go-telegram/bot"
@@ -284,9 +285,9 @@ func (h Handler) ListPromosCommandHandler(ctx context.Context, b *bot.Bot, updat
 
 	for _, c := range codes {
 		status := "✅ Active"
-		if c.ValidUntil.Before(now) {
+		if appPromo.StatusAt(c, now) == appPromo.StatusExpired {
 			status = "❌ Expired"
-		} else if c.UsedCount >= c.MaxUses {
+		} else if appPromo.StatusAt(c, now) == appPromo.StatusExhausted {
 			status = "🚫 Exhausted"
 		}
 		sb.WriteString(fmt.Sprintf(

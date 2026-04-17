@@ -144,6 +144,15 @@ export function Plans() {
         }
     };
 
+    const handleClearPromo = () => {
+        setPromoCode('');
+        setPromoStatus('idle');
+        setPromoError(null);
+        setDiscountPercent(0);
+        setAppliedPromoCode('');
+        promoRequestRef.current += 1;
+    };
+
     if (authExpired) {
         return (
             <SessionExpiredScreen
@@ -250,47 +259,99 @@ export function Plans() {
 
             {/* Promo Code Input */}
             {!isWalletTopup && (
-                <div className="glass-card" style={{ padding: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input
-                        type="text"
-                        value={promoCode}
-                        onChange={(e) => {
-                            const next = e.target.value;
-                            setPromoCode(next);
-                            if (next !== appliedPromoCode) {
-                                setPromoStatus('idle');
-                                setPromoError(null);
-                                setDiscountPercent(0);
-                                setAppliedPromoCode('');
-                                promoRequestRef.current += 1;
-                            }
-                        }}
-                        placeholder={t('promo_placeholder')}
-                        aria-label={t('promo_placeholder')}
-                        aria-invalid={promoStatus === 'invalid' || promoError !== null}
-                        aria-describedby={(promoStatus === 'valid' || promoStatus === 'invalid' || promoError) ? 'promo-feedback' : undefined}
-                        style={{
-                            flex: 1,
-                            background: 'var(--input-bg)',
-                            border: '1px solid var(--input-border)',
-                            borderRadius: 8,
-                            padding: '10px 12px',
-                            color: 'var(--tg-text)',
-                            fontSize: 14,
-                        }}
-                    />
-                    <button
-                        onClick={() => { playClick(); void handleApplyPromo(); }}
-                        disabled={promoStatus === 'validating' || !promoCode.trim()}
-                        className="btn-secondary"
-                        style={{
-                            padding: '10px 16px',
-                            fontSize: 13,
-                            opacity: !promoCode.trim() ? 0.5 : 1
-                        }}
-                    >
-                        {promoStatus === 'validating' ? t('promo_validating') : t('promo_apply')}
-                    </button>
+                <div className="glass-card" style={{ padding: 14, display: 'grid', gap: 12 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                        <div>
+                            <div style={{ fontSize: 14, fontWeight: 700 }}>{t('promo_title')}</div>
+                            <div className="text-hint" style={{ fontSize: 12, marginTop: 3 }}>{t('promo_subtitle')}</div>
+                        </div>
+                        {promoStatus === 'valid' && appliedPromoCode && (
+                            <div
+                                style={{
+                                    background: 'rgba(16, 185, 129, 0.14)',
+                                    color: 'var(--color-success)',
+                                    border: '1px solid rgba(16, 185, 129, 0.28)',
+                                    borderRadius: 999,
+                                    padding: '5px 10px',
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    letterSpacing: 0.2,
+                                    whiteSpace: 'nowrap',
+                                }}
+                            >
+                                {appliedPromoCode}
+                            </div>
+                        )}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input
+                            type="text"
+                            value={promoCode}
+                            onChange={(e) => {
+                                const next = e.target.value;
+                                setPromoCode(next);
+                                if (next !== appliedPromoCode) {
+                                    setPromoStatus('idle');
+                                    setPromoError(null);
+                                    setDiscountPercent(0);
+                                    setAppliedPromoCode('');
+                                    promoRequestRef.current += 1;
+                                }
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && promoCode.trim() && promoStatus !== 'validating') {
+                                    e.preventDefault();
+                                    playClick();
+                                    void handleApplyPromo();
+                                }
+                            }}
+                            placeholder={t('promo_placeholder')}
+                            aria-label={t('promo_placeholder')}
+                            aria-invalid={promoStatus === 'invalid' || promoError !== null}
+                            aria-describedby={(promoStatus === 'valid' || promoStatus === 'invalid' || promoError) ? 'promo-feedback' : undefined}
+                            style={{
+                                flex: 1,
+                                background: 'var(--input-bg)',
+                                border: '1px solid var(--input-border)',
+                                borderRadius: 10,
+                                padding: '11px 12px',
+                                color: 'var(--tg-text)',
+                                fontSize: 14,
+                                letterSpacing: promoCode ? 0.4 : 0,
+                            }}
+                        />
+                        <button
+                            onClick={() => { playClick(); void handleApplyPromo(); }}
+                            disabled={promoStatus === 'validating' || !promoCode.trim()}
+                            className="btn-secondary"
+                            style={{
+                                padding: '11px 16px',
+                                fontSize: 13,
+                                opacity: !promoCode.trim() ? 0.5 : 1
+                            }}
+                        >
+                            {promoStatus === 'validating' ? t('promo_validating') : t('promo_apply')}
+                        </button>
+                    </div>
+
+                    {(promoCode || appliedPromoCode) && promoStatus !== 'validating' && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                            <div className="text-hint" style={{ fontSize: 11 }}>
+                                {discountPercent > 0
+                                    ? t('promo_discount_ready', { percent: String(discountPercent) })
+                                    : t('promo_subtitle')}
+                            </div>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => { playClick(); handleClearPromo(); }}
+                                style={{ padding: '7px 12px', fontSize: 12, height: 'auto' }}
+                            >
+                                {t('promo_clear')}
+                            </button>
+                        </div>
+                    )}
                 </div>
             )}
             {!isWalletTopup && promoStatus === 'valid' && (

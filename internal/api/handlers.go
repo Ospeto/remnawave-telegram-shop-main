@@ -21,6 +21,8 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/google/uuid"
+	"github.com/jackc/pgconn"
+	appPromo "remnawave-tg-shop-bot/internal/promo"
 )
 
 // --- Response types ---
@@ -44,6 +46,7 @@ type ValidationResponse struct {
 	User                     *database.Customer `json:"user"`
 	Keys                     []KeyResponse      `json:"keys"`
 	IsActive                 bool               `json:"is_active"`
+	IsAdmin                  bool               `json:"is_admin"`
 	ExpireAt                 *time.Time         `json:"expire_at"`
 	DaysRemaining            int                `json:"days_remaining"`
 	TrialEligible            bool               `json:"trial_eligible"`
@@ -89,6 +92,18 @@ type SessionExchangeResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+type AdminPromoResponse struct {
+	Code            string    `json:"code"`
+	DiscountPercent int       `json:"discount_percent"`
+	MaxUses         int       `json:"max_uses"`
+	UsedCount       int       `json:"used_count"`
+	ValidUntil      time.Time `json:"valid_until"`
+	CreatedAt       time.Time `json:"created_at"`
+	Status          string    `json:"status"`
+}
+
+type syncKeyStats = payment.KeyStats
 
 // WalletServiceInterface defines the interface for wallet operations
 type WalletServiceInterface interface {
@@ -164,6 +179,27 @@ func writeSanitizedError(w http.ResponseWriter, status int, publicMessage string
 		slog.Error(publicMessage, "status", status, "error", err)
 	}
 	http.Error(w, publicMessage, status)
+}
+
+func adminPromoResponse(code database.PromoCode, now time.Time) AdminPromoResponse {
+	return AdminPromoResponse{
+		Code:            code.Code,
+		DiscountPercent: code.DiscountPercent,
+		MaxUses:         code.MaxUses,
+		UsedCount:       code.UsedCount,
+		ValidUntil:      code.ValidUntil,
+		CreatedAt:       code.CreatedAt,
+		Status:          appPromo.StatusAt(code, now),
+	}
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+func isPromoNotFoundError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
 func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +279,14 @@ type APIHandler struct {
 	screenshotAttempts         map[int64]time.Time
 	customerScreenshotAttempts map[int64][]time.Time
 	screenshotInFlight         map[int64]struct{}
+	now                        func() time.Time
+	findCustomerByTelegramID   func(context.Context, int64) (*database.Customer, error)
+	listPromoCodes             func(context.Context) ([]database.PromoCode, error)
+	createPromoCode            func(context.Context, string, int, int, time.Time) error
+	deletePromoCode            func(context.Context, string) error
+	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
+	triggerSyncKeys            func(context.Context, int64, int64)
+	isAdminTelegramID          func(int64) bool
 }
 
 func NewAPIHandler(
@@ -267,7 +311,82 @@ func NewAPIHandler(
 		screenshotAttempts:         make(map[int64]time.Time),
 		customerScreenshotAttempts: make(map[int64][]time.Time),
 		screenshotInFlight:         make(map[int64]struct{}),
+		now:                        time.Now,
 	}
+}
+
+func (h *APIHandler) currentTime() time.Time {
+	if h != nil && h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+func (h *APIHandler) customerByTelegramID(ctx context.Context, telegramID int64) (*database.Customer, error) {
+	if h.findCustomerByTelegramID != nil {
+		return h.findCustomerByTelegramID(ctx, telegramID)
+	}
+	if h.customerRepo == nil {
+		return nil, errors.New("customer repository is unavailable")
+	}
+	return h.customerRepo.FindByTelegramId(ctx, telegramID)
+}
+
+func (h *APIHandler) allPromoCodes(ctx context.Context) ([]database.PromoCode, error) {
+	if h.listPromoCodes != nil {
+		return h.listPromoCodes(ctx)
+	}
+	if h.promoCodeRepository == nil {
+		return nil, errors.New("promo repository is unavailable")
+	}
+	return h.promoCodeRepository.ListAll(ctx)
+}
+
+func (h *APIHandler) savePromoCode(ctx context.Context, code string, discount, maxUses int, validUntil time.Time) error {
+	if h.createPromoCode != nil {
+		return h.createPromoCode(ctx, code, discount, maxUses, validUntil)
+	}
+	if h.promoCodeRepository == nil {
+		return errors.New("promo repository is unavailable")
+	}
+	return h.promoCodeRepository.Create(ctx, code, discount, maxUses, validUntil)
+}
+
+func (h *APIHandler) removePromoCode(ctx context.Context, code string) error {
+	if h.deletePromoCode != nil {
+		return h.deletePromoCode(ctx, code)
+	}
+	if h.promoCodeRepository == nil {
+		return errors.New("promo repository is unavailable")
+	}
+	return h.promoCodeRepository.Delete(ctx, code)
+}
+
+func (h *APIHandler) cachedSyncStats(customerID int64) ([]syncKeyStats, bool) {
+	if h.getCachedSyncKeys != nil {
+		return h.getCachedSyncKeys(customerID)
+	}
+	if h.paymentService == nil {
+		return nil, false
+	}
+	return h.paymentService.GetCachedSyncKeys(customerID)
+}
+
+func (h *APIHandler) requestSyncKeys(ctx context.Context, customerID, telegramID int64) {
+	if h.triggerSyncKeys != nil {
+		h.triggerSyncKeys(ctx, customerID, telegramID)
+		return
+	}
+	if h.paymentService != nil {
+		h.paymentService.TriggerSyncKeysAsync(ctx, customerID, telegramID)
+	}
+}
+
+func (h *APIHandler) isAdminUser(telegramID int64) bool {
+	if h.isAdminTelegramID != nil {
+		return h.isAdminTelegramID(telegramID)
+	}
+	return telegramID == config.GetAdminTelegramId()
 }
 
 const (
@@ -668,7 +787,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
@@ -684,9 +803,9 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Track if user has any keys in the new system (even deleted ones).
 	hasMigratedKeys := false
 
-	cachedStats, hasCachedStats := h.paymentService.GetCachedSyncKeys(customer.ID)
+	cachedStats, hasCachedStats := h.cachedSyncStats(customer.ID)
 	if !hasCachedStats {
-		h.paymentService.TriggerSyncKeysAsync(r.Context(), customer.ID, customer.TelegramID)
+		h.requestSyncKeys(r.Context(), customer.ID, customer.TelegramID)
 	}
 	statsMap := make(map[int64]payment.KeyStats, len(cachedStats))
 	for _, sk := range cachedStats {
@@ -783,6 +902,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		User:                     customer,
 		Keys:                     keys,
 		IsActive:                 isActive,
+		IsAdmin:                  h.isAdminUser(telegramID),
 		ExpireAt:                 customer.ExpireAt,
 		DaysRemaining:            daysRemaining,
 		TrialEligible:            trialEligible,
@@ -798,6 +918,120 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) AdminPromos(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.ListAdminPromos(w, r)
+	case http.MethodPost:
+		h.CreateAdminPromo(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *APIHandler) ListAdminPromos(w http.ResponseWriter, r *http.Request) {
+	if h.promoCodeRepository == nil && h.listPromoCodes == nil {
+		http.Error(w, "Promo management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	codes, err := h.allPromoCodes(r.Context())
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to list promo codes", err)
+		return
+	}
+
+	now := h.currentTime()
+	resp := make([]AdminPromoResponse, 0, len(codes))
+	for _, code := range codes {
+		resp = append(resp, adminPromoResponse(code, now))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) CreateAdminPromo(w http.ResponseWriter, r *http.Request) {
+	if h.promoCodeRepository == nil && h.createPromoCode == nil {
+		http.Error(w, "Promo management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var req appPromo.CreateParams
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	params, err := appPromo.ValidateCreateParams(req.Code, req.DiscountPercent, req.DurationDays, req.MaxUses)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	validUntil := params.ValidUntilAt(h.currentTime())
+	if err := h.savePromoCode(r.Context(), params.Code, params.DiscountPercent, params.MaxUses, validUntil); err != nil {
+		if isUniqueViolation(err) {
+			http.Error(w, "Promo code already exists", http.StatusConflict)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create promo code", err)
+		return
+	}
+
+	created := &database.PromoCode{
+		Code:            params.Code,
+		DiscountPercent: params.DiscountPercent,
+		MaxUses:         params.MaxUses,
+		UsedCount:       0,
+		ValidUntil:      validUntil,
+		CreatedAt:       h.currentTime(),
+	}
+	if h.promoCodeRepository != nil {
+		loaded, err := h.promoCodeRepository.FindByCode(r.Context(), params.Code)
+		if err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load created promo code", err)
+			return
+		}
+		if loaded != nil {
+			created = loaded
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(adminPromoResponse(*created, h.currentTime()))
+}
+
+func (h *APIHandler) DeleteAdminPromo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.promoCodeRepository == nil && h.deletePromoCode == nil {
+		http.Error(w, "Promo management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	code := strings.TrimPrefix(r.URL.Path, "/api/admin/promos/")
+	code = strings.TrimSpace(code)
+	if code == "" {
+		http.Error(w, "Missing promo code", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.removePromoCode(r.Context(), code); err != nil {
+		if isPromoNotFoundError(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to delete promo code", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {

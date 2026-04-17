@@ -139,4 +139,53 @@ describe('Plans', () => {
             expect(screen.getByRole('alert').textContent).toContain('Code not found or has expired');
         });
     });
+
+    it('shows a clearer promo section and lets users clear an applied code', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK' },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url.includes('/api/promo/validate?code=save10')) {
+                return jsonResponse({ valid: true, code: 'SAVE10', discount_percent: 10 });
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/plans', element: <Plans /> },
+            { path: '/checkout', element: <div>Checkout</div> },
+            { path: '/checkout/:planIndex', element: <div>Checkout with plan</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/plans']);
+
+        expect(await screen.findByText('Have a promo code?')).toBeTruthy();
+        expect(screen.getByText('Apply it before checkout to see your discounted price.')).toBeTruthy();
+
+        fireEvent.change(screen.getByRole('textbox', { name: 'Enter promo code' }), { target: { value: 'save10' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+        expect(await screen.findByRole('status')).toHaveTextContent('10% off your order');
+        expect(screen.getByText('SAVE10')).toBeTruthy();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+
+        await waitFor(() => {
+            expect(screen.queryByText('SAVE10')).toBeNull();
+        });
+        expect(screen.getByRole('textbox', { name: 'Enter promo code' })).toHaveValue('');
+    });
 });
