@@ -51,26 +51,15 @@ func (r *PromoCodeRepository) Create(ctx context.Context, code string, discount,
 }
 
 func (r *PromoCodeRepository) FindByCode(ctx context.Context, code string) (*PromoCode, error) {
-	buildSelect := sq.Select("*").
-		From("promo_codes").
-		Where(sq.Eq{"code": code}).
-		PlaceholderFormat(sq.Dollar)
+	buildSelect := buildPromoCodeSelect(time.Now()).
+		Where(sq.Eq{"p.code": code})
 
 	sql, args, err := buildSelect.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build select query: %w", err)
 	}
 
-	var promo PromoCode
-	err = r.pool.QueryRow(ctx, sql, args...).Scan(
-		&promo.ID,
-		&promo.Code,
-		&promo.DiscountPercent,
-		&promo.MaxUses,
-		&promo.UsedCount,
-		&promo.ValidUntil,
-		&promo.CreatedAt,
-	)
+	promo, err := scanPromoCode(r.pool.QueryRow(ctx, sql, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -78,35 +67,45 @@ func (r *PromoCodeRepository) FindByCode(ctx context.Context, code string) (*Pro
 		return nil, fmt.Errorf("failed to find promo code: %w", err)
 	}
 
-	return &promo, nil
+	return promo, nil
+}
+
+func (r *PromoCodeRepository) FindByCodeForUpdateTx(ctx context.Context, tx pgx.Tx, code string) (*PromoCode, error) {
+	buildSelect := buildPromoCodeSelect(time.Now()).
+		Where(sq.Eq{"p.code": code}).
+		Suffix("FOR UPDATE")
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build select-for-update query: %w", err)
+	}
+
+	promo, err := scanPromoCode(tx.QueryRow(ctx, sql, args...))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to lock promo code: %w", err)
+	}
+
+	return promo, nil
 }
 
 func (r *PromoCodeRepository) FindByID(ctx context.Context, id int64) (*PromoCode, error) {
-	buildSelect := sq.Select("*").
-		From("promo_codes").
-		Where(sq.Eq{"id": id}).
-		PlaceholderFormat(sq.Dollar)
+	buildSelect := buildPromoCodeSelect(time.Now()).
+		Where(sq.Eq{"p.id": id})
 
 	sql, args, err := buildSelect.ToSql()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build select query: %w", err)
 	}
 
-	var promo PromoCode
-	err = r.pool.QueryRow(ctx, sql, args...).Scan(
-		&promo.ID,
-		&promo.Code,
-		&promo.DiscountPercent,
-		&promo.MaxUses,
-		&promo.UsedCount,
-		&promo.ValidUntil,
-		&promo.CreatedAt,
-	)
+	promo, err := scanPromoCode(r.pool.QueryRow(ctx, sql, args...))
 	if err != nil {
 		return nil, err
 	}
 
-	return &promo, nil
+	return promo, nil
 }
 
 func (r *PromoCodeRepository) IncrementUsage(ctx context.Context, id int64) error {
@@ -157,10 +156,8 @@ func (r *PromoCodeRepository) ReleaseUsageAtomic(ctx context.Context, id int64) 
 
 // ListAll returns all promo codes ordered by creation date descending.
 func (r *PromoCodeRepository) ListAll(ctx context.Context) ([]PromoCode, error) {
-	buildSelect := sq.Select("*").
-		From("promo_codes").
-		OrderBy("created_at DESC").
-		PlaceholderFormat(sq.Dollar)
+	buildSelect := buildPromoCodeSelect(time.Now()).
+		OrderBy("p.created_at DESC")
 
 	sql, args, err := buildSelect.ToSql()
 	if err != nil {
@@ -175,13 +172,75 @@ func (r *PromoCodeRepository) ListAll(ctx context.Context) ([]PromoCode, error) 
 
 	var codes []PromoCode
 	for rows.Next() {
-		var p PromoCode
-		if err := rows.Scan(&p.ID, &p.Code, &p.DiscountPercent, &p.MaxUses, &p.UsedCount, &p.ValidUntil, &p.CreatedAt); err != nil {
+		promo, err := scanPromoCodeRow(rows)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan promo code: %w", err)
 		}
-		codes = append(codes, p)
+		codes = append(codes, *promo)
 	}
 	return codes, rows.Err()
+}
+
+func buildPromoCodeSelect(now time.Time) sq.SelectBuilder {
+	return sq.Select(
+		"p.id",
+		"p.code",
+		"p.discount_percent",
+		"p.max_uses",
+	).Column(
+		sq.Expr(
+			`COALESCE((
+				SELECT COUNT(*)
+				FROM purchase pu
+				WHERE pu.promo_code_id = p.id
+				  AND (
+					pu.status = ?
+					OR (pu.status IN (?, ?, ?) AND pu.created_at >= ?)
+				  )
+			), 0) AS used_count`,
+			PurchaseStatusPaid,
+			PurchaseStatusNew,
+			PurchaseStatusPending,
+			PurchaseStatusProcessing,
+			now.Add(-promoReservationHoldWindow),
+		),
+	).Column(
+		"p.valid_until",
+	).Column(
+		"p.created_at",
+	).From("promo_codes p").PlaceholderFormat(sq.Dollar)
+}
+
+func scanPromoCode(row pgx.Row) (*PromoCode, error) {
+	promo := &PromoCode{}
+	if err := row.Scan(
+		&promo.ID,
+		&promo.Code,
+		&promo.DiscountPercent,
+		&promo.MaxUses,
+		&promo.UsedCount,
+		&promo.ValidUntil,
+		&promo.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return promo, nil
+}
+
+func scanPromoCodeRow(rows pgx.Rows) (*PromoCode, error) {
+	promo := &PromoCode{}
+	if err := rows.Scan(
+		&promo.ID,
+		&promo.Code,
+		&promo.DiscountPercent,
+		&promo.MaxUses,
+		&promo.UsedCount,
+		&promo.ValidUntil,
+		&promo.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return promo, nil
 }
 
 // Delete removes a promo code by its code name. Returns error if not found.

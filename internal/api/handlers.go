@@ -406,6 +406,22 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 
 // --- Handlers ---
 
+func promoValidationStatus(promo *database.PromoCode, lookupErr error, now time.Time) int {
+	if lookupErr != nil {
+		return http.StatusServiceUnavailable
+	}
+	if promo == nil {
+		return http.StatusNotFound
+	}
+	if promo.UsedCount >= promo.MaxUses {
+		return http.StatusNotFound
+	}
+	if !promo.ValidUntil.After(now) {
+		return http.StatusNotFound
+	}
+	return http.StatusOK
+}
+
 func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -419,17 +435,11 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
-	// Return the same 404 for all invalid/exhausted/expired cases to prevent
-	// oracle attacks that distinguish between "code never existed" vs "code exhausted".
-	if err != nil || promo == nil {
-		http.Error(w, "Invalid or expired code", http.StatusNotFound)
+	switch promoValidationStatus(promo, err, time.Now()) {
+	case http.StatusServiceUnavailable:
+		http.Error(w, "Promo validation is temporarily unavailable", http.StatusServiceUnavailable)
 		return
-	}
-	if promo.UsedCount >= promo.MaxUses {
-		http.Error(w, "Invalid or expired code", http.StatusNotFound)
-		return
-	}
-	if time.Now().After(promo.ValidUntil) {
+	case http.StatusNotFound:
 		http.Error(w, "Invalid or expired code", http.StatusNotFound)
 		return
 	}
@@ -559,6 +569,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
+		if errors.Is(err, payment.ErrInvalidPromoCode) {
+			http.Error(w, "Invalid or expired promo code", http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
 			http.Error(w, "You already have a pending screenshot payment. Please finish it before creating another one.", http.StatusConflict)
 			return

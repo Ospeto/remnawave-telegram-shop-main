@@ -76,6 +76,66 @@ func TestCustomerForPostPurchaseNotificationsFallsBackToOriginal(t *testing.T) {
 	}
 }
 
+func TestValidatePromoForPurchase(t *testing.T) {
+	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name    string
+		promo   *database.PromoCode
+		wantErr error
+	}{
+		{
+			name:    "missing promo is invalid",
+			promo:   nil,
+			wantErr: ErrInvalidPromoCode,
+		},
+		{
+			name: "expired promo is invalid",
+			promo: &database.PromoCode{
+				ID:         1,
+				MaxUses:    5,
+				UsedCount:  1,
+				ValidUntil: now.Add(-time.Minute),
+			},
+			wantErr: ErrInvalidPromoCode,
+		},
+		{
+			name: "exhausted promo is invalid",
+			promo: &database.PromoCode{
+				ID:         2,
+				MaxUses:    3,
+				UsedCount:  3,
+				ValidUntil: now.Add(time.Hour),
+			},
+			wantErr: ErrInvalidPromoCode,
+		},
+		{
+			name: "available promo is valid",
+			promo: &database.PromoCode{
+				ID:         3,
+				MaxUses:    10,
+				UsedCount:  2,
+				ValidUntil: now.Add(time.Hour),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePromoForPurchase(tt.promo, now)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("validatePromoForPurchase() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestApplyDiscountPercentRoundsToNearestWholeAmount(t *testing.T) {
+	if got := applyDiscountPercent(9999, 15); got != 8499 {
+		t.Fatalf("applyDiscountPercent() = %.0f, want 8499", got)
+	}
+}
+
 func TestOpenRouterAuthFailure(t *testing.T) {
 	tests := []struct {
 		name string
@@ -663,5 +723,26 @@ func TestCanReuseAwaitingVerificationPurchase(t *testing.T) {
 		TrafficLimitGB: 100,
 	}) {
 		t.Fatal("canReuseAwaitingVerificationPurchase() different amount = true, want false")
+	}
+}
+
+func TestCanReuseAwaitingVerificationPurchaseRejectsDifferentPromoReservation(t *testing.T) {
+	existingPromoID := int64(1)
+	candidatePromoID := int64(2)
+
+	if canReuseAwaitingVerificationPurchase(&database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+		PromoCodeID:    &existingPromoID,
+	}, &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+		PromoCodeID:    &candidatePromoID,
+	}) {
+		t.Fatal("canReuseAwaitingVerificationPurchase() different promo reservation = true, want false")
 	}
 }

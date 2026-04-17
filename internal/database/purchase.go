@@ -62,6 +62,8 @@ type PurchaseRepository struct {
 	pool *pgxpool.Pool
 }
 
+const promoReservationHoldWindow = 24 * time.Hour
+
 func NewPurchaseRepository(pool *pgxpool.Pool) *PurchaseRepository {
 	return &PurchaseRepository{
 		pool: pool,
@@ -187,16 +189,7 @@ func (cr *PurchaseRepository) FindByInvoiceTypeAndStatus(ctx context.Context, in
 }
 
 func (cr *PurchaseRepository) FindLatestAwaitingVerificationByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
-	buildSelect := sq.Select(purchaseColumns...).
-		From("purchase").
-		Where(sq.And{
-			sq.Eq{"customer_id": customerID},
-			sq.Eq{"invoice_type": []InvoiceType{InvoiceTypeMobileBanking, InvoiceTypeWalletTopUp}},
-			sq.Eq{"status": []PurchaseStatus{PurchaseStatusPending, PurchaseStatusNew}},
-		}).
-		OrderBy("created_at DESC").
-		Limit(1).
-		PlaceholderFormat(sq.Dollar)
+	buildSelect := buildLatestAwaitingVerificationByCustomerSelect(customerID, time.Now())
 
 	sql, args, err := buildSelect.ToSql()
 	if err != nil {
@@ -204,6 +197,31 @@ func (cr *PurchaseRepository) FindLatestAwaitingVerificationByCustomer(ctx conte
 	}
 
 	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
+
+func (cr *PurchaseRepository) FindLatestAwaitingVerificationByCustomerTx(ctx context.Context, tx pgx.Tx, customerID int64) (*Purchase, error) {
+	buildSelect := buildLatestAwaitingVerificationByCustomerSelect(customerID, time.Now())
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanPurchase(tx.QueryRow(ctx, sql, args...))
+}
+
+func buildLatestAwaitingVerificationByCustomerSelect(customerID int64, now time.Time) sq.SelectBuilder {
+	return sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.And{
+			sq.Eq{"customer_id": customerID},
+			sq.Eq{"invoice_type": []InvoiceType{InvoiceTypeMobileBanking, InvoiceTypeWalletTopUp}},
+			sq.Eq{"status": []PurchaseStatus{PurchaseStatusPending, PurchaseStatusNew}},
+			sq.GtOrEq{"created_at": now.Add(-promoReservationHoldWindow)},
+		}).
+		OrderBy("created_at DESC").
+		Limit(1).
+		PlaceholderFormat(sq.Dollar)
 }
 
 func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase, error) {

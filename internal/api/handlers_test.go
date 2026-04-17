@@ -169,6 +169,34 @@ func TestWriteSanitizedErrorHidesWrappedDetails(t *testing.T) {
 	}
 }
 
+func TestPromoValidationStatus(t *testing.T) {
+	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
+
+	if got := promoValidationStatus(nil, errors.New("db down"), now); got != http.StatusServiceUnavailable {
+		t.Fatalf("promoValidationStatus() lookup error = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+
+	if got := promoValidationStatus(nil, nil, now); got != http.StatusNotFound {
+		t.Fatalf("promoValidationStatus() missing promo = %d, want %d", got, http.StatusNotFound)
+	}
+
+	if got := promoValidationStatus(&database.PromoCode{
+		MaxUses:    3,
+		UsedCount:  3,
+		ValidUntil: now.Add(time.Hour),
+	}, nil, now); got != http.StatusNotFound {
+		t.Fatalf("promoValidationStatus() exhausted promo = %d, want %d", got, http.StatusNotFound)
+	}
+
+	if got := promoValidationStatus(&database.PromoCode{
+		MaxUses:    5,
+		UsedCount:  1,
+		ValidUntil: now.Add(time.Hour),
+	}, nil, now); got != http.StatusOK {
+		t.Fatalf("promoValidationStatus() valid promo = %d, want %d", got, http.StatusOK)
+	}
+}
+
 func TestUpdateAutoRenewReturnsGone(t *testing.T) {
 	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/wallet/autorenew", strings.NewReader(`{"enabled":true,"duration":30}`))

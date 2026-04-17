@@ -49,6 +49,8 @@ var (
 	// ErrAwaitingReceiptVerification means the customer already has a receipt-based
 	// payment waiting for screenshot verification and should complete that flow first.
 	ErrAwaitingReceiptVerification = errors.New("customer already has a pending receipt verification")
+	// ErrInvalidPromoCode means the supplied promo code cannot be honored for a new purchase.
+	ErrInvalidPromoCode = errors.New("invalid or expired promo code")
 )
 
 func WithIdempotencyKey(ctx context.Context, key uuid.UUID) context.Context {
@@ -647,55 +649,146 @@ func (s *PaymentService) refundWalletCharge(ctx context.Context, customerID int6
 	return nil
 }
 
-func (s *PaymentService) releasePromoUsage(ctx context.Context, promoID *int64, reason string) {
-	if promoID == nil || s.promoCodeRepository == nil {
-		return
-	}
-
-	releaseCtx := context.WithoutCancel(ctx)
-	released, err := s.promoCodeRepository.ReleaseUsageAtomic(releaseCtx, *promoID)
-	if err != nil {
-		slog.Error("Failed to release promo usage", "promo_id", *promoID, "reason", reason, "error", err)
-		return
-	}
-	if released {
-		slog.Info("Released promo usage after failure", "promo_id", *promoID, "reason", reason)
-	}
+func applyDiscountPercent(amount float64, percent int) float64 {
+	discount := float64(percent) / 100.0
+	discounted := amount * (1 - discount)
+	return math.Round(discounted)
 }
 
-func (s *PaymentService) applyPromoDiscount(ctx context.Context, amount float64, promoCode string, claimUsage bool) (float64, *int64, bool) {
-	if promoCode == "" || s.promoCodeRepository == nil {
-		return amount, nil, false
+func validatePromoForPurchase(promo *database.PromoCode, now time.Time) error {
+	if promo == nil {
+		return ErrInvalidPromoCode
+	}
+	if promo.UsedCount >= promo.MaxUses {
+		return ErrInvalidPromoCode
+	}
+	if !promo.ValidUntil.After(now) {
+		return ErrInvalidPromoCode
+	}
+	return nil
+}
+
+func (s *PaymentService) resolvePromoDiscount(ctx context.Context, amount float64, promoCode string) (float64, *int64, error) {
+	if promoCode == "" {
+		return amount, nil, nil
+	}
+	if s.promoCodeRepository == nil {
+		return 0, nil, fmt.Errorf("promo code repository is not configured")
 	}
 
 	promo, err := s.promoCodeRepository.FindByCode(ctx, promoCode)
 	if err != nil {
-		slog.Error("Failed to look up promo code", "error", err, "code", promoCode)
-		return amount, nil, false
+		return 0, nil, fmt.Errorf("failed to look up promo code: %w", err)
 	}
-	if promo == nil {
-		return amount, nil, false
-	}
-
-	if promo.UsedCount >= promo.MaxUses || time.Now().After(promo.ValidUntil) {
-		return amount, nil, false
+	if err := validatePromoForPurchase(promo, time.Now()); err != nil {
+		return 0, nil, err
 	}
 
-	if claimUsage {
-		claimed, err := s.promoCodeRepository.IncrementUsageAtomic(ctx, promo.ID)
+	return applyDiscountPercent(amount, promo.DiscountPercent), &promo.ID, nil
+}
+
+func (s *PaymentService) createPurchaseRecordWithOptionalPromo(ctx context.Context, purchase *database.Purchase, promoCode string) (int64, *database.Purchase, error) {
+	if key := idempotencyKeyFromContext(ctx); key != nil {
+		existing, err := s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
 		if err != nil {
-			slog.Error("Failed to claim promo slot", "error", err, "code", promoCode)
-			return amount, nil, false
+			return 0, nil, err
 		}
-		if !claimed {
-			return amount, nil, false
+		if existing != nil {
+			return existing.ID, existing, nil
 		}
 	}
 
-	discount := float64(promo.DiscountPercent) / 100.0
-	amount = amount * (1 - discount)
-	amount = math.Round(amount)
-	return amount, &promo.ID, claimUsage
+	if promoCode == "" {
+		return s.createPurchaseRecord(ctx, purchase)
+	}
+	if s.customerRepository == nil {
+		return 0, nil, fmt.Errorf("customer repository is not configured")
+	}
+	if s.promoCodeRepository == nil {
+		return 0, nil, fmt.Errorf("promo code repository is not configured")
+	}
+
+	tx, err := s.customerRepository.BeginTx(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to begin purchase transaction: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := s.lockPromoForPurchaseTx(ctx, tx, purchase, promoCode); err != nil {
+		return 0, nil, err
+	}
+
+	purchaseID, existing, err := s.createPurchaseRecordTx(ctx, tx, purchase)
+	if err != nil {
+		return 0, nil, err
+	}
+	if existing != nil {
+		return existing.ID, existing, nil
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, nil, fmt.Errorf("failed to commit purchase transaction: %w", err)
+	}
+
+	return purchaseID, nil, nil
+}
+
+func (s *PaymentService) lockPromoForPurchaseTx(ctx context.Context, tx pgx.Tx, purchase *database.Purchase, promoCode string) error {
+	if promoCode == "" {
+		return nil
+	}
+
+	promo, err := s.promoCodeRepository.FindByCodeForUpdateTx(ctx, tx, promoCode)
+	if err != nil {
+		return err
+	}
+	if err := validatePromoForPurchase(promo, time.Now()); err != nil {
+		return err
+	}
+
+	purchase.PromoCodeID = &promo.ID
+	return nil
+}
+
+func (s *PaymentService) resumeExistingPurchase(ctx context.Context, existing *database.Purchase) (string, int64, error) {
+	if existing == nil {
+		return "", 0, nil
+	}
+
+	switch existing.InvoiceType {
+	case database.InvoiceTypeCrypto:
+		if existing.Status == database.PurchaseStatusCancel {
+			return "", existing.ID, fmt.Errorf("purchase already cancelled")
+		}
+		if existing.CryptoInvoiceLink != nil {
+			return *existing.CryptoInvoiceLink, existing.ID, nil
+		}
+		return "", existing.ID, ErrPurchaseInFlight
+	case database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletTopUp:
+		if existing.Status == database.PurchaseStatusCancel {
+			return "", existing.ID, fmt.Errorf("purchase already cancelled")
+		}
+		return "", existing.ID, nil
+	case database.InvoiceTypeWalletPayment:
+		switch existing.Status {
+		case database.PurchaseStatusPaid:
+			return "", existing.ID, nil
+		case database.PurchaseStatusCancel:
+			return "", existing.ID, fmt.Errorf("purchase already cancelled")
+		}
+		if err := s.ProcessPurchaseById(ctx, existing.ID); err != nil {
+			if errors.Is(err, ErrPurchaseFinalizationPending) {
+				slog.Warn("Existing wallet purchase fulfilled but finalization is pending", "purchase_id", existing.ID)
+				return "", existing.ID, nil
+			}
+			return "", existing.ID, err
+		}
+		return "", existing.ID, nil
+	default:
+		return "", existing.ID, fmt.Errorf("unknown invoice type: %s", existing.InvoiceType)
+	}
 }
 
 func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int64) error {
@@ -1140,31 +1233,33 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 
 func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	var promoID *int64
-	var promoClaimed bool
 	if invoiceType != database.InvoiceTypeWalletTopUp {
-		amount, promoID, promoClaimed = s.applyPromoDiscount(ctx, amount, promoCode, true)
-	}
-	defer func() {
-		if err != nil && promoClaimed {
-			s.releasePromoUsage(ctx, promoID, "purchase creation failed")
+		if existing, lookupErr := s.findPurchaseByIdempotencyKey(ctx); lookupErr != nil {
+			return "", 0, lookupErr
+		} else if existing != nil {
+			return s.resumeExistingPurchase(ctx, existing)
 		}
-	}()
+
+		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
+		if err != nil {
+			return "", 0, err
+		}
+	}
 
 	if amount <= 0 {
-		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoID, extendKeyID)
+		return s.createFreePurchase(ctx, days, trafficLimitGB, customer, promoCode, extendKeyID)
 	}
 
 	switch invoiceType {
 	case database.InvoiceTypeCrypto:
-		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoID, extendKeyID)
+		return s.createCryptoInvoice(ctx, amount, days, trafficLimitGB, customer, promoCode, extendKeyID)
 	case database.InvoiceTypeMobileBanking:
-		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoID, extendKeyID)
+		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID, extendKeyID)
 	case database.InvoiceTypeWalletTopUp:
-		return s.createWalletTopUpInvoice(ctx, amount, customer, promoID)
+		return s.createWalletTopUpInvoice(ctx, amount, customer)
 	case database.InvoiceTypeWalletPayment:
-		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoID)
+		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode)
 	default:
-		s.releasePromoUsage(ctx, promoID, "unknown invoice type")
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
 }
@@ -1180,8 +1275,8 @@ func (s *PaymentService) CreatePurchaseWithExtendForInvoice(ctx context.Context,
 	return s.createPurchaseWithOptionalExtend(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode, &keyID)
 }
 
-func (s *PaymentService) createFreePurchase(ctx context.Context, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
-	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
+func (s *PaymentService) createFreePurchase(ctx context.Context, days int, trafficLimitGB int, customer *database.Customer, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
+	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeWalletPayment, // Treat free purchases like wallet payments
 		Status:         database.PurchaseStatusNew,
 		Amount:         0,
@@ -1191,8 +1286,7 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
-		PromoCodeID:    promoID,
-	})
+	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating free purchase", "error", err)
 		return "", 0, err
@@ -1210,12 +1304,12 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 		return "", 0, err
 	}
 
-	slog.Info("Free purchase processed successfully", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID), "promo_id", promoID)
+	slog.Info("Free purchase processed successfully", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
 	return "", purchaseId, nil
 }
 
-func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
-	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
+func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
+	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeCrypto,
 		Status:         database.PurchaseStatusNew,
 		Amount:         amount,
@@ -1225,8 +1319,7 @@ func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
-		PromoCodeID:    promoID,
-	})
+	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating purchase", "error", err)
 		return "", 0, err
@@ -1309,7 +1402,7 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 
 }
 
-func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	if len(GetEnabledPaymentProviders()) == 0 {
 		return "", 0, fmt.Errorf("no mobile banking accounts configured")
 	}
@@ -1319,6 +1412,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		Amount:         amount,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
 		ExtendKeyID:    extendKeyID,
 	}
 	if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
@@ -1331,7 +1425,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		return "", 0, ErrAwaitingReceiptVerification
 	}
 
-	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
+	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
 		InvoiceType:    database.InvoiceTypeMobileBanking,
 		Status:         database.PurchaseStatusPending,
 		Amount:         amount,
@@ -1341,8 +1435,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
-		PromoCodeID:    promoID,
-	})
+	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating mobile banking purchase", "error", err)
 		return "", 0, err
@@ -1356,7 +1449,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 	return "", purchaseId, nil
 }
 
-func (s *PaymentService) createAndChargeWalletPurchase(ctx context.Context, purchase *database.Purchase, customerID int64, amount float64, description string) (purchaseID int64, created bool, err error) {
+func (s *PaymentService) createAndChargeWalletPurchase(ctx context.Context, purchase *database.Purchase, customerID int64, amount float64, description string, promoCode string) (purchaseID int64, created bool, err error) {
 	dbTx, err := s.customerRepository.BeginTx(ctx)
 	if err != nil {
 		return 0, false, fmt.Errorf("failed to begin wallet purchase transaction: %w", err)
@@ -1364,6 +1457,10 @@ func (s *PaymentService) createAndChargeWalletPurchase(ctx context.Context, purc
 	defer func() {
 		_ = dbTx.Rollback(ctx)
 	}()
+
+	if err := s.lockPromoForPurchaseTx(ctx, dbTx, purchase, promoCode); err != nil {
+		return 0, false, err
+	}
 
 	purchaseID, existing, err := s.createPurchaseRecordTx(ctx, dbTx, purchase)
 	if err != nil {
@@ -1405,7 +1502,7 @@ func (s *PaymentService) cancelPurchase(ctx context.Context, purchaseID int64) {
 	}
 }
 
-func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string) (url string, purchaseId int64, err error) {
 	// Check if customer has sufficient balance logic is handled by DeductBalance (atomic)
 	// But we check first to fail fast before creating purchase
 	if customer.Balance < amount {
@@ -1422,8 +1519,7 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
-		PromoCodeID:    promoID,
-	}, customer.ID, amount, fmt.Sprintf("Purchase plan %d days", days))
+	}, customer.ID, amount, fmt.Sprintf("Purchase plan %d days", days), promoCode)
 	if err != nil {
 		slog.Error("Error creating wallet purchase", "error", err)
 		return "", 0, err
@@ -1469,12 +1565,16 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 // ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
 // rather than creating a brand-new user. Used by the per-key auto-renew cron.
 func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64, promoCode string) (url string, purchaseId int64, err error) {
-	amount, promoID, promoClaimed := s.applyPromoDiscount(ctx, amount, promoCode, true)
-	defer func() {
-		if err != nil && promoClaimed {
-			s.releasePromoUsage(ctx, promoID, "extend-key wallet purchase failed")
-		}
-	}()
+	if existing, lookupErr := s.findPurchaseByIdempotencyKey(ctx); lookupErr != nil {
+		return "", 0, lookupErr
+	} else if existing != nil {
+		return s.resumeExistingPurchase(ctx, existing)
+	}
+
+	amount, _, err = s.resolvePromoDiscount(ctx, amount, promoCode)
+	if err != nil {
+		return "", 0, err
+	}
 
 	if customer.Balance < amount {
 		slog.Error("Insufficient wallet balance for extend-key purchase", "customer_id", utils.MaskHalfInt64(customer.ID), "amount", amount, "key_id", keyID)
@@ -1490,8 +1590,7 @@ func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount fl
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    &keyID,
-		PromoCodeID:    promoID,
-	}, customer.ID, amount, fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days))
+	}, customer.ID, amount, fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days), promoCode)
 	if err != nil {
 		slog.Error("Error creating extend-key wallet purchase", "error", err)
 		return "", 0, err
@@ -2122,6 +2221,12 @@ func canReuseAwaitingVerificationPurchase(existing, candidate *database.Purchase
 	if existing.ExtendKeyID != nil && candidate.ExtendKeyID != nil && *existing.ExtendKeyID != *candidate.ExtendKeyID {
 		return false
 	}
+	if (existing.PromoCodeID == nil) != (candidate.PromoCodeID == nil) {
+		return false
+	}
+	if existing.PromoCodeID != nil && candidate.PromoCodeID != nil && *existing.PromoCodeID != *candidate.PromoCodeID {
+		return false
+	}
 	return true
 }
 
@@ -2147,7 +2252,7 @@ func phoneMatchesSuffix(expected, actual string, n int) bool {
 	return expSuffix == actSuffix
 }
 
-func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer, promoID *int64) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount float64, customer *database.Customer) (url string, purchaseId int64, err error) {
 	if len(GetEnabledPaymentProviders()) == 0 {
 		return "", 0, fmt.Errorf("no mobile banking accounts configured")
 	}
