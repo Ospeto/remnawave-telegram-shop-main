@@ -44,7 +44,7 @@ describe('Plans', () => {
             const url = String(input);
             if (url === '/api/plans') {
                 return jsonResponse([
-                    { label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK' },
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
                 ]);
             }
             if (url === '/api/me') {
@@ -85,7 +85,7 @@ describe('Plans', () => {
             const url = String(input);
             if (url === '/api/plans') {
                 return Promise.resolve(jsonResponse([
-                    { label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK' },
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
                 ]));
             }
             if (url === '/api/me') {
@@ -145,7 +145,7 @@ describe('Plans', () => {
             const url = String(input);
             if (url === '/api/plans') {
                 return jsonResponse([
-                    { label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK' },
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
                 ]);
             }
             if (url === '/api/me') {
@@ -187,5 +187,68 @@ describe('Plans', () => {
             expect(screen.queryByText('SAVE10')).toBeNull();
         });
         expect(screen.getByRole('textbox', { name: 'Enter promo code' })).toHaveValue('');
+    });
+
+    it('uses stable plan ids in checkout links and hides archived plans from customers', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'starter-plan', label: 'Starter', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                    { id: 'legacy-plan', label: 'Legacy Plan', days: 7, price: 1500, traffic_limit_gb: 5, currency: 'MMK', active: false, sort_order: 1 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/plans', element: <Plans /> },
+            { path: '/checkout/:planIndex', element: <div>Checkout with plan</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/plans']);
+
+        const starterLink = await screen.findByRole('link', { name: /Starter/i });
+        expect(starterLink.getAttribute('href')).toBe('/checkout/starter-plan');
+        expect(screen.queryByText('Legacy Plan')).toBeNull();
+    });
+
+    it('shows an empty state when no sellable plans are available', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/plans', element: <Plans /> },
+            { path: '/checkout/:planIndex', element: <div>Checkout with plan</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/plans']);
+
+        expect(await screen.findByText('No plans available right now')).toBeTruthy();
     });
 });

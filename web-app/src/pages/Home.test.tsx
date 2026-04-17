@@ -103,11 +103,14 @@ describe('Home', () => {
         renderWithAppProviders([
             { path: '/', element: <Home /> },
             { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/plans', element: <div>Plan Admin</div> },
             { path: '/admin/promos', element: <div>Promo Admin</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeTruthy();
         expect(screen.getByRole('link', { name: /Promo Codes/i })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /Plans/i })).toBeTruthy();
     });
 
     it('hides the admin promo card for non-admin users', async () => {
@@ -125,10 +128,13 @@ describe('Home', () => {
         renderWithAppProviders([
             { path: '/', element: <Home /> },
             { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/plans', element: <div>Plan Admin</div> },
             { path: '/admin/promos', element: <div>Promo Admin</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.queryByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeNull();
         expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
+        expect(screen.queryByRole('link', { name: /Plans/i })).toBeNull();
     });
 });

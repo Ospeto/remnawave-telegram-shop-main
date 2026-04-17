@@ -29,7 +29,7 @@ func TestValidationResponseJSONIncludesIsAdmin(t *testing.T) {
 
 func TestRegisterHandlersProtectsAdminPromoRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name   string
@@ -57,7 +57,7 @@ func TestRegisterHandlersProtectsAdminPromoRoutes(t *testing.T) {
 
 func TestListAdminPromosReturnsStatusInResponse(t *testing.T) {
 	now := time.Date(2026, 4, 18, 9, 30, 0, 0, time.UTC)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.now = func() time.Time { return now }
 	handler.listPromoCodes = func(context.Context) ([]database.PromoCode, error) {
 		return []database.PromoCode{
@@ -104,7 +104,7 @@ func TestListAdminPromosReturnsStatusInResponse(t *testing.T) {
 
 func TestCreateAdminPromoUsesSharedValidationAndPersistsPromo(t *testing.T) {
 	now := time.Date(2026, 4, 18, 9, 30, 0, 0, time.UTC)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.now = func() time.Time { return now }
 
 	var created struct {
@@ -144,7 +144,7 @@ func TestCreateAdminPromoUsesSharedValidationAndPersistsPromo(t *testing.T) {
 }
 
 func TestCreateAdminPromoRejectsInvalidDuration(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	called := false
 	handler.createPromoCode = func(_ context.Context, code string, discount, maxUses int, validUntil time.Time) error {
@@ -166,7 +166,7 @@ func TestCreateAdminPromoRejectsInvalidDuration(t *testing.T) {
 }
 
 func TestCreateAdminPromoReturnsConflictForDuplicateCode(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.createPromoCode = func(_ context.Context, code string, discount, maxUses int, validUntil time.Time) error {
 		return fmt.Errorf("failed to execute insert query: %w", &pgconn.PgError{Code: "23505"})
 	}
@@ -185,7 +185,7 @@ func TestCreateAdminPromoReturnsConflictForDuplicateCode(t *testing.T) {
 }
 
 func TestDeleteAdminPromoDeletesByCode(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	deletedCode := ""
 	handler.deletePromoCode = func(_ context.Context, code string) error {
@@ -207,7 +207,7 @@ func TestDeleteAdminPromoDeletesByCode(t *testing.T) {
 }
 
 func TestDeleteAdminPromoRetiresReferencedPromoCode(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.now = func() time.Time {
 		return time.Date(2026, 4, 18, 9, 30, 0, 0, time.UTC)
 	}
@@ -241,7 +241,7 @@ func TestDeleteAdminPromoRetiresReferencedPromoCode(t *testing.T) {
 }
 
 func TestDeleteAdminPromoReturnsInternalServerErrorForRepositoryFailure(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.deletePromoCode = func(_ context.Context, code string) error {
 		return fmt.Errorf("database offline")
 	}
@@ -257,7 +257,7 @@ func TestDeleteAdminPromoReturnsInternalServerErrorForRepositoryFailure(t *testi
 }
 
 func TestGetMeIncludesAdminFlag(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.findCustomerByTelegramID = func(_ context.Context, telegramID int64) (*database.Customer, error) {
 		return &database.Customer{
 			ID:         1,

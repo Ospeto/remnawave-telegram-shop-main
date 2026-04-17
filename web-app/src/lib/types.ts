@@ -1,9 +1,17 @@
 export interface Plan {
+    id: string;
     label: string;
     days: number;
     price: number;
     traffic_limit_gb: number;
     currency: string;
+    active?: boolean;
+    sort_order?: number;
+}
+
+export interface AdminPlan extends Plan {
+    active: boolean;
+    sort_order: number;
 }
 
 export interface SubscriptionKey {

@@ -255,7 +255,7 @@ func findConfiguredRenewalPlan(key database.SubscriptionKey) (*config.Plan, erro
 
 	trafficGB := *key.AutoRenewPlanTraffic
 
-	for _, plan := range config.Plans() {
+	for _, plan := range config.AllPlans() {
 		if plan.Days == *key.AutoRenewPlanDays && plan.TrafficLimitGB == trafficGB {
 			planCopy := plan
 			return &planCopy, nil

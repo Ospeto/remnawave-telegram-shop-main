@@ -15,15 +15,19 @@ import (
 )
 
 type Plan struct {
-	Label          string
-	Days           int
-	Price          int
-	TrafficLimitGB int
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Days           int    `json:"days"`
+	Price          int    `json:"price"`
+	TrafficLimitGB int    `json:"traffic_limit_gb"`
+	SortOrder      int    `json:"sort_order"`
+	Active         bool   `json:"active"`
 }
 
 type config struct {
 	telegramToken                                             string
 	plans                                                     []Plan
+	plansMu                                                   sync.RWMutex
 	remnawaveUrl, remnawaveToken, remnawaveMode, remnawaveTag string
 	defaultLanguage                                           string
 	databaseURL                                               string
@@ -163,22 +167,16 @@ func TosURL() string {
 }
 
 func Plans() []Plan {
-	return conf.plans
-}
-
-func PlanByIndex(idx int) *Plan {
-	if idx < 0 || idx >= len(conf.plans) {
-		return nil
-	}
-	return &conf.plans[idx]
+	return ActivePlans()
 }
 
 func LowestPlanPrice() int {
-	if len(conf.plans) == 0 {
+	plans := ActivePlans()
+	if len(plans) == 0 {
 		return 6000
 	}
-	minPrice := conf.plans[0].Price
-	for _, plan := range conf.plans {
+	minPrice := plans[0].Price
+	for _, plan := range plans {
 		if plan.Price < minPrice {
 			minPrice = plan.Price
 		}
@@ -526,40 +524,18 @@ func InitConfig() {
 	// Parse PLANS env var: label|days|price|traffic_gb,...
 	plansStr := os.Getenv("PLANS")
 	if plansStr != "" {
-		for _, entry := range strings.Split(plansStr, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			parts := strings.Split(entry, "|")
-			if len(parts) != 4 {
-				panic(fmt.Sprintf("invalid PLANS entry %q — expected label|days|price|traffic_gb", entry))
-			}
-			days, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-			if err != nil {
-				panic(fmt.Sprintf("invalid days in PLANS entry %q: %v", entry, err))
-			}
-			price, err := strconv.Atoi(strings.TrimSpace(parts[2]))
-			if err != nil {
-				panic(fmt.Sprintf("invalid price in PLANS entry %q: %v", entry, err))
-			}
-			trafficGB, err := strconv.Atoi(strings.TrimSpace(parts[3]))
-			if err != nil {
-				panic(fmt.Sprintf("invalid traffic_gb in PLANS entry %q: %v", entry, err))
-			}
-			conf.plans = append(conf.plans, Plan{
-				Label:          strings.TrimSpace(parts[0]),
-				Days:           days,
-				Price:          price,
-				TrafficLimitGB: trafficGB,
-			})
+		plans, err := ParsePlansEnv(plansStr)
+		if err != nil {
+			panic(err)
 		}
-		slog.Info("Loaded plans from PLANS env", "count", len(conf.plans))
+		setPlans(plans)
+		slog.Info("Loaded plans from PLANS env", "count", len(plans))
 	} else {
 		// Backward compat: fall back to PRICE_1/3/6/12
 		daysInMonth := envIntDefault("DAYS_IN_MONTH", 30)
 		trafficLimit := envIntDefault("TRAFFIC_LIMIT", 0)
 		label := envStringDefault("PLAN_LABEL", "Unlimited")
+		var plans []Plan
 		for _, m := range []int{1, 3, 6, 12} {
 			key := fmt.Sprintf("PRICE_%d", m)
 			pStr := os.Getenv(key)
@@ -571,15 +547,19 @@ func InitConfig() {
 				panic(fmt.Sprintf("invalid %s: %v", key, err))
 			}
 			if p > 0 {
-				conf.plans = append(conf.plans, Plan{
+				plans = append(plans, Plan{
+					ID:             uuid.NewString(),
 					Label:          label,
 					Days:           m * daysInMonth,
 					Price:          p,
 					TrafficLimitGB: trafficLimit,
+					SortOrder:      len(plans),
+					Active:         true,
 				})
 			}
 		}
-		slog.Info("Loaded plans from PRICE_X env (legacy)", "count", len(conf.plans))
+		setPlans(plans)
+		slog.Info("Loaded plans from PRICE_X env (legacy)", "count", len(plans))
 	}
 
 	conf.remnawaveUrl = mustEnv("REMNAWAVE_URL")

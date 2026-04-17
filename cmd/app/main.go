@@ -240,6 +240,9 @@ func main() {
 	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
 
 	appConfigRepo := database.NewAppConfigRepository(pool)
+	if err := config.LoadPlansCatalog(ctx, appConfigRepo); err != nil {
+		panic(err)
+	}
 	bonusStr, err := appConfigRepo.Get(ctx, "referral_bonus_amount")
 	if err == nil {
 		amount, errParse := strconv.ParseFloat(bonusStr, 64)
@@ -481,7 +484,7 @@ func main() {
 	})
 	mux.Handle("/readyz", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo)
 
 	// Rate Limiter: 10 req/s, burst 20
 	// This prevents abuse while allowing normal usage patterns.

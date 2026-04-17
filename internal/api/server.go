@@ -56,8 +56,8 @@ func extractRedirectSubscriptionURL(target string) string {
 	}
 }
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface, referralRepo *database.ReferralRepository) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo)
+func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService WalletServiceInterface, referralRepo *database.ReferralRepository, appConfigRepo *database.AppConfigRepository) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo, appConfigRepo)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -81,6 +81,8 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
+	mux.HandleFunc("/api/admin/plans", withAdmin(handler.AdminPlans))
+	mux.HandleFunc("/api/admin/plans/", withAdmin(handler.AdminPlanByID))
 	mux.HandleFunc("/api/admin/promos", withAdmin(handler.AdminPromos))
 	mux.HandleFunc("/api/admin/promos/", withAdmin(handler.DeleteAdminPromo))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))

@@ -11,6 +11,7 @@ import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
 
 interface PaymentProvider {
     key: string;
@@ -57,7 +58,6 @@ export function Checkout() {
     const promoDiscount = Number(searchParams.get('discount'));
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
     const amountParam = searchParams.get('amount');
-    const parsedPlanIndex = Number(planIndex);
     const parsedTopUpAmount = Number(amountParam);
     const hasValidTopUpAmount = isWalletTopup && Number.isFinite(parsedTopUpAmount) && parsedTopUpAmount > 0;
     const backTarget = `/plans${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
@@ -84,7 +84,8 @@ export function Checkout() {
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const purchaseIntentRef = useRef<{ action: CheckoutAction | null; key: string | null }>({ action: null, key: null });
-    const selectedPlan = !Number.isNaN(parsedPlanIndex) ? plans[parsedPlanIndex] : undefined;
+    const resolvedPlan = resolvePlanReference(plans, planIndex);
+    const selectedPlan = resolvedPlan.plan;
     const extendingKey = extendKeyId && userData?.keys
         ? userData.keys.find((key) => key.id === Number(extendKeyId))
         : undefined;
@@ -149,7 +150,7 @@ export function Checkout() {
             return;
         }
 
-        if (!isWalletTopup && (!planIndex || Number.isNaN(parsedPlanIndex) || parsedPlanIndex < 0)) {
+        if (!isWalletTopup && !planIndex) {
             setLoadError(t('invalid_plan_selected'));
             setLoading(false);
             return;
@@ -170,9 +171,9 @@ export function Checkout() {
 
         try {
             const plansData = await fetchJSON<Plan[]>('/api/plans');
-            const normalizedPlans = Array.isArray(plansData) ? plansData : [];
+            const normalizedPlans = getVisiblePlans(Array.isArray(plansData) ? plansData : []);
 
-            if (!isWalletTopup && parsedPlanIndex >= normalizedPlans.length) {
+            if (!isWalletTopup && !resolvePlanReference(normalizedPlans, planIndex).plan) {
                 setLoadError(t('invalid_plan_selected'));
                 return;
             }
@@ -203,7 +204,7 @@ export function Checkout() {
         } finally {
             setLoading(false);
         }
-    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, parsedPlanIndex, planIndex, t]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, planIndex, t]);
 
     useEffect(() => {
         void loadCheckoutData();
@@ -227,7 +228,11 @@ export function Checkout() {
                 body.promo_code = promoCode;
             }
             if (!isWalletTopup) {
-                body.plan_index = parsedPlanIndex;
+                if (resolvedPlan.legacyIndex !== null) {
+                    body.plan_index = resolvedPlan.legacyIndex;
+                } else if (selectedPlan) {
+                    body.plan_id = selectedPlan.id;
+                }
             }
             if (action === 'wallet') {
                 body.payment_method = 'wallet';
@@ -290,7 +295,7 @@ export function Checkout() {
         } finally {
             setCreatingPurchase(false);
         }
-    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedPlanIndex, parsedTopUpAmount, promoCode, t]);
+    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCode, resolvedPlan.legacyIndex, selectedPlan, t]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];

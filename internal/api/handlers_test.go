@@ -138,7 +138,7 @@ func TestCompactSubscriptionKeysForDisplayPrefersActiveRecordForSameIdentity(t *
 }
 
 func TestBeginScreenshotVerificationRejectsExcessiveAttemptsByCustomer(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	customerID := int64(99)
 
 	for i := 0; i < maxScreenshotVerificationsPerCustomer; i++ {
@@ -198,7 +198,7 @@ func TestPromoValidationStatus(t *testing.T) {
 }
 
 func TestUpdateAutoRenewReturnsGone(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/wallet/autorenew", strings.NewReader(`{"enabled":true,"duration":30}`))
 	rec := httptest.NewRecorder()
 

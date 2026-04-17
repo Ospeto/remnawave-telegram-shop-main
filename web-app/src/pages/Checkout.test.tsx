@@ -50,7 +50,7 @@ describe('Checkout', () => {
 
             if (url === '/api/plans') {
                 return jsonResponse([
-                    { label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK' },
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
                 ]);
             }
             if (url === '/api/me') {
@@ -119,7 +119,7 @@ describe('Checkout', () => {
 
             if (url === '/api/plans') {
                 return jsonResponse([
-                    { label: '1 Month', days: 30, price: 10000, traffic_limit_gb: 0, currency: 'MMK' },
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 10000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
                 ]);
             }
             if (url === '/api/me') {
@@ -149,5 +149,162 @@ describe('Checkout', () => {
         const walletButton = await screen.findByRole('button', { name: 'Pay 8,000 MMK from Wallet' });
         expect(walletButton.getAttribute('disabled')).toBeNull();
         expect(screen.queryByText('Wallet balance is not enough for wallet payment')).toBeNull();
+    });
+
+    it('resolves stable plan ids and sends plan_id for new checkout flows', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'starter-plan', label: 'Starter', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/purchase') {
+                return jsonResponse({
+                    purchase_id: 7,
+                    payment_phone: '09123456789',
+                    amount: 5000,
+                    currency: 'MMK',
+                    instructions: 'Pay now',
+                    invoice_type: 'manual',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/starter-plan']);
+
+        const manualButton = await screen.findByRole('button', { name: 'Pay via mobile banking' });
+        fireEvent.click(manualButton);
+
+        await screen.findByText('How to pay');
+        await waitFor(() => {
+            const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
+            expect(purchaseCall).toBeTruthy();
+
+            const [, options] = purchaseCall as [string, RequestInit];
+            const body = JSON.parse(String(options.body));
+            expect(body.plan_id).toBe('starter-plan');
+            expect(body.plan_index).toBeUndefined();
+        });
+    });
+
+    it('keeps legacy numeric checkout routes working with stable sort_order fallback', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, _init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'starter-plan', label: 'Starter', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                    { id: 'pro-plan', label: 'Pro', days: 90, price: 12000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 2 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/purchase') {
+                return jsonResponse({
+                    purchase_id: 8,
+                    payment_phone: '09123456789',
+                    amount: 12000,
+                    currency: 'MMK',
+                    instructions: 'Pay now',
+                    invoice_type: 'manual',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/2']);
+
+        const manualButton = await screen.findByRole('button', { name: 'Pay via mobile banking' });
+        fireEvent.click(manualButton);
+
+        await screen.findByText('How to pay');
+        await waitFor(() => {
+            const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
+            expect(purchaseCall).toBeTruthy();
+
+            const [, options] = purchaseCall as [string, RequestInit];
+            const body = JSON.parse(String(options.body));
+            expect(body.plan_index).toBe(2);
+            expect(body.plan_id).toBeUndefined();
+        });
+    });
+
+    it('rejects legacy numeric routes when the original slot is now archived instead of remapping', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'starter-plan', label: 'Starter', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                    { id: 'pro-plan', label: 'Pro', days: 90, price: 12000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 2 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/1']);
+
+        expect(await screen.findByText('Invalid plan selected')).toBeTruthy();
+        expect(fetchMock.mock.calls.find(([url]) => url === '/api/purchase')).toBeUndefined();
     });
 });

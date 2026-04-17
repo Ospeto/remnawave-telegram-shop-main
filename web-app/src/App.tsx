@@ -4,6 +4,7 @@ import { Plans } from './pages/Plans';
 import { Checkout } from './pages/Checkout';
 import { Wallet } from './pages/Wallet';
 import { AdminPromos } from './pages/AdminPromos';
+import { AdminPlans } from './pages/AdminPlans';
 
 import { ThemeProvider } from './lib/ThemeProvider';
 
@@ -14,6 +15,7 @@ function App() {
                 <Routes>
                     <Route path="/" element={<Home />} />
                     <Route path="/admin/promos" element={<AdminPromos />} />
+                    <Route path="/admin/plans" element={<AdminPlans />} />
                     <Route path="/plans" element={<Plans />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/checkout" element={<Checkout />} />

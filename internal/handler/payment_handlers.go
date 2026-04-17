@@ -57,14 +57,15 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 }
 
 func (h Handler) buildPricingKeyboard(langCode string) [][]models.InlineKeyboardButton {
-	plans := config.Plans()
+	planSlots := config.ActivePlanSlots()
 	var keyboard [][]models.InlineKeyboardButton
 
-	for i, plan := range plans {
+	for _, slot := range planSlots {
+		plan := slot.Plan
 		label := fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(plan.Price), config.Currency())
 		keyboard = append(keyboard, []models.InlineKeyboardButton{{
 			Text:         label,
-			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, i),
+			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, slot.LegacyIndex),
 		}})
 	}
 

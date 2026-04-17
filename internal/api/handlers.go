@@ -59,15 +59,18 @@ type ValidationResponse struct {
 }
 
 type PlanResponse struct {
+	ID             string `json:"id"`
 	Label          string `json:"label"`
 	Days           int    `json:"days"`
 	Price          int    `json:"price"`
 	TrafficLimitGB int    `json:"traffic_limit_gb"`
+	SortOrder      int    `json:"sort_order"`
 	Currency       string `json:"currency"`
 }
 
 type CreatePurchaseRequest struct {
 	PlanIndex     int    `json:"plan_index"`
+	PlanID        string `json:"plan_id,omitempty"`
 	ExtendKeyID   *int64 `json:"extend_key_id,omitempty"`
 	PromoCode     string `json:"promo_code,omitempty"`
 	PaymentMethod string `json:"payment_method,omitempty"`
@@ -101,6 +104,25 @@ type AdminPromoResponse struct {
 	ValidUntil      time.Time `json:"valid_until"`
 	CreatedAt       time.Time `json:"created_at"`
 	Status          string    `json:"status"`
+}
+
+type AdminPlanResponse struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Days           int    `json:"days"`
+	Price          int    `json:"price"`
+	TrafficLimitGB int    `json:"traffic_limit_gb"`
+	SortOrder      int    `json:"sort_order"`
+	Active         bool   `json:"active"`
+	Currency       string `json:"currency"`
+}
+
+type AdminPlanRequest struct {
+	Label          string `json:"label"`
+	Days           int    `json:"days"`
+	Price          int    `json:"price"`
+	TrafficLimitGB int    `json:"traffic_limit_gb"`
+	SortOrder      int    `json:"sort_order"`
 }
 
 type syncKeyStats = payment.KeyStats
@@ -193,6 +215,74 @@ func adminPromoResponse(code database.PromoCode, now time.Time) AdminPromoRespon
 	}
 }
 
+func adminPlanResponse(plan config.Plan) AdminPlanResponse {
+	return AdminPlanResponse{
+		ID:             plan.ID,
+		Label:          plan.Label,
+		Days:           plan.Days,
+		Price:          plan.Price,
+		TrafficLimitGB: plan.TrafficLimitGB,
+		SortOrder:      plan.SortOrder,
+		Active:         plan.Active,
+		Currency:       config.Currency(),
+	}
+}
+
+func validateAdminPlanRequest(req AdminPlanRequest) error {
+	if strings.TrimSpace(req.Label) == "" {
+		return errors.New("Plan label is required")
+	}
+	if req.Days <= 0 {
+		return errors.New("Plan days must be greater than zero")
+	}
+	if req.Price <= 0 {
+		return errors.New("Plan price must be greater than zero")
+	}
+	if req.TrafficLimitGB < 0 {
+		return errors.New("Plan traffic limit cannot be negative")
+	}
+	if req.SortOrder < 0 {
+		return errors.New("Plan sort order cannot be negative")
+	}
+	return nil
+}
+
+func writePlanCatalogError(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "must be unique"):
+		http.Error(w, message, http.StatusConflict)
+		return true
+	case strings.Contains(message, "required"),
+		strings.Contains(message, "positive"),
+		strings.Contains(message, "cannot be negative"):
+		http.Error(w, message, http.StatusBadRequest)
+		return true
+	default:
+		return false
+	}
+}
+
+func resolvePurchasePlan(req CreatePurchaseRequest) (*config.Plan, error) {
+	if strings.TrimSpace(req.PlanID) != "" {
+		plan := config.PlanByID(req.PlanID)
+		if plan == nil || !plan.Active {
+			return nil, errors.New("Invalid plan id")
+		}
+		return plan, nil
+	}
+
+	plan := config.PlanByIndex(req.PlanIndex)
+	if plan == nil {
+		return nil, errors.New("Invalid plan index")
+	}
+	return plan, nil
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
@@ -278,6 +368,7 @@ type APIHandler struct {
 	translation                *translation.Manager
 	subKeyRepo                 *database.SubscriptionKeyRepository
 	promoCodeRepository        *database.PromoCodeRepository
+	appConfigRepo              *database.AppConfigRepository
 	walletService              WalletServiceInterface
 	referralRepo               *database.ReferralRepository
 	screenshotMu               sync.Mutex
@@ -290,6 +381,7 @@ type APIHandler struct {
 	createPromoCode            func(context.Context, string, int, int, time.Time) error
 	deletePromoCode            func(context.Context, string) error
 	retirePromoCode            func(context.Context, string, time.Time) error
+	savePlansCatalog           func(context.Context, []config.Plan) error
 	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys            func(context.Context, int64, int64)
 	isAdminTelegramID          func(int64) bool
@@ -304,6 +396,7 @@ func NewAPIHandler(
 	promoCodeRepository *database.PromoCodeRepository,
 	walletService WalletServiceInterface,
 	referralRepo *database.ReferralRepository,
+	appConfigRepo *database.AppConfigRepository,
 ) *APIHandler {
 	return &APIHandler{
 		customerRepo:               customerRepo,
@@ -312,6 +405,7 @@ func NewAPIHandler(
 		translation:                tm,
 		subKeyRepo:                 subKeyRepo,
 		promoCodeRepository:        promoCodeRepository,
+		appConfigRepo:              appConfigRepo,
 		walletService:              walletService,
 		referralRepo:               referralRepo,
 		screenshotAttempts:         make(map[int64]time.Time),
@@ -346,6 +440,13 @@ func (h *APIHandler) allPromoCodes(ctx context.Context) ([]database.PromoCode, e
 		return nil, errors.New("promo repository is unavailable")
 	}
 	return h.promoCodeRepository.ListAll(ctx)
+}
+
+func (h *APIHandler) persistPlans(ctx context.Context, plans []config.Plan) error {
+	if h.savePlansCatalog != nil {
+		return h.savePlansCatalog(ctx, plans)
+	}
+	return config.SavePlansCatalog(ctx, h.appConfigRepo, plans)
 }
 
 func (h *APIHandler) savePromoCode(ctx context.Context, code string, discount, maxUses int, validUntil time.Time) error {
@@ -658,9 +759,9 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		trafficLimit = 0
 		label = fmt.Sprintf("Wallet Top-up: %d %s", req.Amount, config.Currency())
 	} else {
-		plan := config.PlanByIndex(req.PlanIndex)
-		if plan == nil {
-			http.Error(w, "Invalid plan index", http.StatusBadRequest)
+		plan, err := resolvePurchasePlan(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		price = float64(plan.Price)
@@ -1051,6 +1152,187 @@ func (h *APIHandler) DeleteAdminPromo(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *APIHandler) AdminPlans(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		h.ListAdminPlans(w, r)
+	case http.MethodPost:
+		h.CreateAdminPlan(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *APIHandler) AdminPlanByID(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPatch:
+		h.UpdateAdminPlan(w, r)
+	case http.MethodDelete:
+		h.DeleteAdminPlan(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *APIHandler) ListAdminPlans(w http.ResponseWriter, r *http.Request) {
+	plans := config.AllPlans()
+	resp := make([]AdminPlanResponse, 0, len(plans))
+	for _, plan := range plans {
+		resp = append(resp, adminPlanResponse(plan))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) CreateAdminPlan(w http.ResponseWriter, r *http.Request) {
+	if h.appConfigRepo == nil && h.savePlansCatalog == nil {
+		http.Error(w, "Plan management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var req AdminPlanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateAdminPlanRequest(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	plans := config.AllPlans()
+	nextSortOrder := req.SortOrder
+	if req.SortOrder == 0 && len(plans) > 0 {
+		maxSortOrder := plans[0].SortOrder
+		for _, plan := range plans[1:] {
+			if plan.SortOrder > maxSortOrder {
+				maxSortOrder = plan.SortOrder
+			}
+		}
+		nextSortOrder = maxSortOrder + 1
+	}
+
+	plan := config.Plan{
+		ID:             uuid.NewString(),
+		Label:          strings.TrimSpace(req.Label),
+		Days:           req.Days,
+		Price:          req.Price,
+		TrafficLimitGB: req.TrafficLimitGB,
+		SortOrder:      nextSortOrder,
+		Active:         true,
+	}
+	plans = append(plans, plan)
+	if err := h.persistPlans(r.Context(), plans); err != nil {
+		if writePlanCatalogError(w, err) {
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create plan", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(adminPlanResponse(plan))
+}
+
+func (h *APIHandler) UpdateAdminPlan(w http.ResponseWriter, r *http.Request) {
+	if h.appConfigRepo == nil && h.savePlansCatalog == nil {
+		http.Error(w, "Plan management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	planID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/admin/plans/"))
+	if planID == "" {
+		http.Error(w, "Missing plan id", http.StatusBadRequest)
+		return
+	}
+
+	var req AdminPlanRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateAdminPlanRequest(req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	plans := config.AllPlans()
+	updated := false
+	var updatedPlan config.Plan
+	for i := range plans {
+		if plans[i].ID != planID {
+			continue
+		}
+		plans[i].Label = strings.TrimSpace(req.Label)
+		plans[i].Days = req.Days
+		plans[i].Price = req.Price
+		plans[i].TrafficLimitGB = req.TrafficLimitGB
+		plans[i].SortOrder = req.SortOrder
+		updatedPlan = plans[i]
+		updated = true
+		break
+	}
+	if !updated {
+		http.Error(w, "Plan not found", http.StatusNotFound)
+		return
+	}
+	if err := h.persistPlans(r.Context(), plans); err != nil {
+		if writePlanCatalogError(w, err) {
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to update plan", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(adminPlanResponse(updatedPlan))
+}
+
+func (h *APIHandler) DeleteAdminPlan(w http.ResponseWriter, r *http.Request) {
+	if h.appConfigRepo == nil && h.savePlansCatalog == nil {
+		http.Error(w, "Plan management is unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	planID := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/api/admin/plans/"))
+	if planID == "" {
+		http.Error(w, "Missing plan id", http.StatusBadRequest)
+		return
+	}
+
+	plans := config.AllPlans()
+	activeCount := 0
+	targetIndex := -1
+	for i := range plans {
+		if plans[i].Active {
+			activeCount++
+		}
+		if plans[i].ID == planID {
+			targetIndex = i
+		}
+	}
+	if targetIndex == -1 {
+		http.Error(w, "Plan not found", http.StatusNotFound)
+		return
+	}
+	if plans[targetIndex].Active && activeCount <= 1 {
+		http.Error(w, "At least one active plan is required", http.StatusConflict)
+		return
+	}
+	plans[targetIndex].Active = false
+	if err := h.persistPlans(r.Context(), plans); err != nil {
+		if writePlanCatalogError(w, err) {
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to archive plan", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1116,16 +1398,18 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {
-	plans := config.Plans()
+	plans := config.ActivePlans()
 	var response []PlanResponse
 	currency := config.Currency()
 
 	for _, p := range plans {
 		response = append(response, PlanResponse{
+			ID:             p.ID,
 			Label:          p.Label,
 			Days:           p.Days,
 			Price:          p.Price,
 			TrafficLimitGB: p.TrafficLimitGB,
+			SortOrder:      p.SortOrder,
 			Currency:       currency,
 		})
 	}

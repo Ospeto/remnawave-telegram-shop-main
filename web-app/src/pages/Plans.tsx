@@ -10,6 +10,7 @@ import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { getVisiblePlans } from '../lib/plans';
 
 
 export function Plans() {
@@ -60,7 +61,7 @@ export function Plans() {
 
         try {
             const plansData = await fetchJSON<Plan[]>('/api/plans');
-            setPlans(Array.isArray(plansData) ? plansData : []);
+            setPlans(getVisiblePlans(Array.isArray(plansData) ? plansData : []));
 
             if (isWalletTopup) {
                 setUserData(null);
@@ -211,6 +212,7 @@ export function Plans() {
 
     const itemsToDisplay = isWalletTopup
         ? TOPUP_AMOUNTS.map(amount => ({
+            id: `topup-${amount}`,
             label: `${amount.toLocaleString()} ${plans[0]?.currency || 'MMK'}`,
             days: 0,
             price: amount,
@@ -226,6 +228,7 @@ export function Plans() {
         }
         return item;
     });
+    const showEmptyPlans = !isWalletTopup && displayItems.length === 0;
 
     const bestIdx = !isWalletTopup && displayItems.length > 0
         ? displayItems.reduce((b, p, i) => {
@@ -381,9 +384,16 @@ export function Plans() {
             )}
 
             {/* Plan / Top-up cards */}
-            <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
-                    const originalIdx = plans.findIndex(p => p.label === item.label && p.days === item.days);
+            {showEmptyPlans ? (
+                <div className="glass-card" style={{ padding: 18, display: 'grid', gap: 8 }}>
+                    <strong>{isExtend ? t('plans_empty_extend_title') : t('plans_empty_title')}</strong>
+                    <span className="text-hint" style={{ fontSize: 12 }}>
+                        {isExtend ? t('plans_empty_extend_desc') : t('plans_empty_desc')}
+                    </span>
+                </div>
+            ) : (
+                <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
                     const price = item.discountedPrice || item.price;
                     const hasDiscount = item.discountedPrice !== undefined && item.discountedPrice < item.price;
                     const checkoutParams = new URLSearchParams();
@@ -400,7 +410,7 @@ export function Plans() {
                         checkoutParams.set('discount', String(discountPercent));
                     }
 
-                    const checkoutPath = isWalletTopup ? '/checkout' : `/checkout/${originalIdx}`;
+                    const checkoutPath = isWalletTopup ? '/checkout' : `/checkout/${item.id}`;
                     const checkoutUrl = `${checkoutPath}${checkoutParams.toString() ? `?${checkoutParams.toString()}` : ''}`;
 
                     return (
@@ -468,8 +478,9 @@ export function Plans() {
                             </div>
                         </Link>
                     );
-                })}
-            </div>
+                    })}
+                </div>
+            )}
 
             <TipBox variant="success" icon="✅">{t('help_payments')}</TipBox>
         </div>
