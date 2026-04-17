@@ -150,15 +150,15 @@ func TestRedirectHelpers(t *testing.T) {
 	}
 }
 
-func TestInitDataExchangeGuardRejectsReuse(t *testing.T) {
+func TestInitDataExchangeGuardAllowsReuseWhileInitDataIsStillValid(t *testing.T) {
 	guard := newMemoryInitDataExchangeGuard()
 	expiresAt := time.Now().Add(time.Minute)
 
 	if err := guard.consume(context.Background(), "binding-key", expiresAt); err != nil {
 		t.Fatalf("consume() first call error = %v", err)
 	}
-	if err := guard.consume(context.Background(), "binding-key", expiresAt); err == nil {
-		t.Fatal("consume() second call error = nil, want replay rejection")
+	if err := guard.consume(context.Background(), "binding-key", expiresAt); err != nil {
+		t.Fatalf("consume() second call error = %v, want idempotent success", err)
 	}
 }
 

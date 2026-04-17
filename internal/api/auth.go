@@ -218,7 +218,11 @@ func (g *memoryInitDataExchangeGuard) consume(_ context.Context, bindingKey stri
 	}
 
 	if existingExpiry, exists := g.consumed[bindingKey]; exists && now.Before(existingExpiry) {
-		return errInitDataAlreadyConsumed
+		// Allow re-exchanging the same signed initData while it remains valid.
+		// The Mini App may need a fresh bearer session after clearing a stale
+		// cached token, and rejecting the second exchange traps users on the
+		// session-expired screen until Telegram rotates initData.
+		return nil
 	}
 
 	g.consumed[bindingKey] = expiresAt
@@ -254,7 +258,7 @@ func (g *dbInitDataExchangeGuard) consume(ctx context.Context, bindingKey string
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO telegram_init_data_exchange (binding_key, expires_at) VALUES ($1, $2)`, bindingKey, expiresAt); err != nil {
 		if isUniqueConstraintViolation(err) {
-			return errInitDataAlreadyConsumed
+			return nil
 		}
 		return err
 	}
