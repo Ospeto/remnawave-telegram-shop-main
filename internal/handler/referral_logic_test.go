@@ -54,38 +54,47 @@ func simulateStartCommand(t *testing.T, customerRepo *MockCustomerRepo, referral
 			Language:   "en",
 		})
 
-		if strings.Contains(msgText, "ref_") {
-			parts := strings.Split(msgText, " ")
-			if len(parts) > 1 {
-				arg := parts[1]
-				if strings.HasPrefix(arg, "ref_") {
-					code := strings.TrimPrefix(arg, "ref_")
+	} else {
+		t.Logf("User %d already exists. Continuing with referral processing.", chatID)
+	}
 
-					// Just pretend parsing works
-					var referrerId int64
-					if code == "12345" {
-						referrerId = 12345
-					}
-					if code == "99999" {
-						referrerId = 99999
-					}
+	if strings.Contains(msgText, "ref_") {
+		parts := strings.Split(msgText, " ")
+		if len(parts) > 1 {
+			arg := parts[1]
+			if strings.HasPrefix(arg, "ref_") {
+				code := strings.TrimPrefix(arg, "ref_")
 
-					if referrerId == existingCustomer.TelegramID {
-						t.Log("Blocked self referral")
-					} else {
-						referrer, _ := customerRepo.FindByTelegramId(context.Background(), referrerId)
-						if referrer != nil {
-							referralRepo.Create(context.Background(), referrerId, existingCustomer.TelegramID)
-							t.Logf("SUCCESS: Referral created! Referrer %d -> Referee %d", referrerId, existingCustomer.TelegramID)
-						} else {
-							t.Logf("Referrer %d not found in DB", referrerId)
-						}
+				// Just pretend parsing works
+				var referrerId int64
+				if code == "12345" {
+					referrerId = 12345
+				}
+				if code == "99999" {
+					referrerId = 99999
+				}
+
+				if referrerId == existingCustomer.TelegramID {
+					t.Log("Blocked self referral")
+					return
+				}
+
+				for _, existingRef := range referralRepo.referrals {
+					if existingRef.RefereeID == existingCustomer.TelegramID {
+						t.Log("Referral already exists for this user")
+						return
 					}
+				}
+
+				referrer, _ := customerRepo.FindByTelegramId(context.Background(), referrerId)
+				if referrer != nil {
+					referralRepo.Create(context.Background(), referrerId, existingCustomer.TelegramID)
+					t.Logf("SUCCESS: Referral created! Referrer %d -> Referee %d", referrerId, existingCustomer.TelegramID)
+				} else {
+					t.Logf("Referrer %d not found in DB", referrerId)
 				}
 			}
 		}
-	} else {
-		t.Logf("User %d already exists. Skipping referral branch.", chatID)
 	}
 }
 
@@ -104,7 +113,7 @@ func TestReferralLogic_SuccessNewUser(t *testing.T) {
 	}
 }
 
-func TestReferralLogic_FailExistingUser(t *testing.T) {
+func TestReferralLogic_ExistingUserCanStillBeReferred(t *testing.T) {
 	custRepo := &MockCustomerRepo{customers: make(map[int64]*database.Customer)}
 	refRepo := &MockReferralRepo{}
 
@@ -115,8 +124,8 @@ func TestReferralLogic_FailExistingUser(t *testing.T) {
 	custRepo.Create(context.Background(), &database.Customer{TelegramID: 99999})
 	simulateStartCommand(t, custRepo, refRepo, "/start ref_12345", 99999)
 
-	if len(refRepo.referrals) != 0 {
-		t.Errorf("Expected 0 referrals because user already existed, got %d", len(refRepo.referrals))
+	if len(refRepo.referrals) != 1 {
+		t.Errorf("Expected 1 referral for existing user without a prior referral, got %d", len(refRepo.referrals))
 	}
 }
 

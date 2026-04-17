@@ -12,12 +12,14 @@ import (
 )
 
 type Referral struct {
-	ID                  int64     `db:"id"`
-	ReferrerID          int64     `db:"referrer_id"`
-	RefereeID           int64     `db:"referee_id"`
-	UsedAt              time.Time `db:"used_at"`
-	BonusGranted        bool      `db:"bonus_granted"`
-	RefereeBonusGranted bool      `db:"referee_bonus_granted"`
+	ID                    int64      `db:"id"`
+	ReferrerID            int64      `db:"referrer_id"`
+	RefereeID             int64      `db:"referee_id"`
+	UsedAt                time.Time  `db:"used_at"`
+	BonusGranted          bool       `db:"bonus_granted"`
+	BonusGrantedAt        *time.Time `db:"bonus_granted_at"`
+	RefereeBonusGranted   bool       `db:"referee_bonus_granted"`
+	RefereeBonusGrantedAt *time.Time `db:"referee_bonus_granted_at"`
 }
 
 type ReferralRepository struct {
@@ -30,9 +32,9 @@ func NewReferralRepository(pool *pgxpool.Pool) *ReferralRepository {
 
 func (r *ReferralRepository) Create(ctx context.Context, referrerID, refereeID int64) (*Referral, error) {
 	query := sq.Insert("referral").
-		Columns("referrer_id", "referee_id", "used_at", "bonus_granted", "referee_bonus_granted").
-		Values(referrerID, refereeID, sq.Expr("NOW()"), false, false).
-		Suffix("RETURNING id, referrer_id, referee_id, used_at, bonus_granted, referee_bonus_granted").
+		Columns("referrer_id", "referee_id", "used_at", "bonus_granted", "bonus_granted_at", "referee_bonus_granted", "referee_bonus_granted_at").
+		Values(referrerID, refereeID, sq.Expr("NOW()"), false, nil, false, nil).
+		Suffix("RETURNING id, referrer_id, referee_id, used_at, bonus_granted, bonus_granted_at, referee_bonus_granted, referee_bonus_granted_at").
 		PlaceholderFormat(sq.Dollar)
 
 	sql, args, err := query.ToSql()
@@ -42,14 +44,23 @@ func (r *ReferralRepository) Create(ctx context.Context, referrerID, refereeID i
 
 	row := r.pool.QueryRow(ctx, sql, args...)
 	var ref Referral
-	if err := row.Scan(&ref.ID, &ref.ReferrerID, &ref.RefereeID, &ref.UsedAt, &ref.BonusGranted, &ref.RefereeBonusGranted); err != nil {
+	if err := row.Scan(
+		&ref.ID,
+		&ref.ReferrerID,
+		&ref.RefereeID,
+		&ref.UsedAt,
+		&ref.BonusGranted,
+		&ref.BonusGrantedAt,
+		&ref.RefereeBonusGranted,
+		&ref.RefereeBonusGrantedAt,
+	); err != nil {
 		return nil, fmt.Errorf("failed to scan inserted referral: %w", err)
 	}
 	return &ref, nil
 }
 
 func (r *ReferralRepository) FindByReferrer(ctx context.Context, referrerID int64) ([]Referral, error) {
-	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "referee_bonus_granted").
+	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "bonus_granted_at", "referee_bonus_granted", "referee_bonus_granted_at").
 		From("referral").
 		Where(sq.Eq{"referrer_id": referrerID}).
 		OrderBy("used_at DESC").
@@ -69,7 +80,16 @@ func (r *ReferralRepository) FindByReferrer(ctx context.Context, referrerID int6
 	var list []Referral
 	for rows.Next() {
 		var ref Referral
-		if err := rows.Scan(&ref.ID, &ref.ReferrerID, &ref.RefereeID, &ref.UsedAt, &ref.BonusGranted, &ref.RefereeBonusGranted); err != nil {
+		if err := rows.Scan(
+			&ref.ID,
+			&ref.ReferrerID,
+			&ref.RefereeID,
+			&ref.UsedAt,
+			&ref.BonusGranted,
+			&ref.BonusGrantedAt,
+			&ref.RefereeBonusGranted,
+			&ref.RefereeBonusGrantedAt,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan referral row: %w", err)
 		}
 		list = append(list, ref)
@@ -99,7 +119,7 @@ func (r *ReferralRepository) CountByReferrer(ctx context.Context, referrerID int
 }
 
 func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64) (*Referral, error) {
-	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "referee_bonus_granted").
+	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "bonus_granted_at", "referee_bonus_granted", "referee_bonus_granted_at").
 		From("referral").
 		Where(sq.Eq{"referee_id": refereeID}).
 		Limit(1).
@@ -111,7 +131,16 @@ func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64)
 	}
 
 	var ref Referral
-	err = r.pool.QueryRow(ctx, sql, args...).Scan(&ref.ID, &ref.ReferrerID, &ref.RefereeID, &ref.UsedAt, &ref.BonusGranted, &ref.RefereeBonusGranted)
+	err = r.pool.QueryRow(ctx, sql, args...).Scan(
+		&ref.ID,
+		&ref.ReferrerID,
+		&ref.RefereeID,
+		&ref.UsedAt,
+		&ref.BonusGranted,
+		&ref.BonusGrantedAt,
+		&ref.RefereeBonusGranted,
+		&ref.RefereeBonusGrantedAt,
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -124,6 +153,7 @@ func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64)
 func (r *ReferralRepository) MarkBonusGranted(ctx context.Context, referralID int64) error {
 	query := sq.Update("referral").
 		Set("bonus_granted", true).
+		Set("bonus_granted_at", sq.Expr("COALESCE(bonus_granted_at, NOW())")).
 		Where(sq.Eq{"id": referralID}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -146,6 +176,7 @@ func (r *ReferralRepository) MarkBonusGranted(ctx context.Context, referralID in
 func (r *ReferralRepository) MarkRefereeBonusGranted(ctx context.Context, referralID int64) error {
 	query := sq.Update("referral").
 		Set("referee_bonus_granted", true).
+		Set("referee_bonus_granted_at", sq.Expr("COALESCE(referee_bonus_granted_at, NOW())")).
 		Where(sq.Eq{"id": referralID}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -168,10 +199,11 @@ func (r *ReferralRepository) MarkRefereeBonusGranted(ctx context.Context, referr
 // Returns true only for the first claimant.
 func (r *ReferralRepository) TryMarkBonusGrantedTx(ctx context.Context, tx pgx.Tx, referralID int64) (bool, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE referral
-		SET bonus_granted = TRUE
-		WHERE id = $1 AND bonus_granted = FALSE
-	`, referralID)
+			UPDATE referral
+			SET bonus_granted = TRUE,
+			    bonus_granted_at = COALESCE(bonus_granted_at, NOW())
+			WHERE id = $1 AND bonus_granted = FALSE
+		`, referralID)
 	if err != nil {
 		return false, fmt.Errorf("failed to claim referrer bonus: %w", err)
 	}
@@ -182,10 +214,11 @@ func (r *ReferralRepository) TryMarkBonusGrantedTx(ctx context.Context, tx pgx.T
 // Returns true only for the first claimant.
 func (r *ReferralRepository) TryMarkRefereeBonusGrantedTx(ctx context.Context, tx pgx.Tx, referralID int64) (bool, error) {
 	tag, err := tx.Exec(ctx, `
-		UPDATE referral
-		SET referee_bonus_granted = TRUE
-		WHERE id = $1 AND referee_bonus_granted = FALSE
-	`, referralID)
+			UPDATE referral
+			SET referee_bonus_granted = TRUE,
+			    referee_bonus_granted_at = COALESCE(referee_bonus_granted_at, NOW())
+			WHERE id = $1 AND referee_bonus_granted = FALSE
+		`, referralID)
 	if err != nil {
 		return false, fmt.Errorf("failed to claim referee bonus: %w", err)
 	}

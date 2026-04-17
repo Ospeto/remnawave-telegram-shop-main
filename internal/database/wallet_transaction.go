@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -123,4 +124,29 @@ func (r *WalletTransactionRepository) FindByCustomerID(ctx context.Context, cust
 	}
 
 	return transactions, nil
+}
+
+func (r *WalletTransactionRepository) SumByCustomerTypeAndDescription(ctx context.Context, customerID int64, txType WalletTransactionType, description string) (float64, error) {
+	buildSelect := sq.Select("COALESCE(SUM(amount), 0)").
+		From("wallet_transaction").
+		Where(sq.Eq{
+			"customer_id": customerID,
+			"type":        txType,
+			"description": description,
+		}).
+		PlaceholderFormat(sq.Dollar)
+
+	sqlStr, args, err := buildSelect.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build sum query: %w", err)
+	}
+
+	var total sql.NullFloat64
+	if err := r.pool.QueryRow(ctx, sqlStr, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to sum wallet transactions: %w", err)
+	}
+	if !total.Valid {
+		return 0, nil
+	}
+	return total.Float64, nil
 }

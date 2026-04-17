@@ -17,14 +17,12 @@ import (
 )
 
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	customer, created, err := h.ensureCustomer(ctx, update.Message.Chat.ID, update.Message.From.LanguageCode)
+	customer, _, err := h.ensureCustomer(ctx, update.Message.Chat.ID, update.Message.From.LanguageCode)
 	if err != nil {
 		return
 	}
 
-	if created {
-		h.processReferral(ctx, update.Message.Text, customer)
-	}
+	h.processReferral(ctx, update.Message.Text, customer)
 	h.sendStartMenu(ctx, b, update.Message.Chat.ID, customer, update.Message.From.LanguageCode)
 }
 
@@ -94,24 +92,24 @@ func (h Handler) processReferral(ctx context.Context, messageText string, existi
 	}
 
 	code := strings.TrimPrefix(arg, "ref_")
-	referrerId, err := strconv.ParseInt(code, 10, 64)
+	referrerTelegramID, err := strconv.ParseInt(code, 10, 64)
 	if err != nil {
 		slog.Error("[REFERRAL-DEBUG] FAILED: error parsing referrer id", "code_length", len(code), "error", err)
 		return
 	}
 
-	if referrerId == existingCustomer.TelegramID {
-		slog.Warn("[REFERRAL-DEBUG] BLOCKED: self-referral attempt", "telegram_id", utils.MaskHalfInt64(referrerId))
+	if referrerTelegramID == existingCustomer.TelegramID {
+		slog.Warn("[REFERRAL-DEBUG] BLOCKED: self-referral attempt", "telegram_id", utils.MaskHalfInt64(referrerTelegramID))
 		return
 	}
 
 	slog.Info("[REFERRAL-DEBUG] Valid referrer ID parsed",
-		"referrer_telegram_id", utils.MaskHalfInt64(referrerId),
+		"referrer_telegram_id", utils.MaskHalfInt64(referrerTelegramID),
 		"referee_telegram_id", telegramID,
 	)
 
 	// Check if user already has a referral (prevents duplicate attempts)
-	existingRef, refErr := h.referralRepository.FindByReferee(ctx, existingCustomer.TelegramID)
+	existingRef, refErr := h.referralRepository.FindByReferee(ctx, existingCustomer.ID)
 	slog.Info("[REFERRAL-DEBUG] FindByReferee result", "existing_referral", existingRef != nil, "error_present", refErr != nil)
 
 	if existingRef != nil {
@@ -125,26 +123,26 @@ func (h Handler) processReferral(ctx context.Context, messageText string, existi
 	}
 
 	// No existing referral — eligible! Verify referrer exists.
-	referrer, referrerErr := h.customerRepository.FindByTelegramId(ctx, referrerId)
+	referrer, referrerErr := h.customerRepository.FindByTelegramId(ctx, referrerTelegramID)
 	slog.Info("[REFERRAL-DEBUG] Referrer lookup result",
-		"referrer_telegram_id", utils.MaskHalfInt64(referrerId),
+		"referrer_telegram_id", utils.MaskHalfInt64(referrerTelegramID),
 		"referrer_found", referrer != nil,
 		"error_present", referrerErr != nil,
 	)
 
 	if referrerErr != nil || referrer == nil {
-		slog.Warn("[REFERRAL-DEBUG] SKIPPED: referrer not found in database", "referrer_telegram_id", utils.MaskHalfInt64(referrerId))
+		slog.Warn("[REFERRAL-DEBUG] SKIPPED: referrer not found in database", "referrer_telegram_id", utils.MaskHalfInt64(referrerTelegramID))
 		return
 	}
 
 	ctxRef := context.WithoutCancel(ctx)
-	createdRef, createErr := h.referralRepository.Create(ctxRef, referrerId, existingCustomer.TelegramID)
+	createdRef, createErr := h.referralRepository.Create(ctxRef, referrer.ID, existingCustomer.ID)
 	if createErr != nil {
 		slog.Error("[REFERRAL-DEBUG] FAILED: error creating referral", "error", createErr)
 	} else {
 		slog.Info("[REFERRAL-DEBUG] SUCCESS: referral created!",
 			"referral_id", utils.MaskHalfInt64(createdRef.ID),
-			"referrer_telegram_id", utils.MaskHalfInt64(referrerId),
+			"referrer_customer_id", utils.MaskHalfInt64(referrer.ID),
 			"referee_telegram_id", telegramID,
 		)
 	}

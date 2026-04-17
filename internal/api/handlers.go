@@ -117,6 +117,48 @@ func uploadScreenshotFailureResponse(result *payment.VerificationResult) UploadS
 	}
 }
 
+func referralActivityAt(ref database.Referral) time.Time {
+	if ref.BonusGranted && ref.BonusGrantedAt != nil {
+		return *ref.BonusGrantedAt
+	}
+	return ref.UsedAt
+}
+
+func (h *APIHandler) referralSummary(ctx context.Context, customer *database.Customer) (int, float64) {
+	if h.referralRepo == nil || customer == nil {
+		return 0, 0
+	}
+
+	count, err := h.referralRepo.CountByReferrer(ctx, customer.ID)
+	if err != nil {
+		slog.Warn("Failed to count referrals", "customer_id", customer.ID, "error", err)
+		count = 0
+	}
+
+	total := 0.0
+	if h.paymentService != nil {
+		var err error
+		total, err = h.paymentService.ReferralEarnedTotal(ctx, customer.ID)
+		if err != nil {
+			slog.Warn("Failed to sum referral earnings", "customer_id", customer.ID, "error", err)
+			total = 0
+		}
+	}
+
+	return count, total
+}
+
+func (h *APIHandler) referralMaskedTelegramID(ctx context.Context, customerID int64) string {
+	if h.customerRepo == nil {
+		return maskHalfInt64(customerID)
+	}
+	customer, err := h.customerRepo.FindById(ctx, customerID)
+	if err != nil || customer == nil {
+		return maskHalfInt64(customerID)
+	}
+	return maskHalfInt64(customer.TelegramID)
+}
+
 func writeSanitizedError(w http.ResponseWriter, status int, publicMessage string, err error) {
 	if err != nil {
 		slog.Error(publicMessage, "status", status, "error", err)
@@ -707,19 +749,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Determine trial eligibility: trial enabled + no subscription history.
 	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0 && !hasMigratedKeys
 
-	// Fetch referral summary for the home chip (non-fatal)
-	referralCount := 0
-	var referralEarned float64
-	if h.referralRepo != nil {
-		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
-			referralCount = len(refs)
-			for _, ref := range refs {
-				if ref.BonusGranted {
-					referralEarned += payment.ReferralBonusAmount
-				}
-			}
-		}
-	}
+	referralCount, referralEarned := h.referralSummary(r.Context(), customer)
 
 	resp := ValidationResponse{
 		User:                customer,
@@ -1052,19 +1082,22 @@ func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
 
 	var items []ReferralItem
 	if h.referralRepo != nil {
-		if refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.TelegramID); err == nil {
-			for _, ref := range refs {
-				status := "pending"
-				if ref.BonusGranted {
-					status = "bonus_received"
-				}
-				items = append(items, ReferralItem{
-					ID:        ref.ID,
-					MaskedID:  maskHalfInt64(ref.RefereeID),
-					CreatedAt: ref.UsedAt,
-					Status:    status,
-				})
+		refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.ID)
+		if err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load referrals", err)
+			return
+		}
+		for _, ref := range refs {
+			status := "pending"
+			if ref.BonusGranted {
+				status = "bonus_received"
 			}
+			items = append(items, ReferralItem{
+				ID:        ref.ID,
+				MaskedID:  h.referralMaskedTelegramID(r.Context(), ref.RefereeID),
+				CreatedAt: referralActivityAt(ref),
+				Status:    status,
+			})
 		}
 	}
 
@@ -1106,6 +1139,8 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	referralCount, referralEarned := h.referralSummary(r.Context(), customer)
+
 	resp := map[string]interface{}{
 		"balance":               balance,
 		"currency":              config.Currency(),
@@ -1113,6 +1148,8 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"auto_renew_duration":   autoRenewDuration,
 		"bot_url":               config.BotURL(),
 		"referral_bonus_amount": payment.ReferralBonusAmount,
+		"referral_count":        referralCount,
+		"referral_earned":       referralEarned,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

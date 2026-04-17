@@ -14,6 +14,8 @@ interface WalletData {
   auto_renew: boolean;
   auto_renew_duration: number | null;
   bot_url: string;
+  referral_count: number;
+  referral_earned: number;
   referral_bonus_amount: number;
 }
 
@@ -25,6 +27,13 @@ interface Transaction {
   created_at: string;
 }
 
+interface ReferralItem {
+  id: number;
+  masked_id: string;
+  created_at: string;
+  status: 'bonus_received' | 'pending';
+}
+
 export function Wallet() {
   const { tg, initData, close } = useTelegram();
   const { t } = useLanguage();
@@ -32,9 +41,10 @@ export function Wallet() {
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [referrals, setReferrals] = useState<any[]>([]);
+  const [referrals, setReferrals] = useState<ReferralItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [referralLoadError, setReferralLoadError] = useState<string | null>(null);
   const [authExpired, setAuthExpired] = useState(false);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
@@ -46,19 +56,27 @@ export function Wallet() {
 
     setLoading(true);
     setLoadError(null);
+    setReferralLoadError(null);
     setAuthExpired(false);
 
     try {
       const [walletData, historyData, referralResult] = await Promise.all([
         fetchJSONWithTelegramAuth<WalletData>('/api/wallet', initData),
         fetchJSONWithTelegramAuth<Transaction[]>('/api/wallet/history?limit=10', initData),
-        fetchJSONWithTelegramAuth<any[]>('/api/referrals', initData)
-          .catch(() => []),
+        fetchJSONWithTelegramAuth<ReferralItem[]>('/api/referrals', initData)
+          .then((data) => ({ ok: true as const, data }))
+          .catch((error) => ({ ok: false as const, error })),
       ]);
 
       setWallet(walletData);
       setTransactions(historyData || []);
-      setReferrals(Array.isArray(referralResult) ? referralResult : []);
+      if (referralResult.ok) {
+        setReferrals(Array.isArray(referralResult.data) ? referralResult.data : []);
+      } else {
+        console.warn('Referral load error:', referralResult.error);
+        setReferrals([]);
+        setReferralLoadError(t('referral_activity_unavailable'));
+      }
     } catch (err) {
       console.warn('Wallet load error:', err);
       if (isAPIStatus(err, 401)) {
@@ -255,18 +273,35 @@ export function Wallet() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
           <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
             <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('friends_invited')}</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-color)' }}>{referrals.length}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-color)' }}>{wallet.referral_count}</div>
           </div>
           <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
             <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('total_earned')}</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-success)', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-              +{referrals.filter(r => r.status === 'bonus_received').length * (wallet?.referral_bonus_amount || 1000)} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
+              +{(wallet.referral_earned || 0).toLocaleString()} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
             </div>
           </div>
         </div>
 
+        {referralLoadError && (
+          <div
+            role="status"
+            style={{
+              marginBottom: 16,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'rgba(255, 159, 10, 0.12)',
+              color: 'var(--text-color)',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {referralLoadError}
+          </div>
+        )}
+
         {
-          referrals.length > 0 && (
+          !referralLoadError && referrals.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
               {referrals.map(ref => (
                 <div key={ref.id} style={{

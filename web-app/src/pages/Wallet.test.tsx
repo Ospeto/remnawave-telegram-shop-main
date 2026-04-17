@@ -40,11 +40,20 @@ describe('Wallet', () => {
         seedTelegramSession();
     });
 
-    it('renders wallet data even when referrals fail to load', async () => {
+    it('renders wallet data and shows a referral warning when referrals fail to load', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);
             if (url === '/api/wallet') {
-                return jsonResponse({ balance: 5000, currency: 'MMK', auto_renew: false, auto_renew_duration: null, bot_url: 'https://t.me/WavyVpnBot', referral_bonus_amount: 1000 });
+                return jsonResponse({
+                    balance: 5000,
+                    currency: 'MMK',
+                    auto_renew: false,
+                    auto_renew_duration: null,
+                    bot_url: 'https://t.me/WavyVpnBot',
+                    referral_count: 2,
+                    referral_earned: 2500,
+                    referral_bonus_amount: 1000,
+                });
             }
             if (url === '/api/wallet/history?limit=10') {
                 return jsonResponse([]);
@@ -62,5 +71,7 @@ describe('Wallet', () => {
 
         expect(await screen.findByRole('heading', { name: 'Wavy Wallet' })).toBeTruthy();
         expect(screen.getByRole('button', { name: '+ Top Up Balance' })).toBeTruthy();
+        expect(screen.getByText('Referral activity is temporarily unavailable. Your totals are still shown above.')).toBeTruthy();
+        expect(screen.getByText(/\+2,500/)).toBeTruthy();
     });
 });
