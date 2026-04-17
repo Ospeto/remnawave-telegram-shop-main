@@ -223,6 +223,24 @@ export function Home() {
 
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+                {data?.user && (
+                    <div className="glass-card animate-slide-up" style={{
+                        padding: '12px 16px',
+                        display: 'grid',
+                        gap: 4,
+                    }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
+                            {t('session_debug_title')}
+                        </div>
+                        <div className="text-hint" style={{ fontSize: 13 }}>
+                            {t('session_debug_telegram_id')}: {data.user.telegram_id}
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: data.is_admin ? 'var(--success-color)' : 'var(--warning-color)' }}>
+                            {data.is_admin ? t('session_debug_admin_yes') : t('session_debug_admin_no')}
+                        </div>
+                    </div>
+                )}
+
                 <Link to="/wallet" className="digital-card animate-slide-up" style={{
                     padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
                     textDecoration: 'none', color: 'var(--digital-card-text)',

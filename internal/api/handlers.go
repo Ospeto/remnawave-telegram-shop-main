@@ -916,6 +916,12 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		resp.ReferralEarned = &referralEarned
 	}
 
+	slog.Info("Resolved /api/me session",
+		"telegram_id", telegramID,
+		"is_admin", resp.IsAdmin,
+		"customer_id", customer.ID,
+	)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }

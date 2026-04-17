@@ -240,6 +240,10 @@ export const translations: Record<Language, Record<string, string>> = {
         'admin_promos_create_error': 'Could not create promo code. Please try again.',
         'admin_promos_delete_error': 'Could not delete promo code. Please try again.',
         'admin_promos_delete_confirm': 'Delete promo code {{code}}?',
+        'session_debug_title': 'Session Status',
+        'session_debug_telegram_id': 'Telegram ID',
+        'session_debug_admin_yes': 'Admin access: Yes',
+        'session_debug_admin_no': 'Admin access: No',
     },
 
     my: {
@@ -481,5 +485,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'admin_promos_create_error': 'Promo code ဖန်တီး၍မရပါ။ ထပ်မံကြိုးစားပါ။',
         'admin_promos_delete_error': 'Promo code ဖျက်၍မရပါ။ ထပ်မံကြိုးစားပါ။',
         'admin_promos_delete_confirm': 'Promo code {{code}} ကို ဖျက်မလား?',
+        'session_debug_title': 'Session Status',
+        'session_debug_telegram_id': 'Telegram ID',
+        'session_debug_admin_yes': 'Admin access: Yes',
+        'session_debug_admin_no': 'Admin access: No',
     }
 };
