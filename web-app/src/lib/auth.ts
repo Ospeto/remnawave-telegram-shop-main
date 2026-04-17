@@ -155,29 +155,13 @@ export async function fetchJSONWithTelegramAuth<T>(
 export async function fetchUserScopedJSONWithTelegramAuth<T extends { user?: { telegram_id?: number } }>(
     input: RequestInfo | URL,
     initData: string,
-    expectedTelegramID?: number,
+    _expectedTelegramID?: number,
     init?: RequestInit,
 ): Promise<T> {
-    let data = await fetchJSONWithTelegramAuth<T>(input, initData, init);
-
-    if (typeof expectedTelegramID !== 'number') {
-        return data;
-    }
-
-    const actualTelegramID = data?.user?.telegram_id;
-    if (typeof actualTelegramID === 'number' && actualTelegramID === expectedTelegramID) {
-        return data;
-    }
-
-    if (typeof actualTelegramID === 'number' && actualTelegramID !== expectedTelegramID) {
-        clearTelegramSession();
-        data = await fetchJSONWithTelegramAuth<T>(input, initData, init);
-    }
-
-    if (data?.user?.telegram_id !== expectedTelegramID) {
-        clearTelegramSession();
-        throw new APIError(401, 'Telegram session expired. Please reopen the app and try again.');
-    }
-
-    return data;
+    // The backend already validates the signed Telegram initData when it
+    // exchanges a Mini App session. `initDataUnsafe.user.id` in the webview can
+    // lag or diverge from that signed payload in some Telegram clients, which
+    // causes false "session expired" screens even though the server auth is
+    // valid. Trust the server-authenticated response here.
+    return fetchJSONWithTelegramAuth<T>(input, initData, init);
 }

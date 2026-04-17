@@ -112,61 +112,10 @@ describe('getTelegramAuthHeaders', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it('retries once with a fresh session when /api/me returns a mismatched telegram user', async () => {
+    it('trusts the server-authenticated response even when the webview user hint differs', async () => {
         const fetchMock = vi.fn()
             .mockResolvedValueOnce(new Response(JSON.stringify({
                 token: 'session-token-1',
-                expires_at: new Date(Date.now() + 60_000).toISOString(),
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                user: { telegram_id: 777 },
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                token: 'session-token-2',
-                expires_at: new Date(Date.now() + 60_000).toISOString(),
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                user: { telegram_id: 42 },
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }));
-        vi.stubGlobal('fetch', fetchMock);
-
-        clearTelegramSession();
-
-        const data = await fetchUserScopedJSONWithTelegramAuth('/api/me', 'test-init-data', 42);
-
-        expect(data.user?.telegram_id).toBe(42);
-        expect(fetchMock).toHaveBeenCalledTimes(4);
-    });
-
-    it('fails closed when the refreshed session still belongs to a different telegram user', async () => {
-        const fetchMock = vi.fn()
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                token: 'session-token-1',
-                expires_at: new Date(Date.now() + 60_000).toISOString(),
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                user: { telegram_id: 777 },
-            }), {
-                status: 200,
-                headers: { 'Content-Type': 'application/json' },
-            }))
-            .mockResolvedValueOnce(new Response(JSON.stringify({
-                token: 'session-token-2',
                 expires_at: new Date(Date.now() + 60_000).toISOString(),
             }), {
                 status: 200,
@@ -182,7 +131,9 @@ describe('getTelegramAuthHeaders', () => {
 
         clearTelegramSession();
 
-        await expect(fetchUserScopedJSONWithTelegramAuth('/api/me', 'test-init-data', 42))
-            .rejects.toMatchObject({ status: 401 });
+        const data = await fetchUserScopedJSONWithTelegramAuth('/api/me', 'test-init-data', 42);
+
+        expect(data.user?.telegram_id).toBe(777);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 });
