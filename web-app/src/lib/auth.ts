@@ -165,9 +165,18 @@ export async function fetchUserScopedJSONWithTelegramAuth<T extends { user?: { t
     }
 
     const actualTelegramID = data?.user?.telegram_id;
+    if (typeof actualTelegramID === 'number' && actualTelegramID === expectedTelegramID) {
+        return data;
+    }
+
     if (typeof actualTelegramID === 'number' && actualTelegramID !== expectedTelegramID) {
         clearTelegramSession();
         data = await fetchJSONWithTelegramAuth<T>(input, initData, init);
+    }
+
+    if (data?.user?.telegram_id !== expectedTelegramID) {
+        clearTelegramSession();
+        throw new APIError(401, 'Telegram session expired. Please reopen the app and try again.');
     }
 
     return data;

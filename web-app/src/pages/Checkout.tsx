@@ -208,7 +208,7 @@ export function Checkout() {
         } finally {
             setLoading(false);
         }
-    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, planIndex, t]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, planIndex, t, tg]);
 
     useEffect(() => {
         void loadCheckoutData();

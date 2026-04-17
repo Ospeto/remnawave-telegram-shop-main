@@ -6,7 +6,7 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth } from '../lib/auth';
 
 interface WalletData {
   balance: number;
@@ -62,6 +62,8 @@ export function Wallet() {
     setAuthExpired(false);
 
     try {
+      await fetchUserScopedJSONWithTelegramAuth('/api/me', initData, tg?.initDataUnsafe?.user?.id);
+
       const [walletData, historyData, referralResult] = await Promise.all([
         fetchJSONWithTelegramAuth<WalletData>('/api/wallet', initData),
         fetchJSONWithTelegramAuth<Transaction[]>('/api/wallet/history?limit=10', initData),
@@ -94,7 +96,7 @@ export function Wallet() {
     } finally {
       setLoading(false);
     }
-  }, [initData, t]);
+  }, [initData, t, tg]);
 
   useEffect(() => {
     if (!tg) return;

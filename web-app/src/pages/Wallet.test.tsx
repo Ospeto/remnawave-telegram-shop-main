@@ -43,6 +43,18 @@ describe('Wallet', () => {
     it('renders wallet data and shows a referral warning when referrals fail to load', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_admin: true,
+                });
+            }
             if (url === '/api/wallet') {
                 return jsonResponse({
                     balance: 5000,
@@ -73,11 +85,24 @@ describe('Wallet', () => {
         expect(screen.getByRole('button', { name: '+ Top Up Balance' })).toBeTruthy();
         expect(screen.getByText('Referral activity is temporarily unavailable. Your totals are still shown above.')).toBeTruthy();
         expect(screen.getByText(/\+2,500/)).toBeTruthy();
+        expect(fetchMock).toHaveBeenCalledWith('/api/me', expect.anything());
     });
 
     it('shows a referral totals warning when wallet stats are unavailable', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_admin: false,
+                });
+            }
             if (url === '/api/wallet') {
                 return jsonResponse({
                     balance: 5000,

@@ -89,7 +89,7 @@ export function Plans() {
         } finally {
             setLoading(false);
         }
-    }, [initData, isWalletTopup, t]);
+    }, [initData, isWalletTopup, t, tg]);
 
     useEffect(() => {
         void loadPlans();

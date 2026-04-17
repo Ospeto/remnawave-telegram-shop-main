@@ -86,7 +86,7 @@ export function AdminPromos() {
         } finally {
             setLoading(false);
         }
-    }, [initData, t]);
+    }, [initData, t, tg]);
 
     useEffect(() => {
         if (!tg) return;
