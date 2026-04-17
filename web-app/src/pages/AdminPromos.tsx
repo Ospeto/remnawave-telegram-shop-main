@@ -190,6 +190,28 @@ export function AdminPromos() {
         return t('admin_promos_status_active');
     };
 
+    const promoTone = (promo: AdminPromo) => {
+        if (promo.status === 'active') {
+            return {
+                color: 'var(--color-success)',
+                background: 'rgba(52, 199, 89, 0.12)',
+                border: 'rgba(52, 199, 89, 0.22)',
+            };
+        }
+        if (promo.status === 'expired') {
+            return {
+                color: 'var(--tg-hint)',
+                background: 'rgba(255, 255, 255, 0.06)',
+                border: 'var(--card-border)',
+            };
+        }
+        return {
+            color: '#ff9f0a',
+            background: 'rgba(255, 159, 10, 0.12)',
+            border: 'rgba(255, 159, 10, 0.24)',
+        };
+    };
+
     if (loading) return <LoadingScreen message={t('admin_promos_loading')} />;
     if (authExpired) {
         return (
@@ -225,62 +247,103 @@ export function AdminPromos() {
         );
     }
 
-    return (
-        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
-            <div style={{ textAlign: 'center', padding: '8px 0' }}>
-                <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>{t('admin_promos_title')}</h1>
-                <p className="text-hint" style={{ fontSize: 12, margin: '6px 0 0' }}>{t('admin_promos_subtitle')}</p>
-            </div>
+    const activeCount = promos.filter((promo) => promoStatusLabel(promo) === t('admin_promos_status_active')).length;
+    const inactiveCount = promos.length - activeCount;
 
-            <form className="glass-card" style={{ padding: 16, display: 'grid', gap: 12 }} onSubmit={(event) => { playClick(); void handleCreatePromo(event); }}>
-                <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{t('admin_promos_code_label')}</span>
-                    <input
-                        type="text"
-                        value={form.code}
-                        onChange={(event) => setForm((prev) => ({ ...prev, code: event.target.value }))}
-                        required
-                        aria-label={t('admin_promos_code_label')}
-                    />
-                </label>
-                <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{t('admin_promos_discount_label')}</span>
-                    <input
-                        type="number"
-                        min="1"
-                        max="100"
-                        value={form.discountPercent}
-                        onChange={(event) => setForm((prev) => ({ ...prev, discountPercent: event.target.value }))}
-                        required
-                        aria-label={t('admin_promos_discount_label')}
-                    />
-                </label>
-                <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{t('admin_promos_days_label')}</span>
-                    <input
-                        type="number"
-                        min="1"
-                        value={form.validDays}
-                        onChange={(event) => setForm((prev) => ({ ...prev, validDays: event.target.value }))}
-                        required
-                        aria-label={t('admin_promos_days_label')}
-                    />
-                </label>
-                <label style={{ display: 'grid', gap: 6 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{t('admin_promos_uses_label')}</span>
-                    <input
-                        type="number"
-                        min="1"
-                        value={form.maxUses}
-                        onChange={(event) => setForm((prev) => ({ ...prev, maxUses: event.target.value }))}
-                        required
-                        aria-label={t('admin_promos_uses_label')}
-                    />
-                </label>
-                <button className="btn-primary" type="submit" disabled={submitting}>
-                    {submitting ? t('admin_promos_creating') : t('admin_promos_create')}
-                </button>
-            </form>
+    return (
+        <div className="animate-fade-in admin-promo-shell">
+            <section className="digital-card admin-promo-hero">
+                <div style={{ position: 'relative', zIndex: 1, display: 'grid', gap: 18 }}>
+                    <div style={{ display: 'grid', gap: 6 }}>
+                        <h1 style={{ fontSize: 22, fontWeight: 800, margin: 0, color: 'var(--digital-card-text)' }}>{t('admin_promos_title')}</h1>
+                        <p style={{ fontSize: 13, lineHeight: 1.5, margin: 0, color: 'var(--digital-card-hint)' }}>
+                            {t('admin_promos_subtitle')}
+                        </p>
+                    </div>
+
+                    <div className="admin-promo-stat-grid">
+                        <div className="admin-promo-stat-card">
+                            <span className="admin-promo-stat-label">{t('admin_promos_total_label')}</span>
+                            <strong className="admin-promo-stat-value">{promos.length}</strong>
+                        </div>
+                        <div className="admin-promo-stat-card">
+                            <span className="admin-promo-stat-label">{t('admin_promos_active_label')}</span>
+                            <strong className="admin-promo-stat-value">{activeCount}</strong>
+                        </div>
+                        <div className="admin-promo-stat-card">
+                            <span className="admin-promo-stat-label">{t('admin_promos_inactive_label')}</span>
+                            <strong className="admin-promo-stat-value">{inactiveCount}</strong>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section className="glass-card admin-promo-panel">
+                <div style={{ display: 'grid', gap: 4 }}>
+                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{t('admin_promos_create')}</h2>
+                    <p className="text-hint" style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>
+                        {t('admin_promos_form_caption')}
+                    </p>
+                </div>
+
+                <form className="admin-promo-form" onSubmit={(event) => { playClick(); void handleCreatePromo(event); }}>
+                    <label className="admin-promo-field admin-promo-field-full">
+                        <span className="admin-promo-label">{t('admin_promos_code_label')}</span>
+                        <input
+                            className="admin-promo-input"
+                            type="text"
+                            value={form.code}
+                            onChange={(event) => setForm((prev) => ({ ...prev, code: event.target.value }))}
+                            required
+                            aria-label={t('admin_promos_code_label')}
+                            placeholder="NEWYEAR30"
+                        />
+                    </label>
+                    <label className="admin-promo-field">
+                        <span className="admin-promo-label">{t('admin_promos_discount_label')}</span>
+                        <input
+                            className="admin-promo-input"
+                            type="number"
+                            min="1"
+                            max="100"
+                            value={form.discountPercent}
+                            onChange={(event) => setForm((prev) => ({ ...prev, discountPercent: event.target.value }))}
+                            required
+                            aria-label={t('admin_promos_discount_label')}
+                            placeholder="30"
+                        />
+                    </label>
+                    <label className="admin-promo-field">
+                        <span className="admin-promo-label">{t('admin_promos_days_label')}</span>
+                        <input
+                            className="admin-promo-input"
+                            type="number"
+                            min="1"
+                            value={form.validDays}
+                            onChange={(event) => setForm((prev) => ({ ...prev, validDays: event.target.value }))}
+                            required
+                            aria-label={t('admin_promos_days_label')}
+                            placeholder="7"
+                        />
+                    </label>
+                    <label className="admin-promo-field">
+                        <span className="admin-promo-label">{t('admin_promos_uses_label')}</span>
+                        <input
+                            className="admin-promo-input"
+                            type="number"
+                            min="1"
+                            value={form.maxUses}
+                            onChange={(event) => setForm((prev) => ({ ...prev, maxUses: event.target.value }))}
+                            required
+                            aria-label={t('admin_promos_uses_label')}
+                            placeholder="100"
+                        />
+                    </label>
+                    <button className="btn-primary admin-promo-submit" type="submit" disabled={submitting}>
+                        {submitting ? t('admin_promos_creating') : t('admin_promos_create')}
+                    </button>
+                </form>
+            </section>
 
             {actionSuccess && (
                 <div role="status" className="glass-card" style={{ padding: 12, color: 'var(--color-success)' }}>
@@ -293,24 +356,51 @@ export function AdminPromos() {
                 </div>
             )}
 
-            <div style={{ display: 'grid', gap: 12 }}>
+            <section style={{ display: 'grid', gap: 12 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                    <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>{t('admin_promos_list_title')}</h2>
+                    <p className="text-hint" style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>
+                        {t('admin_promos_list_subtitle')}
+                    </p>
+                </div>
+
                 {promos.length === 0 && (
-                    <div className="glass-card" style={{ padding: 16 }}>
-                        {t('admin_promos_empty')}
+                    <div className="glass-card" style={{ padding: 18, display: 'grid', gap: 6 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700 }}>{t('admin_promos_empty')}</div>
+                        <div className="text-hint" style={{ fontSize: 13, lineHeight: 1.5 }}>{t('admin_promos_empty_detail')}</div>
                     </div>
                 )}
 
                 {promos.map((promo) => (
-                    <div key={promo.code} className="glass-card" style={{ padding: 16, display: 'grid', gap: 10 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center' }}>
-                            <div>
-                                <div style={{ fontSize: 16, fontWeight: 700 }}>{promo.code}</div>
-                                <div className="text-hint" style={{ fontSize: 12 }}>
-                                    {promo.discount_percent}% off · {promoStatusLabel(promo)}
+                    <div key={promo.code} className="glass-card admin-promo-list-card">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                            <div style={{ display: 'grid', gap: 8 }}>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                                    <div style={{ fontSize: 17, fontWeight: 800, letterSpacing: '0.2px' }}>{promo.code}</div>
+                                    <span
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            borderRadius: 999,
+                                            padding: '6px 10px',
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            border: `1px solid ${promoTone(promo).border}`,
+                                            background: promoTone(promo).background,
+                                            color: promoTone(promo).color,
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.35px',
+                                        }}
+                                    >
+                                        {promoStatusLabel(promo)}
+                                    </span>
+                                </div>
+                                <div className="text-hint" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                                    {promo.discount_percent}% • {promo.used_count}/{promo.max_uses}
                                 </div>
                             </div>
                             <button
-                                className="btn-secondary"
+                                className="btn-danger"
                                 type="button"
                                 onClick={() => { playClick(); void handleDeletePromo(promo.code); }}
                                 disabled={deletingCode === promo.code}
@@ -319,16 +409,30 @@ export function AdminPromos() {
                                 {deletingCode === promo.code ? t('admin_promos_deleting') : t('admin_promos_delete')}
                             </button>
                         </div>
-                        <div className="text-hint" style={{ fontSize: 12 }}>
-                            {promo.used_count}/{promo.max_uses} uses · {new Date(promo.valid_until).toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                            })}
+
+                        <div className="admin-promo-metrics">
+                            <div className="admin-promo-metric-card">
+                                <span className="admin-promo-metric-label">{t('admin_promos_discount_metric')}</span>
+                                <strong className="admin-promo-metric-value">{promo.discount_percent}%</strong>
+                            </div>
+                            <div className="admin-promo-metric-card">
+                                <span className="admin-promo-metric-label">{t('admin_promos_usage_metric')}</span>
+                                <strong className="admin-promo-metric-value">{promo.used_count}/{promo.max_uses}</strong>
+                            </div>
+                            <div className="admin-promo-metric-card">
+                                <span className="admin-promo-metric-label">{t('admin_promos_expiry_metric')}</span>
+                                <strong className="admin-promo-metric-value">
+                                    {new Date(promo.valid_until).toLocaleDateString(language === 'en' ? 'en-US' : 'my-MM', {
+                                        year: 'numeric',
+                                        month: 'short',
+                                        day: 'numeric',
+                                    })}
+                                </strong>
+                            </div>
                         </div>
                     </div>
                 ))}
-            </div>
+            </section>
         </div>
     );
 }

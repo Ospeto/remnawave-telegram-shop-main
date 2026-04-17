@@ -202,6 +202,11 @@ func isPromoNotFoundError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -284,6 +289,7 @@ type APIHandler struct {
 	listPromoCodes             func(context.Context) ([]database.PromoCode, error)
 	createPromoCode            func(context.Context, string, int, int, time.Time) error
 	deletePromoCode            func(context.Context, string) error
+	retirePromoCode            func(context.Context, string, time.Time) error
 	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys            func(context.Context, int64, int64)
 	isAdminTelegramID          func(int64) bool
@@ -354,12 +360,23 @@ func (h *APIHandler) savePromoCode(ctx context.Context, code string, discount, m
 
 func (h *APIHandler) removePromoCode(ctx context.Context, code string) error {
 	if h.deletePromoCode != nil {
-		return h.deletePromoCode(ctx, code)
+		err := h.deletePromoCode(ctx, code)
+		if err == nil || !isForeignKeyViolation(err) {
+			return err
+		}
+		if h.retirePromoCode == nil {
+			return err
+		}
+		return h.retirePromoCode(ctx, code, h.currentTime().Add(-time.Second))
 	}
 	if h.promoCodeRepository == nil {
 		return errors.New("promo repository is unavailable")
 	}
-	return h.promoCodeRepository.Delete(ctx, code)
+	err := h.promoCodeRepository.Delete(ctx, code)
+	if err == nil || !isForeignKeyViolation(err) {
+		return err
+	}
+	return h.promoCodeRepository.Retire(ctx, code, h.currentTime().Add(-time.Second))
 }
 
 func (h *APIHandler) cachedSyncStats(customerID int64) ([]syncKeyStats, bool) {
@@ -915,12 +932,6 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		resp.ReferralCount = &referralCount
 		resp.ReferralEarned = &referralEarned
 	}
-
-	slog.Info("Resolved /api/me session",
-		"telegram_id", telegramID,
-		"is_admin", resp.IsAdmin,
-		"customer_id", customer.ID,
-	)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)

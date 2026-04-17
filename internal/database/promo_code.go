@@ -263,3 +263,25 @@ func (r *PromoCodeRepository) Delete(ctx context.Context, code string) error {
 	}
 	return nil
 }
+
+// Retire deactivates a promo code without removing historical purchase references.
+func (r *PromoCodeRepository) Retire(ctx context.Context, code string, retiredAt time.Time) error {
+	buildUpdate := sq.Update("promo_codes").
+		Set("valid_until", retiredAt.UTC()).
+		Where(sq.Eq{"code": code}).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildUpdate.ToSql()
+	if err != nil {
+		return fmt.Errorf("failed to build retire query: %w", err)
+	}
+
+	result, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return fmt.Errorf("failed to retire promo code: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("promo code '%s' not found", code)
+	}
+	return nil
+}

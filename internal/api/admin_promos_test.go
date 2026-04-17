@@ -206,6 +206,40 @@ func TestDeleteAdminPromoDeletesByCode(t *testing.T) {
 	}
 }
 
+func TestDeleteAdminPromoRetiresReferencedPromoCode(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.now = func() time.Time {
+		return time.Date(2026, 4, 18, 9, 30, 0, 0, time.UTC)
+	}
+	handler.deletePromoCode = func(_ context.Context, code string) error {
+		return fmt.Errorf("failed to delete promo code: %w", &pgconn.PgError{Code: "23503"})
+	}
+
+	retiredCode := ""
+	var retiredAt time.Time
+	handler.retirePromoCode = func(_ context.Context, code string, at time.Time) error {
+		retiredCode = code
+		retiredAt = at
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/admin/promos/SALE50", nil)
+	rec := httptest.NewRecorder()
+
+	handler.DeleteAdminPromo(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DeleteAdminPromo() status = %d, want %d body=%q", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+	if retiredCode != "SALE50" {
+		t.Fatalf("DeleteAdminPromo() retired code = %q, want %q", retiredCode, "SALE50")
+	}
+	wantRetiredAt := handler.currentTime().Add(-time.Second)
+	if !retiredAt.Equal(wantRetiredAt) {
+		t.Fatalf("DeleteAdminPromo() retiredAt = %v, want %v", retiredAt, wantRetiredAt)
+	}
+}
+
 func TestDeleteAdminPromoReturnsInternalServerErrorForRepositoryFailure(t *testing.T) {
 	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.deletePromoCode = func(_ context.Context, code string) error {
