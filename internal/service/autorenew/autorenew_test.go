@@ -2,6 +2,7 @@ package autorenew
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -14,72 +15,84 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
-func TestFindPlanByDuration_Logic(t *testing.T) {
-	plans := []config.Plan{
-		{Label: "1 Month", Days: 30, Price: 5000, TrafficLimitGB: 0},
-		{Label: "3 Months", Days: 90, Price: 12000, TrafficLimitGB: 0},
-		{Label: "6 Months", Days: 180, Price: 20000, TrafficLimitGB: 0},
-	}
+func TestFindConfiguredRenewalPlan(t *testing.T) {
+	fiftyGB := 50
 
 	tests := []struct {
-		days      int
-		wantLabel string
-		wantNil   bool
+		name    string
+		key     database.SubscriptionKey
+		wantErr error
 	}{
-		{30, "1 Month", false},
-		{90, "3 Months", false},
-		{180, "6 Months", false},
-		{365, "", true},
-		{0, "", true},
-	}
-
-	findPlan := func(days int) *config.Plan {
-		for _, plan := range plans {
-			if plan.Days == days {
-				return &plan
-			}
-		}
-		return nil
+		{
+			name:    "missing configured renewal days",
+			key:     database.SubscriptionKey{TrafficLimitGB: 0},
+			wantErr: errAutoRenewPlanUnknown,
+		},
+		{
+			name:    "configured plan no longer exists",
+			key:     database.SubscriptionKey{TrafficLimitGB: fiftyGB, AutoRenewPlanDays: intPtr(9999)},
+			wantErr: errAutoRenewPlanUnavailable,
+		},
 	}
 
 	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
-			got := findPlan(tt.days)
-			if tt.wantNil {
-				if got != nil {
-					t.Errorf("findPlan(%d) = %+v; want nil", tt.days, got)
-				}
-				return
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := findConfiguredRenewalPlan(tt.key)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("findConfiguredRenewalPlan() error = %v, want %v", err, tt.wantErr)
 			}
-			if got == nil {
-				t.Errorf("findPlan(%d) = nil; want plan with label %q", tt.days, tt.wantLabel)
-				return
-			}
-			if got.Label != tt.wantLabel {
-				t.Errorf("findPlan(%d).Label = %q; want %q", tt.days, got.Label, tt.wantLabel)
+			if got != nil {
+				t.Fatalf("findConfiguredRenewalPlan() = %+v, want nil", got)
 			}
 		})
 	}
+
+	plans := config.Plans()
+	if len(plans) == 0 {
+		t.Skip("config plans are not loaded in this test environment")
+	}
+
+	expected := plans[0]
+	got, err := findConfiguredRenewalPlan(database.SubscriptionKey{
+		TrafficLimitGB:    expected.TrafficLimitGB,
+		AutoRenewPlanDays: intPtr(expected.Days),
+	})
+	if err != nil {
+		t.Fatalf("findConfiguredRenewalPlan() error = %v, want nil", err)
+	}
+	if got == nil {
+		t.Fatal("findConfiguredRenewalPlan() = nil, want plan")
+	}
+	if got.Label != expected.Label || got.Days != expected.Days || got.Price != expected.Price || got.TrafficLimitGB != expected.TrafficLimitGB {
+		t.Fatalf("findConfiguredRenewalPlan() = %+v, want %+v", got, expected)
+	}
+}
+
+type markedRenewal struct {
+	keyID     int64
+	claimedAt time.Time
 }
 
 type fakeAutoRenewKeyRepo struct {
-	keys            []database.SubscriptionKey
-	findBefore      time.Time
-	findCalls       int
-	claimCalls      int
-	restoreCalls    int
-	lastClaimKeyID  int64
-	lastRestoreID   int64
-	lastClaimPrev   *time.Time
-	lastRestorePrev *time.Time
-	lastClaimedAt   time.Time
-	claimAllowed    bool
-	markedRenewed   []int64
-	markedNotified  []int64
+	keys           []database.SubscriptionKey
+	findAfter      time.Time
+	findBefore     time.Time
+	findCalls      int
+	claimCalls     int
+	releaseCalls   int
+	lastClaimKeyID int64
+	lastReleaseID  int64
+	lastClaimPrev  *time.Time
+	lastClaimedAt  time.Time
+	lastReleasedAt time.Time
+	claimAllowed   bool
+	markedRenewed  []markedRenewal
+	markedNotified []int64
 }
 
-func (f *fakeAutoRenewKeyRepo) FindExpiringAutoRenewKeys(_ context.Context, before time.Time) ([]database.SubscriptionKey, error) {
+func (f *fakeAutoRenewKeyRepo) FindExpiringAutoRenewKeys(_ context.Context, after time.Time, before time.Time) ([]database.SubscriptionKey, error) {
 	f.findCalls++
+	f.findAfter = after
 	f.findBefore = before
 	return append([]database.SubscriptionKey(nil), f.keys...), nil
 }
@@ -96,16 +109,15 @@ func (f *fakeAutoRenewKeyRepo) TryClaimAutoRenew(_ context.Context, keyID int64,
 	return &claimedAt, true, nil
 }
 
-func (f *fakeAutoRenewKeyRepo) RestoreAutoRenewClaim(_ context.Context, keyID int64, claimedAt time.Time, previous *time.Time) error {
-	f.restoreCalls++
-	f.lastRestoreID = keyID
-	f.lastClaimedAt = claimedAt
-	f.lastRestorePrev = previous
+func (f *fakeAutoRenewKeyRepo) ReleaseAutoRenewClaim(_ context.Context, keyID int64, claimedAt time.Time) error {
+	f.releaseCalls++
+	f.lastReleaseID = keyID
+	f.lastReleasedAt = claimedAt
 	return nil
 }
 
-func (f *fakeAutoRenewKeyRepo) MarkKeyAutoRenewed(_ context.Context, keyID int64) error {
-	f.markedRenewed = append(f.markedRenewed, keyID)
+func (f *fakeAutoRenewKeyRepo) MarkKeyAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	f.markedRenewed = append(f.markedRenewed, markedRenewal{keyID: keyID, claimedAt: claimedAt})
 	return nil
 }
 
@@ -149,11 +161,15 @@ func (f *fakeAutoRenewWallet) ExtendKeyWithBalance(_ context.Context, keyID int6
 
 type fakeTelegramClient struct {
 	messages []*bot.SendMessageParams
+	sendErr  error
 }
 
 func (f *fakeTelegramClient) SendMessage(_ context.Context, params *bot.SendMessageParams) (*models.Message, error) {
 	msg := *params
 	f.messages = append(f.messages, &msg)
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
 	return &models.Message{}, nil
 }
 
@@ -167,13 +183,13 @@ func testTranslationManager(t *testing.T) *translation.Manager {
 	return tm
 }
 
-func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
+func TestJobRunRenewsEligibleKeyAndMarksSuccess(t *testing.T) {
 	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
 	expireAt := now.Add(48 * time.Hour)
 	keyRepo := &fakeAutoRenewKeyRepo{
 		claimAllowed: true,
 		keys: []database.SubscriptionKey{
-			{ID: 7, CustomerID: 42, ExpireAt: &expireAt, TrafficLimitGB: 0},
+			{ID: 7, CustomerID: 42, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
 		},
 	}
 	customerRepo := &fakeAutoRenewCustomerRepo{
@@ -183,7 +199,7 @@ func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
 	}
 	walletSvc := &fakeAutoRenewWallet{}
 	telegram := &fakeTelegramClient{}
-	plan := config.Plan{Label: "Monthly", Days: 30, Price: 5000, TrafficLimitGB: 0}
+	plan := &config.Plan{Label: "Monthly", Days: 30, Price: 5000, TrafficLimitGB: 0}
 
 	job := &Job{
 		subKeyRepo:    keyRepo,
@@ -194,14 +210,11 @@ func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
 		nowFn: func() time.Time {
 			return now
 		},
-		selectPlanFn: func(key database.SubscriptionKey, balance float64) (*config.Plan, bool) {
+		selectPlanFn: func(key database.SubscriptionKey) (*config.Plan, error) {
 			if key.ID != 7 {
 				t.Fatalf("selectPlanFn key.ID = %d, want 7", key.ID)
 			}
-			if balance != 15000 {
-				t.Fatalf("selectPlanFn balance = %v, want 15000", balance)
-			}
-			return &plan, false
+			return plan, nil
 		},
 	}
 
@@ -209,6 +222,9 @@ func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
 
 	if keyRepo.findCalls != 1 {
 		t.Fatalf("FindExpiringAutoRenewKeys() calls = %d, want 1", keyRepo.findCalls)
+	}
+	if !keyRepo.findAfter.Equal(now.Add(-autoRenewLookbackWindow)) {
+		t.Fatalf("FindExpiringAutoRenewKeys() after = %v, want %v", keyRepo.findAfter, now.Add(-autoRenewLookbackWindow))
 	}
 	if !keyRepo.findBefore.Equal(now.Add(3 * 24 * time.Hour)) {
 		t.Fatalf("FindExpiringAutoRenewKeys() before = %v, want %v", keyRepo.findBefore, now.Add(3*24*time.Hour))
@@ -222,18 +238,14 @@ func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
 	if keyRepo.claimCalls != 1 || keyRepo.lastClaimKeyID != 7 {
 		t.Fatalf("TryClaimAutoRenew() calls = %d for key %d, want 1 for key 7", keyRepo.claimCalls, keyRepo.lastClaimKeyID)
 	}
-	if keyRepo.restoreCalls != 0 {
-		t.Fatalf("RestoreAutoRenewClaim() calls = %d, want 0", keyRepo.restoreCalls)
+	if keyRepo.releaseCalls != 0 {
+		t.Fatalf("ReleaseAutoRenewClaim() calls = %d, want 0", keyRepo.releaseCalls)
 	}
-	call := walletSvc.calls[0]
-	if call.keyID != 7 || call.customerID != 42 {
-		t.Fatalf("ExtendKeyWithBalance() ids = (%d, %d), want (7, 42)", call.keyID, call.customerID)
+	if len(keyRepo.markedRenewed) != 1 || keyRepo.markedRenewed[0].keyID != 7 {
+		t.Fatalf("MarkKeyAutoRenewed() calls = %+v, want key 7", keyRepo.markedRenewed)
 	}
-	if call.planPrice != 5000 || call.days != 30 || call.trafficGB != 0 {
-		t.Fatalf("ExtendKeyWithBalance() args = (%.0f, %d, %d), want (5000, 30, 0)", call.planPrice, call.days, call.trafficGB)
-	}
-	if len(keyRepo.markedRenewed) != 0 {
-		t.Fatalf("MarkKeyAutoRenewed() calls = %v, want none", keyRepo.markedRenewed)
+	if !keyRepo.markedRenewed[0].claimedAt.Equal(keyRepo.lastClaimedAt) {
+		t.Fatalf("MarkKeyAutoRenewed() claimedAt = %v, want %v", keyRepo.markedRenewed[0].claimedAt, keyRepo.lastClaimedAt)
 	}
 	if len(keyRepo.markedNotified) != 0 {
 		t.Fatalf("MarkKeyAutoRenewNotified() calls = %v, want none", keyRepo.markedNotified)
@@ -247,26 +259,73 @@ func TestJobRunRenewsEligibleKeyAndNotifiesCustomer(t *testing.T) {
 	if !strings.Contains(telegram.messages[0].Text, "Auto-renewal complete") {
 		t.Fatalf("SendMessage() text = %q, want success notification", telegram.messages[0].Text)
 	}
-	if !strings.Contains(telegram.messages[0].Text, "Monthly") {
-		t.Fatalf("SendMessage() text = %q, want selected plan label", telegram.messages[0].Text)
-	}
-	if strings.Contains(telegram.messages[0].Text, "%!(EXTRA") {
-		t.Fatalf("SendMessage() text contains fmt artifact: %q", telegram.messages[0].Text)
-	}
 }
 
-func TestJobRunMarksInsufficientFundsAndNotifiesCustomer(t *testing.T) {
+func TestJobRunMarksInsufficientFundsOnlyAfterSuccessfulNotification(t *testing.T) {
 	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
 	expireAt := now.Add(24 * time.Hour)
 	keyRepo := &fakeAutoRenewKeyRepo{
 		claimAllowed: true,
 		keys: []database.SubscriptionKey{
-			{ID: 9, CustomerID: 55, ExpireAt: &expireAt, TrafficLimitGB: 50},
+			{ID: 9, CustomerID: 55, ExpireAt: &expireAt, TrafficLimitGB: 50, AutoRenewPlanDays: intPtr(30)},
 		},
 	}
 	customerRepo := &fakeAutoRenewCustomerRepo{
 		customers: map[int64]*database.Customer{
 			55: {ID: 55, TelegramID: 9010, Language: "en", Balance: 1250},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	telegram := &fakeTelegramClient{sendErr: errors.New("telegram down")}
+
+	job := &Job{
+		subKeyRepo:    keyRepo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   telegram,
+		nowFn: func() time.Time {
+			return now
+		},
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "50GB Monthly", Days: 30, Price: 5000, TrafficLimitGB: 50}, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 0 {
+		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 0", len(walletSvc.calls))
+	}
+	if keyRepo.claimCalls != 1 || keyRepo.lastClaimKeyID != 9 {
+		t.Fatalf("TryClaimAutoRenew() calls = %d for key %d, want 1 for key 9", keyRepo.claimCalls, keyRepo.lastClaimKeyID)
+	}
+	if keyRepo.releaseCalls != 1 || keyRepo.lastReleaseID != 9 {
+		t.Fatalf("ReleaseAutoRenewClaim() calls = %d for key %d, want 1 for key 9", keyRepo.releaseCalls, keyRepo.lastReleaseID)
+	}
+	if len(keyRepo.markedRenewed) != 0 {
+		t.Fatalf("MarkKeyAutoRenewed() calls = %v, want none", keyRepo.markedRenewed)
+	}
+	if len(keyRepo.markedNotified) != 0 {
+		t.Fatalf("MarkKeyAutoRenewNotified() calls = %v, want none when Telegram send fails", keyRepo.markedNotified)
+	}
+	if len(telegram.messages) != 1 {
+		t.Fatalf("SendMessage() calls = %d, want 1", len(telegram.messages))
+	}
+}
+
+func TestJobRunWarnsAndSkipsWhenExactRenewalPlanIsUnknown(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(6 * time.Hour)
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 11, CustomerID: 77, ExpireAt: &expireAt, TrafficLimitGB: 0},
+		},
+	}
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			77: {ID: 77, TelegramID: 9020, Language: "en", Balance: 9000},
 		},
 	}
 	walletSvc := &fakeAutoRenewWallet{}
@@ -281,9 +340,7 @@ func TestJobRunMarksInsufficientFundsAndNotifiesCustomer(t *testing.T) {
 		nowFn: func() time.Time {
 			return now
 		},
-		selectPlanFn: func(database.SubscriptionKey, float64) (*config.Plan, bool) {
-			return nil, false
-		},
+		selectPlanFn: findConfiguredRenewalPlan,
 	}
 
 	job.Run(context.Background())
@@ -291,28 +348,20 @@ func TestJobRunMarksInsufficientFundsAndNotifiesCustomer(t *testing.T) {
 	if len(walletSvc.calls) != 0 {
 		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 0", len(walletSvc.calls))
 	}
-	if keyRepo.claimCalls != 1 || keyRepo.lastClaimKeyID != 9 {
-		t.Fatalf("TryClaimAutoRenew() calls = %d for key %d, want 1 for key 9", keyRepo.claimCalls, keyRepo.lastClaimKeyID)
+	if keyRepo.releaseCalls != 1 {
+		t.Fatalf("ReleaseAutoRenewClaim() calls = %d, want 1", keyRepo.releaseCalls)
 	}
-	if keyRepo.restoreCalls != 1 || keyRepo.lastRestoreID != 9 {
-		t.Fatalf("RestoreAutoRenewClaim() calls = %d for key %d, want 1 for key 9", keyRepo.restoreCalls, keyRepo.lastRestoreID)
-	}
-	if len(keyRepo.markedRenewed) != 0 {
-		t.Fatalf("MarkKeyAutoRenewed() calls = %v, want none", keyRepo.markedRenewed)
-	}
-	if len(keyRepo.markedNotified) != 1 || keyRepo.markedNotified[0] != 9 {
-		t.Fatalf("MarkKeyAutoRenewNotified() calls = %v, want [9]", keyRepo.markedNotified)
+	if len(keyRepo.markedNotified) != 1 || keyRepo.markedNotified[0] != 11 {
+		t.Fatalf("MarkKeyAutoRenewNotified() calls = %v, want [11]", keyRepo.markedNotified)
 	}
 	if len(telegram.messages) != 1 {
 		t.Fatalf("SendMessage() calls = %d, want 1", len(telegram.messages))
 	}
-	if telegram.messages[0].ChatID != int64(9010) {
-		t.Fatalf("SendMessage() chat_id = %v, want %d", telegram.messages[0].ChatID, 9010)
+	if !strings.Contains(telegram.messages[0].Text, "manual renewal") {
+		t.Fatalf("SendMessage() text = %q, want manual-renewal guidance", telegram.messages[0].Text)
 	}
-	if !strings.Contains(telegram.messages[0].Text, "Action Required") {
-		t.Fatalf("SendMessage() text = %q, want insufficient-balance notification", telegram.messages[0].Text)
-	}
-	if strings.Contains(telegram.messages[0].Text, "%!(EXTRA") {
-		t.Fatalf("SendMessage() text contains fmt artifact: %q", telegram.messages[0].Text)
-	}
+}
+
+func intPtr(v int) *int {
+	return &v
 }

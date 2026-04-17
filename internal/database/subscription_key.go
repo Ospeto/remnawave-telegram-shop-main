@@ -26,6 +26,8 @@ type SubscriptionKey struct {
 	AutoRenew           bool       `db:"auto_renew"`
 	LastAutoRenewedAt   *time.Time `db:"last_auto_renewed_at"`
 	AutoRenewNotifiedAt *time.Time `db:"auto_renew_notified_at"`
+	AutoRenewPlanDays   *int       `db:"auto_renew_plan_days"`
+	AutoRenewClaimedAt  *time.Time `db:"auto_renew_claimed_at"`
 }
 
 type SubscriptionKeyRepository struct {
@@ -56,6 +58,7 @@ var subKeyColumns = []string{
 	"id", "customer_id", "remnawave_uuid", "username",
 	"subscription_url", "expire_at", "status", "created_at", "label",
 	"traffic_limit_gb", "auto_renew", "last_auto_renewed_at", "auto_renew_notified_at",
+	"auto_renew_plan_days", "auto_renew_claimed_at",
 }
 
 func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
@@ -64,6 +67,7 @@ func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -80,6 +84,7 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 		&k.ID, &k.CustomerID, &k.RemnawaveUUID, &k.Username,
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
+		&k.AutoRenewPlanDays, &k.AutoRenewClaimedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan subscription_key row: %w", err)
@@ -89,8 +94,8 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 
 func (r *SubscriptionKeyRepository) Create(ctx context.Context, key *SubscriptionKey) (int64, error) {
 	query := sq.Insert("subscription_key").
-		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb").
-		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB).
+		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb", "auto_renew_plan_days").
+		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB, key.AutoRenewPlanDays).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -240,16 +245,16 @@ func (r *SubscriptionKeyRepository) SetAutoRenew(ctx context.Context, keyID int6
 }
 
 // FindExpiringAutoRenewKeys returns all active keys with auto_renew=true
-// whose expire_at is between now and 'before' (e.g. now+3days).
+// whose expire_at is between 'after' and 'before'.
 // Used exclusively by the auto-renew cron job.
-func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, before time.Time) ([]SubscriptionKey, error) {
+func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]SubscriptionKey, error) {
 	query := sq.Select(subKeyColumns...).
 		From("subscription_key").
 		Where(sq.And{
 			sq.Eq{"auto_renew": true},
 			sq.Eq{"status": "active"},
 			sq.NotEq{"expire_at": nil},
-			sq.Gt{"expire_at": time.Now()},
+			sq.Gt{"expire_at": after},
 			sq.LtOrEq{"expire_at": before},
 		}).
 		PlaceholderFormat(sq.Dollar)
@@ -277,18 +282,20 @@ func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Contex
 }
 
 // TryClaimAutoRenew atomically claims a key for processing by setting
-// last_auto_renewed_at=NOW() only if it still has the expected previous value.
+// auto_renew_claimed_at=NOW() only if it still has the expected successful
+// renewal marker and is not already claimed.
 // Returns (claimedAt, true, nil) when claim succeeds.
 func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error) {
 	var claimedAt time.Time
 	err := r.pool.QueryRow(ctx, `
 		UPDATE subscription_key
-		SET last_auto_renewed_at = NOW()
+		SET auto_renew_claimed_at = NOW()
 		WHERE id = $1
 		  AND auto_renew = TRUE
 		  AND status = 'active'
 		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
-		RETURNING last_auto_renewed_at
+		  AND auto_renew_claimed_at IS NULL
+		RETURNING auto_renew_claimed_at
 	`, keyID, expectedLast).Scan(&claimedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -299,16 +306,16 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID
 	return &claimedAt, true, nil
 }
 
-// RestoreAutoRenewClaim rolls back a previous claim when renewal fails.
-// It only restores if the row still has the claim timestamp we set.
-func (r *SubscriptionKeyRepository) RestoreAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time, previous *time.Time) error {
+// ReleaseAutoRenewClaim clears an in-flight claim after a failed attempt.
+// It only releases the claim if this worker still owns it.
+func (r *SubscriptionKeyRepository) ReleaseAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE subscription_key
-		SET last_auto_renewed_at = $1
-		WHERE id = $2 AND last_auto_renewed_at = $3
-	`, previous, keyID, claimedAt)
+		SET auto_renew_claimed_at = NULL
+		WHERE id = $1 AND auto_renew_claimed_at = $2
+	`, keyID, claimedAt)
 	if err != nil {
-		return fmt.Errorf("failed to restore auto-renew claim: %w", err)
+		return fmt.Errorf("failed to release auto-renew claim: %w", err)
 	}
 	return nil
 }
@@ -347,14 +354,21 @@ func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startD
 	return keys, rows.Err()
 }
 
-// MarkKeyAutoRenewed stamps last_auto_renewed_at = now to prevent double-charge
-// if the cron fires twice before the subscription is actually extended.
-func (r *SubscriptionKeyRepository) MarkKeyAutoRenewed(ctx context.Context, keyID int64) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE subscription_key SET last_auto_renewed_at = NOW() WHERE id = $1`,
-		keyID)
+// MarkKeyAutoRenewed stamps the successful renewal marker and clears the
+// transient claim so future runs can safely continue from the new state.
+func (r *SubscriptionKeyRepository) MarkKeyAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE subscription_key
+		 SET last_auto_renewed_at = NOW(),
+		     auto_renew_claimed_at = NULL,
+		     auto_renew_notified_at = NULL
+		 WHERE id = $1 AND auto_renew_claimed_at = $2`,
+		keyID, claimedAt)
 	if err != nil {
 		return fmt.Errorf("failed to mark key auto renewed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("key %d auto-renew claim was lost before finalization", keyID)
 	}
 	return nil
 }
@@ -367,6 +381,19 @@ func (r *SubscriptionKeyRepository) MarkKeyAutoRenewNotified(ctx context.Context
 		keyID)
 	if err != nil {
 		return fmt.Errorf("failed to mark key auto renew notified: %w", err)
+	}
+	return nil
+}
+
+func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, trafficLimitGB int) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE subscription_key
+		 SET auto_renew_plan_days = $1,
+		     traffic_limit_gb = $2
+		 WHERE id = $3`,
+		days, trafficLimitGB, keyID)
+	if err != nil {
+		return fmt.Errorf("failed to update auto-renew plan: %w", err)
 	}
 	return nil
 }

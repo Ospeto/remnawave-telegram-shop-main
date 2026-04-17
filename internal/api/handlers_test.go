@@ -168,3 +168,18 @@ func TestWriteSanitizedErrorHidesWrappedDetails(t *testing.T) {
 		t.Fatal("writeSanitizedError() leaked wrapped error details")
 	}
 }
+
+func TestUpdateAutoRenewReturnsGone(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/wallet/autorenew", strings.NewReader(`{"enabled":true,"duration":30}`))
+	rec := httptest.NewRecorder()
+
+	handler.UpdateAutoRenew(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("UpdateAutoRenew() status = %d, want %d", rec.Code, http.StatusGone)
+	}
+	if !strings.Contains(rec.Body.String(), "Customer-wide auto-renew has been removed") {
+		t.Fatalf("UpdateAutoRenew() body = %q, want deprecation message", rec.Body.String())
+	}
+}

@@ -791,6 +791,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			if err := s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl); err != nil {
 				slog.Error("Failed to update subscription URL (non-fatal)", "key_id", existingKey.ID, "error", err)
 			}
+			if err := s.subKeyRepo.UpdateAutoRenewPlan(ctx, existingKey.ID, purchase.Days, purchase.TrafficLimitGB); err != nil {
+				slog.Error("Failed to update key renewal plan (non-fatal)", "key_id", existingKey.ID, "error", err)
+			}
 		}
 
 		if err := s.syncCustomerCanonicalSubscriptionState(ctx, customer.ID, remnawaveUser.SubscriptionUrl, remnawaveUser.ExpireAt); err != nil {
@@ -834,6 +837,10 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				Status:          "active",
 				Label:           label,
 				TrafficLimitGB:  purchase.TrafficLimitGB,
+				AutoRenewPlanDays: func() *int {
+					days := purchase.Days
+					return &days
+				}(),
 			})
 			if err != nil {
 				slog.Error("CRITICAL: Failed to save subscription key to DB. Key EXISTS on Remnawave but NOT in local DB.",

@@ -2,6 +2,7 @@ package wallet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
@@ -21,6 +22,8 @@ type WalletService struct {
 	subKeyRepo         *database.SubscriptionKeyRepository
 	walletTxRepo       *database.WalletTransactionRepository
 }
+
+var ErrAutoRenewPlanUnknown = errors.New("auto-renew plan is not configured for this key yet")
 
 func NewWalletService(
 	paymentService *payment.PaymentService,
@@ -170,6 +173,18 @@ func (s *WalletService) GetAutoRenewStatus(ctx context.Context, customerID int64
 // SetKeyAutoRenew toggles auto-renew for a specific subscription key.
 // Ownership is validated inside the repository (customerID must match key.customer_id).
 func (s *WalletService) SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error {
+	if enabled {
+		key, err := s.subKeyRepo.FindByID(ctx, keyID)
+		if err != nil {
+			return err
+		}
+		if key == nil || key.CustomerID != customerID {
+			return fmt.Errorf("key %d not found or not owned by this customer", keyID)
+		}
+		if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 {
+			return ErrAutoRenewPlanUnknown
+		}
+	}
 	return s.subKeyRepo.SetAutoRenew(ctx, keyID, customerID, enabled)
 }
 

@@ -56,6 +56,8 @@
   "auto_renew_insufficient_balance": "⚠️ Not enough wallet balance for auto-renewal. Please top up to stay connected.",
   "auto_renew_fallback_detail": "🛡️ <b>Wavy Shield: You're still online!</b>\n\nYour balance was low for a full renewal, so we auto-renewed you on the <b>Saver Plan</b> to keep you connected.\n\n✅ Internet: <b>Connected</b>\n📅 Extended by: <b>%d days</b>\n💰 Cost: <b>%d MMK</b>\n\n<i>You can upgrade your plan anytime in the app.</i>",
   "auto_renew_insufficient_balance_detail": "🛑 <b>Action Required: Service Paused</b>\n\nWe tried to auto-renew your key, but your wallet needs a top-up.\n<b>Shortfall:</b> %d MMK\n\n👉 <b>Tap here to top up and reconnect instantly</b>\n<i>(Your key settings are saved for 24 hours)</i>",
+  "auto_renew_plan_unconfigured_detail": "⚠️ <b>Auto-renew needs one manual renewal first</b>\n\nWe could not confirm the exact plan for this key, so auto-renew was skipped to avoid charging the wrong amount.\n\n👉 Please renew this key manually once in the app, then turn auto-renew back on.",
+  "auto_renew_plan_unavailable_detail": "⚠️ <b>Your saved auto-renew plan is no longer available</b>\n\nWe skipped auto-renew for this key to avoid changing your plan automatically.\n\n👉 Please renew manually and choose a new plan in the app.",
   "wallet_empty_title": "No Transactions Yet",
   "wallet_empty_desc": "Your transaction history will appear here after your first top-up or purchase.",
   "home_empty_title": "Ready to Connect?",

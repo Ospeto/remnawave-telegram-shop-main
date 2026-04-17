@@ -7,8 +7,8 @@
 // wallet balance.
 //
 // Safety guarantees:
-//   - Idempotency: last_auto_renewed_at is stamped on each key after renewal;
-//     the same key cannot be charged twice in one expiry cycle.
+//   - Idempotency: last_auto_renewed_at is stamped only after a successful
+//     renewal; transient claims are tracked separately.
 //   - 24h notification throttle: low-balance warnings are sent at most once
 //     per day via auto_renew_notified_at on the key.
 //   - Ownership: balance and key both belong to the same customer.
@@ -16,10 +16,10 @@ package autorenew
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
-	"sort"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -32,10 +32,10 @@ import (
 )
 
 type keyRepository interface {
-	FindExpiringAutoRenewKeys(ctx context.Context, before time.Time) ([]database.SubscriptionKey, error)
+	FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]database.SubscriptionKey, error)
 	TryClaimAutoRenew(ctx context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error)
-	RestoreAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time, previous *time.Time) error
-	MarkKeyAutoRenewed(ctx context.Context, keyID int64) error
+	ReleaseAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time) error
+	MarkKeyAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error
 	MarkKeyAutoRenewNotified(ctx context.Context, keyID int64) error
 }
 
@@ -63,8 +63,15 @@ type Job struct {
 	tm            textProvider
 	telegramBot   telegramClient
 	nowFn         func() time.Time
-	selectPlanFn  func(database.SubscriptionKey, float64) (*config.Plan, bool)
+	selectPlanFn  func(database.SubscriptionKey) (*config.Plan, error)
 }
+
+var (
+	errAutoRenewPlanUnknown     = errors.New("auto-renew plan is not configured")
+	errAutoRenewPlanUnavailable = errors.New("auto-renew plan is no longer available")
+)
+
+const autoRenewLookbackWindow = 2 * time.Hour
 
 // New creates a new AutoRenew Job.
 func New(
@@ -81,17 +88,19 @@ func New(
 		tm:            tm,
 		telegramBot:   b,
 		nowFn:         time.Now,
-		selectPlanFn:  findAffordablePlan,
+		selectPlanFn:  findConfiguredRenewalPlan,
 	}
 }
 
 // Run processes auto-renewals for all eligible subscription keys.
-// Called by the cron scheduler (daily at 9 AM).
+// Called by the cron scheduler.
 func (j *Job) Run(ctx context.Context) {
 	slog.Info("Auto-renew: per-key cron job started")
 
-	threeDaysFromNow := j.nowFn().Add(3 * 24 * time.Hour)
-	keys, err := j.subKeyRepo.FindExpiringAutoRenewKeys(ctx, threeDaysFromNow)
+	now := j.nowFn()
+	threeDaysFromNow := now.Add(3 * 24 * time.Hour)
+	lookbackStart := now.Add(-autoRenewLookbackWindow)
+	keys, err := j.subKeyRepo.FindExpiringAutoRenewKeys(ctx, lookbackStart, threeDaysFromNow)
 	if err != nil {
 		slog.Error("Auto-renew: error finding expiring keys", "error", err)
 		return
@@ -146,27 +155,33 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 			return
 		}
 		restoreCtx := context.WithoutCancel(ctx)
-		if err := j.subKeyRepo.RestoreAutoRenewClaim(restoreCtx, key.ID, *claimedAt, key.LastAutoRenewedAt); err != nil {
+		if err := j.subKeyRepo.ReleaseAutoRenewClaim(restoreCtx, key.ID, *claimedAt); err != nil {
 			log.Error("Auto-renew: failed to release claim after error", "error", err)
 		}
 	}()
 
-	// ── Find the best affordable plan ─────────────────────────────────────────
-	// findAffordablePlan prefers the most expensive plan the user can afford
-	// (best value), falling back to cheaper options of the same traffic type.
-	// Returns nil if no plan at all is affordable.
-	plan, isFallback := j.selectPlanFn(key, customer.Balance)
-	if plan == nil {
-		log.Warn("Auto-renew: insufficient balance for any plan",
-			"balance", customer.Balance, "key_traffic_gb", key.TrafficLimitGB)
-		j.handleInsufficientFunds(ctx, customer, &key, nil)
+	plan, err := j.selectPlanFn(key)
+	if err != nil {
+		log.Warn("Auto-renew: plan unavailable for exact renewal",
+			"reason", err.Error(),
+			"key_traffic_gb", key.TrafficLimitGB,
+			"renewal_days", key.AutoRenewPlanDays)
+		j.handleBlockedRenewal(ctx, customer, &key, j.blockedRenewalMessage(customer.Language, err))
+		return
+	}
+	if customer.Balance < float64(plan.Price) {
+		log.Warn("Auto-renew: insufficient balance for configured plan",
+			"balance", customer.Balance,
+			"plan_price", plan.Price,
+			"key_traffic_gb", key.TrafficLimitGB,
+			"renewal_days", plan.Days)
+		j.handleInsufficientFunds(ctx, customer, &key, plan)
 		return
 	}
 
 	log.Info("Auto-renew: selected plan",
 		"plan_label", plan.Label, "plan_days", plan.Days,
-		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB,
-		"is_fallback", isFallback)
+		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB)
 
 	// ── Extend the specific key ───────────────────────────────────────────────
 	err = j.walletService.ExtendKeyWithBalance(ctx, key.ID, customer.ID, float64(plan.Price), plan.Days, plan.TrafficLimitGB)
@@ -176,23 +191,19 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 			j.tm.GetText(customer.Language, "auto_renew_failed"))
 		return
 	}
+	if err := j.subKeyRepo.MarkKeyAutoRenewed(ctx, key.ID, *claimedAt); err != nil {
+		log.Error("Auto-renew: failed to mark renewal success", "error", err)
+		return
+	}
 	claimFinalized = true
 
-	log.Info("Auto-renew: key extended successfully", "is_fallback", isFallback)
+	log.Info("Auto-renew: key extended successfully")
 
-	if isFallback {
-		msg := fmt.Sprintf(
-			j.tm.GetText(customer.Language, "auto_renew_fallback_detail"),
-			plan.Days, plan.Price,
-		)
-		j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
-	} else {
-		msg := fmt.Sprintf(
-			j.tm.GetText(customer.Language, "auto_renew_success_detail"),
-			plan.Label, plan.Days, plan.Price,
-		)
-		j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
-	}
+	msg := fmt.Sprintf(
+		j.tm.GetText(customer.Language, "auto_renew_success_detail"),
+		plan.Label, plan.Days, plan.Price,
+	)
+	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
 }
 
 // handleInsufficientFunds sends a low-balance notification at most once per 24h.
@@ -205,12 +216,7 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 		return
 	}
 
-	var neededPrice int
-	if plan != nil {
-		neededPrice = plan.Price
-	} else {
-		neededPrice = minimumPlanPriceForKey(*key)
-	}
+	neededPrice := plan.Price
 	shortfall := 0
 	if deficit := float64(neededPrice) - customer.Balance; deficit > 0 {
 		shortfall = int(math.Ceil(deficit))
@@ -221,112 +227,64 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 		j.tm.GetText(customer.Language, "auto_renew_insufficient_balance_detail"),
 		shortfall,
 	)
-	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
+	j.handleBlockedRenewal(ctx, customer, key, msg)
+}
+
+func (j *Job) handleBlockedRenewal(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, message string) {
+	log := slog.With("key_id", key.ID, "customer_id", customer.ID)
+
+	if key.AutoRenewNotifiedAt != nil && j.nowFn().Sub(*key.AutoRenewNotifiedAt) < 24*time.Hour {
+		log.Info("Auto-renew: renewal warning recently sent — suppressing")
+		return
+	}
+
+	if err := j.sendMessage(ctx, customer.TelegramID, customer.Language, message); err != nil {
+		log.Error("Auto-renew: failed to send renewal warning", "error", err)
+		return
+	}
 
 	if err := j.subKeyRepo.MarkKeyAutoRenewNotified(ctx, key.ID); err != nil {
 		log.Error("Auto-renew: failed to stamp auto_renew_notified_at", "error", err)
 	}
 }
 
-// findAffordablePlan picks the best plan for renewal given the customer's balance.
-//
-// Strategy:
-//  1. Gather all plans with the same traffic type as the key
-//     (unlimited = traffic_limit_gb 0, limited = traffic_limit_gb > 0).
-//  2. Try to find the plan whose duration best matches the key's last purchase
-//     (longest duration the balance can afford that is >= remaining days, or
-//     simply the longest duration available if balance covers it).
-//  3. If balance cannot cover *any* same-type plan, return nil (caller notifies user).
-//  4. On tie, always prefer longer duration (better value for user).
-//
-// Returns:  (planToUse, isFallback)
-// isFallback=true means the original/preferred plan was too expensive and we
-// fell back to the cheapest affordable option.
-func findAffordablePlan(key database.SubscriptionKey, balance float64) (plan *config.Plan, isFallback bool) {
-	allPlans := config.Plans()
-	if len(allPlans) == 0 {
-		return nil, false
+func findConfiguredRenewalPlan(key database.SubscriptionKey) (*config.Plan, error) {
+	if key.AutoRenewPlanDays == nil || *key.AutoRenewPlanDays <= 0 {
+		return nil, errAutoRenewPlanUnknown
 	}
 
-	isUnlimited := key.TrafficLimitGB == 0
-
-	// Filter to same traffic type.
-	var sametype []config.Plan
-	for _, p := range allPlans {
-		if isUnlimited && p.TrafficLimitGB == 0 {
-			sametype = append(sametype, p)
-		} else if !isUnlimited && p.TrafficLimitGB > 0 {
-			sametype = append(sametype, p)
-		}
-	}
-	if len(sametype) == 0 {
-		// Fallback: if no matching traffic type plans exist, try any plan.
-		sametype = allPlans
-	}
-
-	// Sort by price descending so we try the most expensive affordable plan first.
-	// (Gives the user the best value — longest duration they can afford.)
-	sort.Slice(sametype, func(i, j int) bool { return sametype[i].Price > sametype[j].Price })
-
-	// Find the cheapest plan (for the hard fallback).
-	cheapest := sametype[len(sametype)-1]
-	for _, p := range sametype {
-		if p.Price < cheapest.Price {
-			cheapest = p
+	for _, plan := range config.Plans() {
+		if plan.Days == *key.AutoRenewPlanDays && plan.TrafficLimitGB == key.TrafficLimitGB {
+			planCopy := plan
+			return &planCopy, nil
 		}
 	}
 
-	// Walk from most expensive to cheapest and return the first one the user can afford.
-	for i, p := range sametype {
-		plan := p
-		if float64(plan.Price) <= balance {
-			isFallback = i == len(sametype)-1 && plan.Price == cheapest.Price && len(sametype) > 1
-			return &plan, isFallback
-		}
-	}
-
-	// Balance doesn't even cover the cheapest same-type plan.
-	return nil, false
+	return nil, errAutoRenewPlanUnavailable
 }
 
-func minimumPlanPriceForKey(key database.SubscriptionKey) int {
-	allPlans := config.Plans()
-	if len(allPlans) == 0 {
-		return config.LowestPlanPrice()
+func (j *Job) blockedRenewalMessage(lang string, err error) string {
+	switch {
+	case errors.Is(err, errAutoRenewPlanUnknown):
+		return j.tm.GetText(lang, "auto_renew_plan_unconfigured_detail")
+	case errors.Is(err, errAutoRenewPlanUnavailable):
+		return j.tm.GetText(lang, "auto_renew_plan_unavailable_detail")
+	default:
+		return j.tm.GetText(lang, "auto_renew_failed")
 	}
-
-	isUnlimited := key.TrafficLimitGB == 0
-	minPrice := 0
-	found := false
-
-	for _, plan := range allPlans {
-		if isUnlimited && plan.TrafficLimitGB != 0 {
-			continue
-		}
-		if !isUnlimited && plan.TrafficLimitGB == 0 {
-			continue
-		}
-		if !found || plan.Price < minPrice {
-			minPrice = plan.Price
-			found = true
-		}
-	}
-
-	if found {
-		return minPrice
-	}
-	return config.LowestPlanPrice()
 }
 
 // sendMessage is a best-effort Telegram notification helper.
-func (j *Job) sendMessage(ctx context.Context, chatID int64, _ string, text string) {
+func (j *Job) sendMessage(ctx context.Context, chatID int64, _ string, text string) error {
 	if j.telegramBot == nil {
-		return
+		return nil
 	}
 	if _, err := j.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
 	}); err != nil {
 		slog.Error("Auto-renew: failed to send notification", "chat_id", chatID, "error", err)
+		return err
 	}
+	return nil
 }

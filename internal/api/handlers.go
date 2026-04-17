@@ -11,6 +11,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
+	walletsvc "remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/translation"
 	"sort"
 	"strconv"
@@ -95,8 +96,6 @@ type WalletServiceInterface interface {
 	GetTransactionHistory(ctx context.Context, customerID int64, limit int) ([]database.WalletTransaction, error)
 	HasSufficientBalance(ctx context.Context, customerID int64, amount float64) (bool, error)
 	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
-	SetAutoRenew(ctx context.Context, customerID int64, enabled bool, duration int) error
-	GetAutoRenewStatus(ctx context.Context, customerID int64) (enabled bool, duration int, err error)
 	SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error
 }
 
@@ -1142,10 +1141,19 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autoRenew, autoRenewDuration, err := h.walletService.GetAutoRenewStatus(r.Context(), customer.ID)
-	if err != nil {
-		writeSanitizedError(w, http.StatusInternalServerError, "Failed to get auto-renew status", err)
-		return
+	autoRenew := false
+	if h.subKeyRepo != nil {
+		keys, err := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+		if err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to get auto-renew status", err)
+			return
+		}
+		for _, key := range keys {
+			if key.AutoRenew {
+				autoRenew = true
+				break
+			}
+		}
 	}
 
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
@@ -1154,7 +1162,7 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"balance":                    balance,
 		"currency":                   config.Currency(),
 		"auto_renew":                 autoRenew,
-		"auto_renew_duration":        autoRenewDuration,
+		"auto_renew_duration":        nil,
 		"bot_url":                    config.BotURL(),
 		"referral_bonus_amount":      payment.ReferralBonusAmount,
 		"referral_stats_unavailable": referralStatsUnavailable,
@@ -1213,54 +1221,7 @@ func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	var req struct {
-		Enabled  bool `json:"enabled"`
-		Duration int  `json:"duration"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Validate duration if enabled
-	if req.Enabled {
-		isValidDuration := false
-		for _, plan := range config.Plans() {
-			if plan.Days == req.Duration {
-				isValidDuration = true
-				break
-			}
-		}
-		if !isValidDuration {
-			http.Error(w, "Invalid auto-renew duration", http.StatusBadRequest)
-			return
-		}
-	}
-
-	if err := h.walletService.SetAutoRenew(r.Context(), customer.ID, req.Enabled, req.Duration); err != nil {
-		writeSanitizedError(w, http.StatusInternalServerError, "Failed to update auto-renew", err)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	http.Error(w, "Customer-wide auto-renew has been removed. Please enable auto-renew on a specific key from the home screen.", http.StatusGone)
 }
 
 // UpdateKeyAutoRenew toggles the auto_renew flag on a specific subscription key.
@@ -1303,6 +1264,10 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 
 	// SetKeyAutoRenew validates that key.customer_id == customer.ID internally.
 	if err := h.walletService.SetKeyAutoRenew(r.Context(), req.KeyID, customer.ID, req.Enabled); err != nil {
+		if errors.Is(err, walletsvc.ErrAutoRenewPlanUnknown) {
+			http.Error(w, "This key needs one manual renewal before auto-renew can be enabled.", http.StatusConflict)
+			return
+		}
 		writeSanitizedError(w, http.StatusBadRequest, "Failed to update key auto-renew", err)
 		return
 	}

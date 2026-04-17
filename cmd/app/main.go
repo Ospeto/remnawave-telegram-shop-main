@@ -211,7 +211,7 @@ func main() {
 	autoRenewCron := cron.New(
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
-	_, err = autoRenewCron.AddFunc("0 9 * * *", func() {
+	_, err = autoRenewCron.AddFunc("0 * * * *", func() {
 		runCronJob(ctx, "auto_renew", 2*time.Minute, func(cronCtx context.Context) {
 			autoRenewJob.Run(cronCtx)
 		})
