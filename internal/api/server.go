@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,14 +32,13 @@ const (
 )
 
 func requestFingerprint(r *http.Request) string {
-	// Do not bind initData to client IP. Users often change network/IP after
-	// connecting their VPN key, and strict IP binding causes false 401 replay
-	// rejections while the same Telegram session is still valid.
-	ua := strings.TrimSpace(r.UserAgent())
-	if ua == "" {
-		return "ua:unknown"
-	}
-	return "ua:" + ua
+	// Keep the bearer session stable across Telegram webview quirks. In
+	// production we've seen the Mini App present inconsistent request
+	// fingerprints across otherwise valid startup requests, which forces a
+	// session-expired loop on every open. We already validate signed initData
+	// during session exchange, so use a constant fingerprint here instead of a
+	// volatile transport hint.
+	return "telegram-webapp"
 }
 
 func isSupportedRedirectTarget(target string) bool {
@@ -333,6 +333,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 		session, err := authSessions.authenticate(r.Context(), token, requestFingerprint(r))
 		if err != nil {
+			slog.Warn("Rejected bearer auth session", "reason", err.Error(), "path", r.URL.Path)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

@@ -45,17 +45,20 @@ func TestGetIPIgnoresForwardedFor(t *testing.T) {
 	}
 }
 
-func TestRequestFingerprintIgnoresIPChanges(t *testing.T) {
+func TestRequestFingerprintIsStableAcrossRequests(t *testing.T) {
 	reqA := httptest.NewRequest("GET", "http://example.com/", nil)
 	reqA.RemoteAddr = "203.0.113.7:12345"
 	reqA.Header.Set("User-Agent", "TelegramBot (iOS)")
 
 	reqB := httptest.NewRequest("GET", "http://example.com/", nil)
 	reqB.RemoteAddr = "198.51.100.9:54321"
-	reqB.Header.Set("User-Agent", "TelegramBot (iOS)")
+	reqB.Header.Set("User-Agent", "TelegramBot (Android)")
 
 	if gotA, gotB := requestFingerprint(reqA), requestFingerprint(reqB); gotA != gotB {
-		t.Fatalf("requestFingerprint() should stay stable across IP changes, got %q vs %q", gotA, gotB)
+		t.Fatalf("requestFingerprint() should stay stable across Mini App requests, got %q vs %q", gotA, gotB)
+	}
+	if got := requestFingerprint(reqA); got != "telegram-webapp" {
+		t.Fatalf("requestFingerprint() = %q, want %q", got, "telegram-webapp")
 	}
 }
 
