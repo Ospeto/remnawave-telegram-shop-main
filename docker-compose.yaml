@@ -24,6 +24,8 @@ services:
 
   caddy:
     image: caddy:2-alpine
+    profiles:
+      - edge
     restart: unless-stopped
     ports:
       - "80:80"

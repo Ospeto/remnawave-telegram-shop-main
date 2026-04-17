@@ -265,18 +265,19 @@ func (g *dbInitDataExchangeGuard) consume(ctx context.Context, bindingKey string
 	return nil
 }
 
-func ConfigureStateStores(pool *pgxpool.Pool, signingSecret string) {
+func ConfigureStateStores(pool *pgxpool.Pool, signingSecret string) error {
 	secret := []byte(strings.TrimSpace(signingSecret))
 	if len(secret) == 0 {
-		secret = []byte("wavy-dev-state-secret")
+		return fmt.Errorf("missing token signing secret")
 	}
 	authSessions = newSignedAuthSessionStore(secret, telegramSessionTTL)
 	redirectGrants = newSignedRedirectGrantStore(secret, redirectGrantTTL)
 	if pool != nil {
 		initDataExchanges = newDBInitDataExchangeGuard(pool)
-		return
+		return nil
 	}
 	initDataExchanges = newMemoryInitDataExchangeGuard()
+	return nil
 }
 
 func signStateToken(secret, payload []byte) (string, error) {
@@ -332,6 +333,6 @@ func randomToken(byteLen int) (string, error) {
 }
 
 var (
-	authSessions      authSessionStore      = newSignedAuthSessionStore([]byte("wavy-dev-state-secret"), telegramSessionTTL)
+	authSessions      authSessionStore      = newSignedAuthSessionStore(nil, telegramSessionTTL)
 	initDataExchanges initDataExchangeStore = newMemoryInitDataExchangeGuard()
 )

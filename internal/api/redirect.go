@@ -110,4 +110,4 @@ func isAllowedRedirectSubscriptionURL(raw string) bool {
 	return strings.EqualFold(parsed.Scheme, "https") && parsed.Host != ""
 }
 
-var redirectGrants redirectGrantStore = newSignedRedirectGrantStore([]byte("wavy-dev-state-secret"), redirectGrantTTL)
+var redirectGrants redirectGrantStore = newSignedRedirectGrantStore(nil, redirectGrantTTL)

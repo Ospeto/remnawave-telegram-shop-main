@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -103,7 +102,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	api.ConfigureStateStores(pool, config.TelegramToken())
+	if err := api.ConfigureStateStores(pool, config.TelegramToken()); err != nil {
+		panic(err)
+	}
 
 	err = database.RunMigrations(ctx, &database.MigrationConfig{Direction: "up", MigrationsPath: "./db/migrations", Steps: 0}, pool)
 	if err != nil {
@@ -616,22 +617,12 @@ func healthProbeURL() string {
 
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isInternalHealthcheckRequest(r) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "ok",
-				"time":   time.Now().Format(time.RFC3339),
-			})
-			return
-		}
-
 		status := map[string]any{
 			"status":           "ok",
-			"db":               "ok",
-			"rw":               "ok",
-			"gemini":           "ok",
-			"vision_analyzer":  "ok",
+			"db":               "disabled",
+			"rw":               "disabled",
+			"gemini":           "disabled",
+			"vision_analyzer":  "disabled",
 			"vision_providers": map[string]string{},
 			"time":             time.Now().Format(time.RFC3339),
 			"version":          Version,
@@ -639,18 +630,24 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 			"buildDate":        BuildDate,
 		}
 
-		dbCtx, dbCancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer dbCancel()
-		if err := pool.Ping(dbCtx); err != nil {
-			status["status"] = "fail"
-			status["db"] = "error: " + err.Error()
+		if pool != nil {
+			status["db"] = "ok"
+			dbCtx, dbCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer dbCancel()
+			if err := pool.Ping(dbCtx); err != nil {
+				status["status"] = "fail"
+				status["db"] = "error: " + err.Error()
+			}
 		}
 
-		rwCtx, rwCancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer rwCancel()
-		if err := rw.Ping(rwCtx); err != nil {
-			status["status"] = "fail"
-			status["rw"] = "error: " + err.Error()
+		if rw != nil {
+			status["rw"] = "ok"
+			rwCtx, rwCancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer rwCancel()
+			if err := rw.Ping(rwCtx); err != nil {
+				status["status"] = "fail"
+				status["rw"] = "error: " + err.Error()
+			}
 		}
 
 		// Analyzer health check is non-blocking and does not affect overall status.
@@ -687,15 +684,6 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 		delete(status, "rw")
 		_ = json.NewEncoder(w).Encode(status)
 	})
-}
-
-func isInternalHealthcheckRequest(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		host = strings.TrimSpace(r.RemoteAddr)
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {

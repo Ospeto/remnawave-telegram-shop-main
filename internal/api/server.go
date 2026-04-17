@@ -121,6 +121,11 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	// Serve React Frontend (SPA support — serves index.html for unknown paths)
 	fs := http.FileServer(http.Dir("./web-app/dist"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
 		// If the requested file exists, serve it directly
 		path := "./web-app/dist" + r.URL.Path
 		if _, err := os.Stat(path); err == nil {

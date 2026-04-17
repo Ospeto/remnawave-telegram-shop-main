@@ -486,6 +486,24 @@ ensure_caddy_configured() {
     fi
 }
 
+has_bundled_caddy_env() {
+    local cur_domain cur_email
+    cur_domain=$({ grep -E '^DOMAIN_NAME=' "$ENV_FILE" || true; } | cut -d= -f2-)
+    cur_email=$({ grep -E '^ACME_EMAIL=' "$ENV_FILE" || true; } | cut -d= -f2-)
+    [[ -n "$cur_domain" && -n "$cur_email" ]]
+}
+
+print_optional_caddy_hint() {
+    if ! has_bundled_caddy_env; then
+        return
+    fi
+
+    echo ""
+    print_info "Bundled Caddy is optional and disabled by default."
+    print_info "Start it only if you want this repository to manage HTTPS:"
+    echo "  $COMPOSE_CMD up -d --build caddy"
+}
+
 # ──── Fresh Install Wizard ──────────────────────────────────
 wizard() {
     # If .env already exists, ask whether to skip
@@ -871,10 +889,11 @@ do_start() {
 
     print_arrow "Building and starting services..."
     echo ""
-    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build)
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build bot db)
     echo ""
     print_success "Services are running!"
     print_info "Use option 7 to view logs."
+    print_optional_caddy_hint
 }
 
 # ──── Stop ──────────────────────────────────────────────────
@@ -901,9 +920,10 @@ do_update() {
     echo ""
     print_arrow "Restarting services..."
     echo ""
-    (cd "$SCRIPT_DIR" && $COMPOSE_CMD down && $COMPOSE_CMD up -d)
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD down && $COMPOSE_CMD up -d bot db)
     echo ""
     print_success "Update complete! Services are running with the latest build."
+    print_optional_caddy_hint
 }
 
 # ──── Uninstall ─────────────────────────────────────────────
@@ -1127,8 +1147,9 @@ do_restore() {
 
     echo ""
     print_info "Starting all services..."
-    $COMPOSE_CMD up -d --build
+    $COMPOSE_CMD up -d --build bot db
     print_success "Restore complete!"
+    print_optional_caddy_hint
 }
 
 # ──── Edit Pricing Only ─────────────────────────────────────

@@ -115,7 +115,7 @@ Use `/admin` -> `Backups` for day-to-day backup work, and use `/restore list` on
 
 ### Blank Screen in Mini App
 -   **Cause**: Invalid SSL, mixed content (HTTP vs HTTPS), or `MINI_APP_URL` mismatch.
--   **Fix**: Ensure `DOMAIN_NAME` in `.env` matches your actual domain and points to your server's IP. Caddy handles SSL automatically.
+-   **Fix**: Ensure `MINI_APP_URL` matches your real HTTPS origin. If you use the bundled proxy, set `DOMAIN_NAME` to that host and start `caddy`; if you use your own reverse proxy, verify TLS there instead.
 
 ### "Dirty Database Version" Error
 -   **Cause**: A migration failed mid-way (e.g., bot crashed during update).
@@ -123,7 +123,7 @@ Use `/admin` -> `Backups` for day-to-day backup work, and use `/restore list` on
     1.  Stop bot: `docker-compose stop bot`
     2.  Reset DB version (example to version 15):
         `docker exec remnawave-telegram-shop-db psql -U postgres -d postgres -c "UPDATE schema_migrations SET dirty = false, version = 15;"`
-    3.  Restart: `docker-compose up -d`
+    3.  Restart: `docker-compose up -d bot db`
 
 ### Duplicate Transaction ID Error
 -   **Cause**: Testing with the same receipt twice.

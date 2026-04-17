@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -231,6 +234,48 @@ func TestRedirectGrantStoreRejectsExpiredToken(t *testing.T) {
 
 	if _, err := store.consume(token); err == nil {
 		t.Fatal("consume() expired token error = nil, want rejection")
+	}
+}
+
+func TestConfigureStateStoresRejectsEmptySigningSecret(t *testing.T) {
+	previousAuthSessions := authSessions
+	previousInitDataExchanges := initDataExchanges
+	previousRedirectGrants := redirectGrants
+	t.Cleanup(func() {
+		authSessions = previousAuthSessions
+		initDataExchanges = previousInitDataExchanges
+		redirectGrants = previousRedirectGrants
+	})
+
+	if err := ConfigureStateStores(nil, ""); err == nil {
+		t.Fatal("ConfigureStateStores() error = nil, want missing secret rejection")
+	}
+}
+
+func TestRegisterHandlersReturns404ForUnknownAPIPaths(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	repoRoot := filepath.Clean(filepath.Join(wd, "..", ".."))
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("os.Chdir(%q) error = %v", repoRoot, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore cwd error = %v", err)
+		}
+	})
+
+	mux := http.NewServeMux()
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/api/does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown API route status = %d, want %d (body=%q)", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 

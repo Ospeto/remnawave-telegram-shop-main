@@ -7,7 +7,7 @@ It combines:
 - a Go backend for bot logic, payments, delivery, and operations
 - a React Mini App for plan browsing and checkout
 - PostgreSQL for state and transaction history
-- Caddy for HTTPS termination in the default deployment
+- an optional bundled Caddy profile for HTTPS termination
 
 This repository is intended for operators who want a production-capable Telegram sales flow without depending on a hosted storefront.
 
@@ -62,7 +62,7 @@ Most older slash commands still exist as hidden emergency fallbacks, but they ar
   - runs DB migrations on startup
   - executes scheduled jobs for invoices, auto-renew, reports, backups, and subscription checks
 - `db`: PostgreSQL
-- `caddy`: reverse proxy with automatic HTTPS
+- `caddy`: optional reverse proxy with automatic HTTPS when you enable the `edge` profile
 
 ### Request Flow
 
@@ -167,31 +167,51 @@ At minimum, configure:
 
 - `TELEGRAM_TOKEN`
 - `ADMIN_TELEGRAM_ID`
-- `DOMAIN_NAME`
-- `ACME_EMAIL`
 - `REMNAWAVE_URL`
 - `REMNAWAVE_TOKEN`
 - `PLANS`
 - `MINI_APP_URL`
 
-3. Start the stack.
+If you want the repository to manage HTTPS for you with bundled Caddy, also set:
+
+- `DOMAIN_NAME`
+- `ACME_EMAIL`
+
+3. Start the application stack.
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build bot db
 ```
 
 If you use legacy Compose:
 
 ```bash
-docker-compose up -d --build
+docker-compose up -d --build bot db
 ```
 
-4. Follow logs if needed.
+4. Optional: start the bundled HTTPS proxy.
+
+```bash
+docker compose up -d --build caddy
+```
+
+If you use legacy Compose:
+
+```bash
+docker-compose up -d --build caddy
+```
+
+5. Follow logs if needed.
 
 ```bash
 docker compose logs -f bot
-docker compose logs -f caddy
 docker compose logs -f db
+```
+
+If you started bundled Caddy:
+
+```bash
+docker compose logs -f caddy
 ```
 
 ## Telegram Setup
@@ -239,8 +259,8 @@ The full template lives in [.env.sample](.env.sample).
 
 | Variable | Purpose |
 | --- | --- |
-| `DOMAIN_NAME` | Public domain used by Caddy |
-| `ACME_EMAIL` | Email for Caddy / Let's Encrypt |
+| `DOMAIN_NAME` | Public domain used by the optional bundled Caddy proxy |
+| `ACME_EMAIL` | Email for the optional bundled Caddy / Let's Encrypt flow |
 | `MINI_APP_URL` | Full HTTPS URL for the Telegram Mini App |
 | `HEALTH_CHECK_PORT` | Internal HTTP listen port, default `8080` |
 | `IS_WEB_APP_LINK` | Whether to present the web app as the primary user-facing link |
@@ -502,7 +522,7 @@ Recommended restore workflow:
 ### Health Endpoints
 
 - `/livez`: liveness probe
-- `/healthcheck`: dependency-aware health check
+- `/healthcheck`: dependency-aware health check for database, Remnawave, and vision readiness
 
 The Docker healthcheck uses `/livez` on `127.0.0.1:${HEALTH_CHECK_PORT}`.
 
@@ -510,8 +530,13 @@ The Docker healthcheck uses `/livez` on `127.0.0.1:${HEALTH_CHECK_PORT}`.
 
 ```bash
 docker compose logs -f bot
-docker compose logs -f caddy
 docker compose logs -f db
+```
+
+If you started bundled Caddy:
+
+```bash
+docker compose logs -f caddy
 ```
 
 ### Upgrades
@@ -520,7 +545,13 @@ The app runs SQL migrations automatically on startup, so a normal upgrade is:
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose up -d --build bot db
+```
+
+If you use bundled Caddy, refresh it separately after the app comes back:
+
+```bash
+docker compose up -d caddy
 ```
 
 If you are doing a production update, verify:
