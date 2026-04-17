@@ -264,7 +264,7 @@ export function Home() {
             </div>
 
             {/* Referral Ambient Chip */}
-            {data && data.referral_count !== undefined && data.referral_count > 0 && (
+            {data && !data.referral_stats_unavailable && data.referral_count !== undefined && data.referral_count > 0 && (
                 <Link to="/wallet" className="glass-card animate-slide-up" style={{
                     textDecoration: 'none',
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',

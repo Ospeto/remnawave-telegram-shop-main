@@ -66,4 +66,25 @@ describe('Home', () => {
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
         expect(screen.queryByText(/Error:/)).toBeNull();
     });
+
+    it('hides the referral chip when referral stats are unavailable', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            referral_stats_unavailable: true,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.queryByText(/Referrals/)).toBeNull();
+    });
 });

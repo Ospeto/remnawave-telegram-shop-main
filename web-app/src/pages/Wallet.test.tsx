@@ -74,4 +74,36 @@ describe('Wallet', () => {
         expect(screen.getByText('Referral activity is temporarily unavailable. Your totals are still shown above.')).toBeTruthy();
         expect(screen.getByText(/\+2,500/)).toBeTruthy();
     });
+
+    it('shows a referral totals warning when wallet stats are unavailable', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/wallet') {
+                return jsonResponse({
+                    balance: 5000,
+                    currency: 'MMK',
+                    auto_renew: false,
+                    auto_renew_duration: null,
+                    bot_url: 'https://t.me/WavyVpnBot',
+                    referral_bonus_amount: 1000,
+                    referral_stats_unavailable: true,
+                });
+            }
+            if (url === '/api/wallet/history?limit=10') {
+                return jsonResponse([]);
+            }
+            if (url === '/api/referrals') {
+                return jsonResponse([]);
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/wallet', element: <Wallet /> },
+            { path: '/', element: <div>Home</div> },
+        ], ['/wallet']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Wallet' })).toBeTruthy();
+        expect(screen.getByText('Referral totals are temporarily unavailable. Try again in a moment.')).toBeTruthy();
+    });
 });

@@ -12,22 +12,27 @@ import (
 )
 
 type WalletTransactionType string
+type WalletTransactionReferralKind string
 
 const (
 	WalletTransactionTypeTopup    WalletTransactionType = "topup"
 	WalletTransactionTypePurchase WalletTransactionType = "purchase"
 	WalletTransactionTypeRefund   WalletTransactionType = "refund"
 	WalletTransactionTypeReferral WalletTransactionType = "referral"
+
+	WalletTransactionReferralKindReferrer WalletTransactionReferralKind = "referrer"
+	WalletTransactionReferralKindReferee  WalletTransactionReferralKind = "referee"
 )
 
 type WalletTransaction struct {
-	ID          int64                 `db:"id" json:"id"`
-	CustomerID  int64                 `db:"customer_id" json:"customer_id"`
-	Amount      float64               `db:"amount" json:"amount"`
-	Type        WalletTransactionType `db:"type" json:"type"`
-	PurchaseID  *int64                `db:"purchase_id" json:"purchase_id"`
-	Description string                `db:"description" json:"description"`
-	CreatedAt   time.Time             `db:"created_at" json:"created_at"`
+	ID                int64                          `db:"id" json:"id"`
+	CustomerID        int64                          `db:"customer_id" json:"customer_id"`
+	Amount            float64                        `db:"amount" json:"amount"`
+	Type              WalletTransactionType          `db:"type" json:"type"`
+	PurchaseID        *int64                         `db:"purchase_id" json:"purchase_id"`
+	ReferralBonusKind *WalletTransactionReferralKind `db:"referral_bonus_kind" json:"referral_bonus_kind,omitempty"`
+	Description       string                         `db:"description" json:"description"`
+	CreatedAt         time.Time                      `db:"created_at" json:"created_at"`
 }
 
 type WalletTransactionRepository struct {
@@ -40,8 +45,8 @@ func NewWalletTransactionRepository(pool *pgxpool.Pool) *WalletTransactionReposi
 
 func (r *WalletTransactionRepository) Create(ctx context.Context, tx *WalletTransaction) (int64, error) {
 	buildInsert := sq.Insert("wallet_transaction").
-		Columns("customer_id", "amount", "type", "purchase_id", "description").
-		Values(tx.CustomerID, tx.Amount, tx.Type, tx.PurchaseID, tx.Description).
+		Columns("customer_id", "amount", "type", "purchase_id", "referral_bonus_kind", "description").
+		Values(tx.CustomerID, tx.Amount, tx.Type, tx.PurchaseID, tx.ReferralBonusKind, tx.Description).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -63,8 +68,8 @@ func (r *WalletTransactionRepository) Create(ctx context.Context, tx *WalletTran
 // Use this to keep balance updates and transaction log atomic.
 func (r *WalletTransactionRepository) CreateTx(ctx context.Context, pgxTx pgx.Tx, tx *WalletTransaction) (int64, error) {
 	buildInsert := sq.Insert("wallet_transaction").
-		Columns("customer_id", "amount", "type", "purchase_id", "description").
-		Values(tx.CustomerID, tx.Amount, tx.Type, tx.PurchaseID, tx.Description).
+		Columns("customer_id", "amount", "type", "purchase_id", "referral_bonus_kind", "description").
+		Values(tx.CustomerID, tx.Amount, tx.Type, tx.PurchaseID, tx.ReferralBonusKind, tx.Description).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 
@@ -144,6 +149,31 @@ func (r *WalletTransactionRepository) SumByCustomerTypeAndDescription(ctx contex
 	var total sql.NullFloat64
 	if err := r.pool.QueryRow(ctx, sqlStr, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("failed to sum wallet transactions: %w", err)
+	}
+	if !total.Valid {
+		return 0, nil
+	}
+	return total.Float64, nil
+}
+
+func (r *WalletTransactionRepository) SumByCustomerTypeAndReferralKind(ctx context.Context, customerID int64, txType WalletTransactionType, referralKind WalletTransactionReferralKind) (float64, error) {
+	buildSelect := sq.Select("COALESCE(SUM(amount), 0)").
+		From("wallet_transaction").
+		Where(sq.Eq{
+			"customer_id":         customerID,
+			"type":                txType,
+			"referral_bonus_kind": referralKind,
+		}).
+		PlaceholderFormat(sq.Dollar)
+
+	sqlStr, args, err := buildSelect.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build referral-kind sum query: %w", err)
+	}
+
+	var total sql.NullFloat64
+	if err := r.pool.QueryRow(ctx, sqlStr, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to sum referral wallet transactions: %w", err)
 	}
 	if !total.Valid {
 		return 0, nil

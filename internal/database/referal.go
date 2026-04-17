@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
@@ -22,12 +23,130 @@ type Referral struct {
 	RefereeBonusGrantedAt *time.Time `db:"referee_bonus_granted_at"`
 }
 
+type ReferralIdentityResolver interface {
+	FindById(context.Context, int64) (*Customer, error)
+	FindByTelegramId(context.Context, int64) (*Customer, error)
+}
+
 type ReferralRepository struct {
 	pool *pgxpool.Pool
 }
 
 func NewReferralRepository(pool *pgxpool.Pool) *ReferralRepository {
 	return &ReferralRepository{pool: pool}
+}
+
+func ReferralIdentityValues(ids ...int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	seen := make(map[int64]struct{}, len(ids))
+	values := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		values = append(values, id)
+	}
+	return values
+}
+
+func ResolveReferralCustomer(ctx context.Context, resolver ReferralIdentityResolver, referralIdentity int64) (*Customer, error) {
+	if resolver == nil || referralIdentity == 0 {
+		return nil, nil
+	}
+
+	customer, err := resolver.FindById(ctx, referralIdentity)
+	if err != nil {
+		return nil, err
+	}
+	if customer != nil {
+		return customer, nil
+	}
+
+	customer, err = resolver.FindByTelegramId(ctx, referralIdentity)
+	if err != nil {
+		return nil, err
+	}
+	return customer, nil
+}
+
+func ReferralActivityAt(ref Referral) time.Time {
+	if ref.BonusGranted && ref.BonusGrantedAt != nil {
+		return *ref.BonusGrantedAt
+	}
+	return ref.UsedAt
+}
+
+func SelectPreferredReferral(referrals []Referral) *Referral {
+	if len(referrals) == 0 {
+		return nil
+	}
+
+	ordered := make([]Referral, len(referrals))
+	copy(ordered, referrals)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		iGranted := ordered[i].BonusGranted || ordered[i].RefereeBonusGranted
+		jGranted := ordered[j].BonusGranted || ordered[j].RefereeBonusGranted
+		if iGranted != jGranted {
+			return iGranted
+		}
+		if !ordered[i].UsedAt.Equal(ordered[j].UsedAt) {
+			return ordered[i].UsedAt.Before(ordered[j].UsedAt)
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+
+	selected := ordered[0]
+	return &selected
+}
+
+func NormalizeReferralsByReferee(ctx context.Context, referrals []Referral, resolver ReferralIdentityResolver) ([]Referral, error) {
+	if len(referrals) == 0 {
+		return nil, nil
+	}
+
+	grouped := make(map[int64][]Referral, len(referrals))
+	resolvedCustomers := make(map[int64]*Customer, len(referrals))
+	for _, ref := range referrals {
+		normalizedID := ref.RefereeID
+		customer, ok := resolvedCustomers[ref.RefereeID]
+		if !ok {
+			var err error
+			customer, err = ResolveReferralCustomer(ctx, resolver, ref.RefereeID)
+			if err != nil {
+				return nil, err
+			}
+			resolvedCustomers[ref.RefereeID] = customer
+		}
+		if customer != nil {
+			normalizedID = customer.ID
+		}
+		grouped[normalizedID] = append(grouped[normalizedID], ref)
+	}
+
+	normalized := make([]Referral, 0, len(grouped))
+	for _, refs := range grouped {
+		if preferred := SelectPreferredReferral(refs); preferred != nil {
+			normalized = append(normalized, *preferred)
+		}
+	}
+
+	sort.SliceStable(normalized, func(i, j int) bool {
+		iTime := ReferralActivityAt(normalized[i])
+		jTime := ReferralActivityAt(normalized[j])
+		if !iTime.Equal(jTime) {
+			return iTime.After(jTime)
+		}
+		return normalized[i].ID > normalized[j].ID
+	})
+
+	return normalized, nil
 }
 
 func (r *ReferralRepository) Create(ctx context.Context, referrerID, refereeID int64) (*Referral, error) {
@@ -100,6 +219,10 @@ func (r *ReferralRepository) FindByReferrer(ctx context.Context, referrerID int6
 	return list, nil
 }
 
+func (r *ReferralRepository) FindByReferrerAny(ctx context.Context, referrerIDs ...int64) ([]Referral, error) {
+	return r.findByIdentityColumn(ctx, "referrer_id", referrerIDs)
+}
+
 func (r *ReferralRepository) CountByReferrer(ctx context.Context, referrerID int64) (int, error) {
 	query := sq.Select("COUNT(*)").
 		From("referral").
@@ -148,6 +271,57 @@ func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64)
 		return nil, fmt.Errorf("failed to query referral by referee: %w", err)
 	}
 	return &ref, nil
+}
+
+func (r *ReferralRepository) FindByRefereeAny(ctx context.Context, refereeIDs ...int64) ([]Referral, error) {
+	return r.findByIdentityColumn(ctx, "referee_id", refereeIDs)
+}
+
+func (r *ReferralRepository) findByIdentityColumn(ctx context.Context, column string, identityIDs []int64) ([]Referral, error) {
+	identityIDs = ReferralIdentityValues(identityIDs...)
+	if len(identityIDs) == 0 {
+		return nil, nil
+	}
+
+	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "bonus_granted_at", "referee_bonus_granted", "referee_bonus_granted_at").
+		From("referral").
+		Where(sq.Eq{column: identityIDs}).
+		OrderBy("used_at DESC", "id DESC").
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build select referrals by %s query: %w", column, err)
+	}
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query referrals by %s: %w", column, err)
+	}
+	defer rows.Close()
+
+	var list []Referral
+	for rows.Next() {
+		var ref Referral
+		if err := rows.Scan(
+			&ref.ID,
+			&ref.ReferrerID,
+			&ref.RefereeID,
+			&ref.UsedAt,
+			&ref.BonusGranted,
+			&ref.BonusGrantedAt,
+			&ref.RefereeBonusGranted,
+			&ref.RefereeBonusGrantedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan referral row: %w", err)
+		}
+		list = append(list, ref)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("error iterating referral rows: %w", rows.Err())
+	}
+
+	return list, nil
 }
 
 func (r *ReferralRepository) MarkBonusGranted(ctx context.Context, referralID int64) error {

@@ -898,7 +898,7 @@ func (s *PaymentService) ReferralEarnedTotal(ctx context.Context, customerID int
 	if s.walletTxRepo == nil {
 		return 0, nil
 	}
-	return s.walletTxRepo.SumByCustomerTypeAndDescription(ctx, customerID, database.WalletTransactionTypeReferral, referrerReferralBonusDescription)
+	return s.walletTxRepo.SumByCustomerTypeAndReferralKind(ctx, customerID, database.WalletTransactionTypeReferral, database.WalletTransactionReferralKindReferrer)
 }
 
 // processReferralBonus grants a 1,000 MMK wallet bonus to both the referrer and
@@ -917,11 +917,12 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 		"telegram_id", customerTelegramID,
 	)
 
-	referral, err := s.referralRepository.FindByReferee(ctxRef, customer.ID)
+	referrals, err := s.referralRepository.FindByRefereeAny(ctxRef, database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
 	if err != nil {
 		slog.Error("[REFERRAL-DEBUG] Referral lookup failed (non-fatal)", "error", err)
 		return
 	}
+	referral := database.SelectPreferredReferral(referrals)
 	if referral == nil {
 		slog.Info("[REFERRAL-DEBUG] No referral record found for this customer — not referred by anyone")
 		return // customer was not referred by anyone
@@ -938,7 +939,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	// --- Credit REFERRER (person who shared the link) ---
 	if !referral.BonusGranted {
 		slog.Info("[REFERRAL-DEBUG] Crediting REFERRER...")
-		referrerCustomer, err := s.customerRepository.FindById(ctxRef, referral.ReferrerID)
+		referrerCustomer, err := database.ResolveReferralCustomer(ctxRef, s.customerRepository, referral.ReferrerID)
 		if err != nil || referrerCustomer == nil {
 			slog.Error(
 				"[REFERRAL-DEBUG] FAILED: referrer customer lookup failed (non-fatal)",
@@ -982,11 +983,13 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Info("[REFERRAL-DEBUG] Referrer balance credited successfully")
 
 			if s.walletTxRepo != nil {
+				referralKind := database.WalletTransactionReferralKindReferrer
 				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
-					CustomerID:  referrerCustomer.ID,
-					Amount:      ReferralBonusAmount,
-					Type:        database.WalletTransactionTypeReferral,
-					Description: referrerReferralBonusDescription,
+					CustomerID:        referrerCustomer.ID,
+					Amount:            ReferralBonusAmount,
+					Type:              database.WalletTransactionTypeReferral,
+					ReferralBonusKind: &referralKind,
+					Description:       referrerReferralBonusDescription,
 				}); err != nil {
 					slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referrer wallet transaction (non-fatal)", "error", err)
 					return
@@ -1051,11 +1054,13 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Info("[REFERRAL-DEBUG] Referee balance credited successfully")
 
 			if s.walletTxRepo != nil {
+				referralKind := database.WalletTransactionReferralKindReferee
 				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
-					CustomerID:  customer.ID,
-					Amount:      ReferralBonusAmount,
-					Type:        database.WalletTransactionTypeReferral,
-					Description: refereeReferralBonusDescription,
+					CustomerID:        customer.ID,
+					Amount:            ReferralBonusAmount,
+					Type:              database.WalletTransactionTypeReferral,
+					ReferralBonusKind: &referralKind,
+					Description:       refereeReferralBonusDescription,
 				}); err != nil {
 					slog.Error("[REFERRAL-DEBUG] FAILED: failed to log referee wallet transaction (non-fatal)", "error", err)
 					return

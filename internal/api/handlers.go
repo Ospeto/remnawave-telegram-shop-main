@@ -40,17 +40,18 @@ type KeyResponse struct {
 }
 
 type ValidationResponse struct {
-	User                *database.Customer `json:"user"`
-	Keys                []KeyResponse      `json:"keys"`
-	IsActive            bool               `json:"is_active"`
-	ExpireAt            *time.Time         `json:"expire_at"`
-	DaysRemaining       int                `json:"days_remaining"`
-	TrialEligible       bool               `json:"trial_eligible"`
-	TrialDays           int                `json:"trial_days"`
-	ReferralCount       int                `json:"referral_count"`
-	ReferralEarned      float64            `json:"referral_earned"`
-	ReferralBonusAmount float64            `json:"referral_bonus_amount"`
-	BotURL              string             `json:"bot_url"`
+	User                     *database.Customer `json:"user"`
+	Keys                     []KeyResponse      `json:"keys"`
+	IsActive                 bool               `json:"is_active"`
+	ExpireAt                 *time.Time         `json:"expire_at"`
+	DaysRemaining            int                `json:"days_remaining"`
+	TrialEligible            bool               `json:"trial_eligible"`
+	TrialDays                int                `json:"trial_days"`
+	ReferralCount            *int               `json:"referral_count,omitempty"`
+	ReferralEarned           *float64           `json:"referral_earned,omitempty"`
+	ReferralStatsUnavailable bool               `json:"referral_stats_unavailable,omitempty"`
+	ReferralBonusAmount      float64            `json:"referral_bonus_amount"`
+	BotURL                   string             `json:"bot_url"`
 }
 
 type PlanResponse struct {
@@ -118,41 +119,41 @@ func uploadScreenshotFailureResponse(result *payment.VerificationResult) UploadS
 }
 
 func referralActivityAt(ref database.Referral) time.Time {
-	if ref.BonusGranted && ref.BonusGrantedAt != nil {
-		return *ref.BonusGrantedAt
-	}
-	return ref.UsedAt
+	return database.ReferralActivityAt(ref)
 }
 
-func (h *APIHandler) referralSummary(ctx context.Context, customer *database.Customer) (int, float64) {
+func (h *APIHandler) referralSummary(ctx context.Context, customer *database.Customer) (int, float64, bool) {
 	if h.referralRepo == nil || customer == nil {
-		return 0, 0
+		return 0, 0, false
 	}
 
-	count, err := h.referralRepo.CountByReferrer(ctx, customer.ID)
+	referrals, err := h.referralRepo.FindByReferrerAny(ctx, database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
 	if err != nil {
-		slog.Warn("Failed to count referrals", "customer_id", customer.ID, "error", err)
-		count = 0
+		slog.Warn("Failed to load referrals", "customer_id", customer.ID, "error", err)
+		return 0, 0, true
+	}
+	referrals, err = database.NormalizeReferralsByReferee(ctx, referrals, h.customerRepo)
+	if err != nil {
+		slog.Warn("Failed to normalize referrals", "customer_id", customer.ID, "error", err)
+		return 0, 0, true
 	}
 
+	count := len(referrals)
 	total := 0.0
 	if h.paymentService != nil {
 		var err error
 		total, err = h.paymentService.ReferralEarnedTotal(ctx, customer.ID)
 		if err != nil {
 			slog.Warn("Failed to sum referral earnings", "customer_id", customer.ID, "error", err)
-			total = 0
+			return 0, 0, true
 		}
 	}
 
-	return count, total
+	return count, total, false
 }
 
 func (h *APIHandler) referralMaskedTelegramID(ctx context.Context, customerID int64) string {
-	if h.customerRepo == nil {
-		return maskHalfInt64(customerID)
-	}
-	customer, err := h.customerRepo.FindById(ctx, customerID)
+	customer, err := database.ResolveReferralCustomer(ctx, h.customerRepo, customerID)
 	if err != nil || customer == nil {
 		return maskHalfInt64(customerID)
 	}
@@ -749,20 +750,23 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	// Determine trial eligibility: trial enabled + no subscription history.
 	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0 && !hasMigratedKeys
 
-	referralCount, referralEarned := h.referralSummary(r.Context(), customer)
+	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
 	resp := ValidationResponse{
-		User:                customer,
-		Keys:                keys,
-		IsActive:            isActive,
-		ExpireAt:            customer.ExpireAt,
-		DaysRemaining:       daysRemaining,
-		TrialEligible:       trialEligible,
-		TrialDays:           config.TrialDays(),
-		ReferralCount:       referralCount,
-		ReferralEarned:      referralEarned,
-		ReferralBonusAmount: payment.ReferralBonusAmount,
-		BotURL:              config.BotURL(),
+		User:                     customer,
+		Keys:                     keys,
+		IsActive:                 isActive,
+		ExpireAt:                 customer.ExpireAt,
+		DaysRemaining:            daysRemaining,
+		TrialEligible:            trialEligible,
+		TrialDays:                config.TrialDays(),
+		ReferralStatsUnavailable: referralStatsUnavailable,
+		ReferralBonusAmount:      payment.ReferralBonusAmount,
+		BotURL:                   config.BotURL(),
+	}
+	if !referralStatsUnavailable {
+		resp.ReferralCount = &referralCount
+		resp.ReferralEarned = &referralEarned
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1082,7 +1086,12 @@ func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
 
 	var items []ReferralItem
 	if h.referralRepo != nil {
-		refs, err := h.referralRepo.FindByReferrer(r.Context(), customer.ID)
+		refs, err := h.referralRepo.FindByReferrerAny(r.Context(), database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
+		if err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load referrals", err)
+			return
+		}
+		refs, err = database.NormalizeReferralsByReferee(r.Context(), refs, h.customerRepo)
 		if err != nil {
 			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load referrals", err)
 			return
@@ -1139,17 +1148,20 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	referralCount, referralEarned := h.referralSummary(r.Context(), customer)
+	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
 	resp := map[string]interface{}{
-		"balance":               balance,
-		"currency":              config.Currency(),
-		"auto_renew":            autoRenew,
-		"auto_renew_duration":   autoRenewDuration,
-		"bot_url":               config.BotURL(),
-		"referral_bonus_amount": payment.ReferralBonusAmount,
-		"referral_count":        referralCount,
-		"referral_earned":       referralEarned,
+		"balance":                    balance,
+		"currency":                   config.Currency(),
+		"auto_renew":                 autoRenew,
+		"auto_renew_duration":        autoRenewDuration,
+		"bot_url":                    config.BotURL(),
+		"referral_bonus_amount":      payment.ReferralBonusAmount,
+		"referral_stats_unavailable": referralStatsUnavailable,
+	}
+	if !referralStatsUnavailable {
+		resp["referral_count"] = referralCount
+		resp["referral_earned"] = referralEarned
 	}
 
 	w.Header().Set("Content-Type", "application/json")

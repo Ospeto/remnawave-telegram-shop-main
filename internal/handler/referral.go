@@ -16,11 +16,9 @@ import (
 
 func referralDisplayID(ctx context.Context, repo interface {
 	FindById(context.Context, int64) (*database.Customer, error)
+	FindByTelegramId(context.Context, int64) (*database.Customer, error)
 }, customerID int64) int64 {
-	if repo == nil {
-		return customerID
-	}
-	customer, err := repo.FindById(ctx, customerID)
+	customer, err := database.ResolveReferralCustomer(ctx, repo, customerID)
 	if err != nil || customer == nil {
 		return customerID
 	}
@@ -28,10 +26,7 @@ func referralDisplayID(ctx context.Context, repo interface {
 }
 
 func referralHistoryTime(ref database.Referral) time.Time {
-	if ref.BonusGranted && ref.BonusGrantedAt != nil {
-		return ref.BonusGrantedAt.In(time.UTC)
-	}
-	return ref.UsedAt.In(time.UTC)
+	return database.ReferralActivityAt(ref).In(time.UTC)
 }
 
 func (h Handler) ReferralCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -48,9 +43,14 @@ func (h Handler) ReferralCallbackHandler(ctx context.Context, b *bot.Bot, update
 		update.CallbackQuery.Message.Message.From.Username, refCode)
 
 	// Fetch all referrals made by this customer
-	referrals, err := h.referralRepository.FindByReferrer(ctx, customer.ID)
+	referrals, err := h.referralRepository.FindByReferrerAny(ctx, database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
 	if err != nil {
 		slog.Error("error fetching referrals", "error", err)
+		return
+	}
+	referrals, err = database.NormalizeReferralsByReferee(ctx, referrals, h.customerRepository)
+	if err != nil {
+		slog.Error("error normalizing referrals", "error", err)
 		return
 	}
 

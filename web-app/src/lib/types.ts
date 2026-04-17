@@ -35,6 +35,7 @@ export interface UserData {
     trial_days: number;
     referral_count?: number;
     referral_earned?: number;
+    referral_stats_unavailable?: boolean;
     referral_bonus_amount?: number;
     bot_url?: string;
 }

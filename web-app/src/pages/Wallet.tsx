@@ -14,8 +14,9 @@ interface WalletData {
   auto_renew: boolean;
   auto_renew_duration: number | null;
   bot_url: string;
-  referral_count: number;
-  referral_earned: number;
+  referral_count?: number;
+  referral_earned?: number;
+  referral_stats_unavailable?: boolean;
   referral_bonus_amount: number;
 }
 
@@ -48,6 +49,7 @@ export function Wallet() {
   const [authExpired, setAuthExpired] = useState(false);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
+  const referralTotalsUnavailable = Boolean(wallet?.referral_stats_unavailable);
   const loadWalletData = useCallback(async () => {
     if (!initData) {
       setLoading(false);
@@ -273,15 +275,34 @@ export function Wallet() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
           <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
             <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('friends_invited')}</div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-color)' }}>{wallet.referral_count}</div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-color)' }}>
+              {referralTotalsUnavailable ? '—' : (wallet.referral_count ?? 0)}
+            </div>
           </div>
           <div style={{ background: 'var(--btn-sec-bg)', padding: '12px', borderRadius: 12 }}>
             <div className="text-hint" style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', marginBottom: 4 }}>{t('total_earned')}</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--color-success)', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-              +{(wallet.referral_earned || 0).toLocaleString()} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
+              {referralTotalsUnavailable ? '—' : `+${(wallet.referral_earned || 0).toLocaleString()}`} <span style={{ fontSize: 12 }}>{wallet?.currency}</span>
             </div>
           </div>
         </div>
+
+        {referralTotalsUnavailable && (
+          <div
+            role="status"
+            style={{
+              marginBottom: 16,
+              padding: '10px 12px',
+              borderRadius: 10,
+              background: 'rgba(255, 159, 10, 0.12)',
+              color: 'var(--text-color)',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            {t('referral_totals_unavailable')}
+          </div>
+        )}
 
         {referralLoadError && (
           <div

@@ -109,8 +109,13 @@ func (h Handler) processReferral(ctx context.Context, messageText string, existi
 	)
 
 	// Check if user already has a referral (prevents duplicate attempts)
-	existingRef, refErr := h.referralRepository.FindByReferee(ctx, existingCustomer.ID)
-	slog.Info("[REFERRAL-DEBUG] FindByReferee result", "existing_referral", existingRef != nil, "error_present", refErr != nil)
+	existingRefs, refErr := h.referralRepository.FindByRefereeAny(ctx, database.ReferralIdentityValues(existingCustomer.ID, existingCustomer.TelegramID)...)
+	if refErr != nil {
+		slog.Error("[REFERRAL-DEBUG] FAILED: referral lookup error", "error", refErr)
+		return
+	}
+	existingRef := database.SelectPreferredReferral(existingRefs)
+	slog.Info("[REFERRAL-DEBUG] FindByReferee result", "existing_referral", existingRef != nil, "error_present", false)
 
 	if existingRef != nil {
 		slog.Info("[REFERRAL-DEBUG] SKIPPED: referral already exists for this user",
