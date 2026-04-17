@@ -1,6 +1,10 @@
 package remnawave
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -72,5 +76,43 @@ func TestParseInternalSquadUUIDsLooseFromResponseEnvelope(t *testing.T) {
 	}
 	if ids[0] != id1 || ids[1] != id2 {
 		t.Fatalf("parseInternalSquadUUIDsLoose() = %v, want [%s %s]", ids, id1, id2)
+	}
+}
+
+func TestPingFallsBackToRawUsersListWhenStrictDecodeDrifts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/users" {
+			t.Fatalf("request path = %q, want /api/users", r.URL.Path)
+		}
+		if got, err := strconv.ParseFloat(r.URL.Query().Get("size"), 64); err != nil || got != 1 {
+			t.Fatalf("size query = %q, want numeric 1", r.URL.Query().Get("size"))
+		}
+		if got, err := strconv.ParseFloat(r.URL.Query().Get("start"), 64); err != nil || got != 0 {
+			t.Fatalf("start query = %q, want numeric 0", r.URL.Query().Get("start"))
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Fatalf("authorization header = %q, want %q", got, "Bearer token")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"response": {
+				"users": [{
+					"uuid": "8d271ef0-1f93-4553-85e6-d7ef4f7d84d0",
+					"username": "drifted_user",
+					"subscriptionUrl": "https://sub.example.com/a",
+					"expireAt": "2026-04-18T00:00:00Z",
+					"telegramId": 123456
+				}],
+				"total": 1
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token", "")
+
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping() error = %v, want nil", err)
 	}
 }

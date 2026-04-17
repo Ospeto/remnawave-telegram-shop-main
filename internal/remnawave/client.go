@@ -75,7 +75,35 @@ func NewClient(baseURL, token, mode string) *Client {
 
 func (r *Client) Ping(ctx context.Context) error {
 	_, err := r.client.Users().GetAllUsers(ctx, 1, 0)
-	return err
+	if err == nil {
+		return nil
+	}
+	if !isDecodeResponseError(err) {
+		return err
+	}
+
+	payload, statusCode, rawErr := r.doRawJSONRequest(ctx, http.MethodGet, "/api/users?size=1&start=0", nil)
+	if rawErr != nil {
+		return fmt.Errorf("ping fallback request: %w", rawErr)
+	}
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("ping fallback status: %d", statusCode)
+	}
+
+	unwrapped, unwrapErr := unwrapResponseEnvelope(payload)
+	if unwrapErr != nil {
+		return fmt.Errorf("ping fallback decode: %w", unwrapErr)
+	}
+
+	response := asMap(unwrapped)
+	if response == nil {
+		return errors.New("ping fallback response is not an object")
+	}
+	if users, ok := response["users"]; !ok || asSlice(users) == nil {
+		return errors.New("ping fallback response missing users list")
+	}
+
+	return nil
 }
 
 func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
