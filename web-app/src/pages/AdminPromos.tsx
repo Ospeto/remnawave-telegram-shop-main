@@ -181,24 +181,32 @@ export function AdminPromos() {
         }
     };
 
+    const promoStatusKey = (promo: AdminPromo) => {
+        if (promo.status === 'exhausted' || promo.status === 'expired' || promo.status === 'active') {
+            return promo.status;
+        }
+        if (promo.used_count >= promo.max_uses) return 'exhausted';
+        if (new Date(promo.valid_until).getTime() <= Date.now()) return 'expired';
+        return 'active';
+    };
+
     const promoStatusLabel = (promo: AdminPromo) => {
-        if (promo.status === 'exhausted') return t('admin_promos_status_exhausted');
-        if (promo.status === 'expired') return t('admin_promos_status_expired');
-        if (promo.status === 'active') return t('admin_promos_status_active');
-        if (promo.used_count >= promo.max_uses) return t('admin_promos_status_exhausted');
-        if (new Date(promo.valid_until).getTime() <= Date.now()) return t('admin_promos_status_expired');
+        const status = promoStatusKey(promo);
+        if (status === 'exhausted') return t('admin_promos_status_exhausted');
+        if (status === 'expired') return t('admin_promos_status_expired');
         return t('admin_promos_status_active');
     };
 
     const promoTone = (promo: AdminPromo) => {
-        if (promo.status === 'active') {
+        const status = promoStatusKey(promo);
+        if (status === 'active') {
             return {
                 color: 'var(--color-success)',
                 background: 'rgba(52, 199, 89, 0.12)',
                 border: 'rgba(52, 199, 89, 0.22)',
             };
         }
-        if (promo.status === 'expired') {
+        if (status === 'expired') {
             return {
                 color: 'var(--tg-hint)',
                 background: 'rgba(255, 255, 255, 0.06)',
@@ -247,7 +255,7 @@ export function AdminPromos() {
         );
     }
 
-    const activeCount = promos.filter((promo) => promoStatusLabel(promo) === t('admin_promos_status_active')).length;
+    const activeCount = promos.filter((promo) => promoStatusKey(promo) === 'active').length;
     const inactiveCount = promos.length - activeCount;
 
     return (

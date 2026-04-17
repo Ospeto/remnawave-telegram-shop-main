@@ -25,6 +25,8 @@ type PromoCodeRepository struct {
 	pool *pgxpool.Pool
 }
 
+const retiredPromoCodePrefix = "__retired__"
+
 func NewPromoCodeRepository(pool *pgxpool.Pool) *PromoCodeRepository {
 	return &PromoCodeRepository{
 		pool: pool,
@@ -157,6 +159,7 @@ func (r *PromoCodeRepository) ReleaseUsageAtomic(ctx context.Context, id int64) 
 // ListAll returns all promo codes ordered by creation date descending.
 func (r *PromoCodeRepository) ListAll(ctx context.Context) ([]PromoCode, error) {
 	buildSelect := buildPromoCodeSelect(time.Now()).
+		Where(sq.NotLike{"p.code": retiredPromoCodePrefix + "%"}).
 		OrderBy("p.created_at DESC")
 
 	sql, args, err := buildSelect.ToSql()
@@ -266,17 +269,15 @@ func (r *PromoCodeRepository) Delete(ctx context.Context, code string) error {
 
 // Retire deactivates a promo code without removing historical purchase references.
 func (r *PromoCodeRepository) Retire(ctx context.Context, code string, retiredAt time.Time) error {
-	buildUpdate := sq.Update("promo_codes").
-		Set("valid_until", retiredAt.UTC()).
-		Where(sq.Eq{"code": code}).
-		PlaceholderFormat(sq.Dollar)
+	const query = `
+		UPDATE promo_codes
+		SET
+			code = $3 || id::text || '__' || code,
+			valid_until = $2
+		WHERE code = $1
+	`
 
-	sql, args, err := buildUpdate.ToSql()
-	if err != nil {
-		return fmt.Errorf("failed to build retire query: %w", err)
-	}
-
-	result, err := r.pool.Exec(ctx, sql, args...)
+	result, err := r.pool.Exec(ctx, query, code, retiredAt.UTC(), retiredPromoCodePrefix)
 	if err != nil {
 		return fmt.Errorf("failed to retire promo code: %w", err)
 	}

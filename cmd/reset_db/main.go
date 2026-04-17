@@ -53,7 +53,7 @@ func main() {
 		"TRUNCATE TABLE purchase CASCADE",
 		"TRUNCATE TABLE subscription_key CASCADE",
 		"TRUNCATE TABLE customer CASCADE",
-		"TRUNCATE TABLE promo_code CASCADE",
+		"TRUNCATE TABLE promo_codes CASCADE",
 	}
 
 	for _, q := range queries {
