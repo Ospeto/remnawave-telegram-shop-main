@@ -52,6 +52,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func isMeaningfulBuildValue(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	return normalized != "" && normalized != "none" && normalized != "unknown" && normalized != "dev"
+}
+
 func versionedMiniAppURL(rawURL string) string {
 	base := strings.TrimSpace(rawURL)
 	if base == "" {
@@ -63,7 +68,13 @@ func versionedMiniAppURL(rawURL string) string {
 		return base
 	}
 
-	version := firstNonEmpty(strings.TrimSpace(Commit), strings.TrimSpace(BuildDate), strings.TrimSpace(Version))
+	version := ""
+	for _, candidate := range []string{Commit, BuildDate, Version} {
+		if isMeaningfulBuildValue(candidate) {
+			version = strings.TrimSpace(candidate)
+			break
+		}
+	}
 	if version == "" {
 		return base
 	}

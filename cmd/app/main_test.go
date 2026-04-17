@@ -90,12 +90,29 @@ func TestVersionedMiniAppURLPreservesExistingQuery(t *testing.T) {
 		Commit, BuildDate, Version = originalCommit, originalBuildDate, originalVersion
 	})
 
-	Commit = ""
+	Commit = "none"
 	BuildDate = "2026-04-17T20:45:40Z"
 	Version = "dev"
 
 	got := versionedMiniAppURL("https://mini-92-112-127-10.sslip.io/plans?foo=bar")
 	if got != "https://mini-92-112-127-10.sslip.io/plans?foo=bar&v=2026-04-17T20%3A45%3A40Z" {
 		t.Fatalf("versionedMiniAppURL() = %q, want existing query preserved", got)
+	}
+}
+
+func TestIsMeaningfulBuildValue(t *testing.T) {
+	cases := map[string]bool{
+		"":                      false,
+		"none":                  false,
+		"unknown":               false,
+		"dev":                   false,
+		"120a989":               true,
+		"2026-04-17T20:45:40Z":  true,
+	}
+
+	for input, want := range cases {
+		if got := isMeaningfulBuildValue(input); got != want {
+			t.Fatalf("isMeaningfulBuildValue(%q) = %v, want %v", input, got, want)
+		}
 	}
 }
