@@ -151,3 +151,24 @@ export async function fetchJSONWithTelegramAuth<T>(
     }
     return response.json() as Promise<T>;
 }
+
+export async function fetchUserScopedJSONWithTelegramAuth<T extends { user?: { telegram_id?: number } }>(
+    input: RequestInfo | URL,
+    initData: string,
+    expectedTelegramID?: number,
+    init?: RequestInit,
+): Promise<T> {
+    let data = await fetchJSONWithTelegramAuth<T>(input, initData, init);
+
+    if (typeof expectedTelegramID !== 'number') {
+        return data;
+    }
+
+    const actualTelegramID = data?.user?.telegram_id;
+    if (typeof actualTelegramID === 'number' && actualTelegramID !== expectedTelegramID) {
+        clearTelegramSession();
+        data = await fetchJSONWithTelegramAuth<T>(input, initData, init);
+    }
+
+    return data;
+}

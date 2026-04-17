@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { APIError, isAPIStatus } from '../lib/http';
 import { useLanguage } from '../lib/LanguageContext';
 import { AdminPlan, UserData } from '../lib/types';
@@ -72,7 +72,11 @@ export function AdminPlans() {
         setAccessDenied(false);
 
         try {
-            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
+            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
+                '/api/me',
+                initData,
+                tg?.initDataUnsafe?.user?.id,
+            );
             if (!meData.is_admin) {
                 setAccessDenied(true);
                 return;

@@ -9,7 +9,7 @@ import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans } from '../lib/plans';
 
 
@@ -68,7 +68,11 @@ export function Plans() {
                 return;
             }
 
-            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
+            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
+                '/api/me',
+                initData,
+                tg?.initDataUnsafe?.user?.id,
+            );
             setUserData(meData);
         } catch (err) {
             console.warn('Plans load error:', err);

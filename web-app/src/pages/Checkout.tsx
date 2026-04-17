@@ -10,7 +10,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
 
 interface PaymentProvider {
@@ -186,7 +186,11 @@ export function Checkout() {
                 return;
             }
 
-            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
+            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
+                '/api/me',
+                initData,
+                tg?.initDataUnsafe?.user?.id,
+            );
             setUserData(meData);
             await loadWalletBalance();
         } catch (err) {

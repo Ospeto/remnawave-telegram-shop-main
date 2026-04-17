@@ -10,7 +10,7 @@ import { UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -32,7 +32,11 @@ export function Home() {
         setError(null);
         setAuthExpired(false);
         try {
-            const meData = await fetchJSONWithTelegramAuth<UserData>('/api/me', initData);
+            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
+                '/api/me',
+                initData,
+                tg?.initDataUnsafe?.user?.id,
+            );
             setData(meData);
         } catch (err) {
             if (isAPIStatus(err, 401)) {
@@ -48,7 +52,7 @@ export function Home() {
         } finally {
             setLoading(false);
         }
-    }, [initData]);
+    }, [initData, tg]);
 
     useEffect(() => {
         if (tg) tg.BackButton.hide();
