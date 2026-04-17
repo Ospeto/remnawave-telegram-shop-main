@@ -83,4 +83,32 @@ describe('getTelegramAuthHeaders', () => {
 
         expect(refreshed.Authorization).toBe('Bearer session-token-4');
     });
+
+    it('does not reuse a stored bearer token when Telegram initData changes', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+                token: 'session-token-admin',
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }))
+            .mockResolvedValueOnce(new Response(JSON.stringify({
+                token: 'session-token-other-user',
+                expires_at: new Date(Date.now() + 60_000).toISOString(),
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        clearTelegramSession();
+
+        const first = await getTelegramAuthHeaders('admin-init-data');
+        const second = await getTelegramAuthHeaders('other-init-data');
+
+        expect(first.Authorization).toBe('Bearer session-token-admin');
+        expect(second.Authorization).toBe('Bearer session-token-other-user');
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
 });

@@ -8,6 +8,7 @@ interface TelegramSessionResponse {
 interface StoredTelegramSession {
     token: string;
     expiresAt: string;
+    initData: string;
 }
 
 const TELEGRAM_SESSION_KEY = 'telegram_api_session_v1';
@@ -21,7 +22,7 @@ function readStoredSession(): StoredTelegramSession | null {
 
     try {
         const parsed = JSON.parse(raw) as StoredTelegramSession;
-        if (!parsed.token || !parsed.expiresAt) {
+        if (!parsed.token || !parsed.expiresAt || !parsed.initData) {
             sessionStorage.removeItem(TELEGRAM_SESSION_KEY);
             return null;
         }
@@ -32,19 +33,21 @@ function readStoredSession(): StoredTelegramSession | null {
     }
 }
 
-function isStoredSessionValid(session: StoredTelegramSession | null): session is StoredTelegramSession {
+function isStoredSessionValid(session: StoredTelegramSession | null, initData: string): session is StoredTelegramSession {
     if (!session) return false;
+    if (session.initData !== initData) return false;
     return new Date(session.expiresAt).getTime() > Date.now() + 5_000;
 }
 
-function storeSession(session: TelegramSessionResponse) {
+function storeSession(session: TelegramSessionResponse, initData: string) {
     sessionStorage.setItem(TELEGRAM_SESSION_KEY, JSON.stringify({
         token: session.token,
         expiresAt: session.expires_at,
+        initData,
     }));
 }
 
-function updateStoredSessionFromResponse(response: Response) {
+function updateStoredSessionFromResponse(response: Response, initData: string) {
     const token = response.headers.get(SESSION_TOKEN_HEADER);
     const expiresAt = response.headers.get(SESSION_EXPIRES_HEADER);
     if (!token || !expiresAt) return;
@@ -52,7 +55,7 @@ function updateStoredSessionFromResponse(response: Response) {
     storeSession({
         token,
         expires_at: expiresAt,
-    });
+    }, initData);
 }
 
 async function exchangeTelegramSession(initData: string): Promise<TelegramSessionResponse> {
@@ -67,7 +70,7 @@ async function exchangeTelegramSession(initData: string): Promise<TelegramSessio
             Authorization: `twa ${initData}`,
         },
     }).then((session) => {
-        storeSession(session);
+        storeSession(session, initData);
         return session;
     }).finally(() => {
         if (inFlightSessionExchanges.get(initData) === request) {
@@ -85,7 +88,7 @@ export function clearTelegramSession() {
 
 export async function getTelegramAuthHeaders(initData: string): Promise<Record<string, string>> {
     const stored = readStoredSession();
-    if (isStoredSessionValid(stored)) {
+    if (isStoredSessionValid(stored, initData)) {
         return { Authorization: `Bearer ${stored.token}` };
     }
 
@@ -112,7 +115,7 @@ async function executeAuthorizedFetch(
         ...init,
         headers: mergeHeaders(authHeaders, init),
     });
-    updateStoredSessionFromResponse(response);
+    updateStoredSessionFromResponse(response, initData);
     return response;
 }
 

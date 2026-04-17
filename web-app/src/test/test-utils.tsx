@@ -38,9 +38,14 @@ export function jsonResponse(data: unknown, status = 200, headersInit?: HeadersI
     } as Response;
 }
 
-export function seedTelegramSession(token = 'session-token', expiresAt = '2999-01-01T00:00:00.000Z') {
+export function seedTelegramSession(
+    token = 'session-token',
+    expiresAt = '2999-01-01T00:00:00.000Z',
+    initData = 'test-init-data',
+) {
     sessionStorage.setItem('telegram_api_session_v1', JSON.stringify({
         token,
         expiresAt,
+        initData,
     }));
 }
