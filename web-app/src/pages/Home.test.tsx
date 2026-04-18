@@ -137,4 +137,30 @@ describe('Home', () => {
         expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
         expect(screen.queryByRole('link', { name: /Plans/i })).toBeNull();
     });
+
+    it('shows a trial error when activation returns conflict', async () => {
+        fetchMock
+            .mockResolvedValueOnce(jsonResponse({
+                user: { id: 1, telegram_id: 42 },
+                keys: [],
+                is_active: false,
+                expire_at: null,
+                days_remaining: 0,
+                trial_eligible: true,
+                trial_days: 7,
+                is_admin: false,
+            }))
+            .mockResolvedValueOnce(jsonResponse('Trial already used', 409));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/']);
+
+        const trialButton = await screen.findByRole('button', { name: /Start Free Trial/i });
+        fireEvent.click(trialButton);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('Trial already used');
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
 });

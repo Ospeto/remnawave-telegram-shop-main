@@ -146,6 +146,19 @@ func TrialTrafficLimit() int {
 func TrialDays() int {
 	return conf.trialDays
 }
+
+func SetTrialConfigForTesting(days int, trafficLimitGB int) func() {
+	oldDays := conf.trialDays
+	oldTrafficLimit := conf.trialTrafficLimit
+	conf.trialDays = days
+	conf.trialTrafficLimit = trafficLimitGB
+
+	return func() {
+		conf.trialDays = oldDays
+		conf.trialTrafficLimit = oldTrafficLimit
+	}
+}
+
 func FeedbackURL() string {
 	return conf.feedbackURL
 }

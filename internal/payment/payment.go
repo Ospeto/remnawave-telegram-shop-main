@@ -53,6 +53,12 @@ var (
 	ErrInvalidPromoCode = errors.New("invalid or expired promo code")
 	// ErrCryptoPayDisabled means the crypto checkout rail is intentionally unavailable.
 	ErrCryptoPayDisabled = errors.New("crypto payments are disabled")
+	// ErrTrialUnavailable means free trials are disabled in config.
+	ErrTrialUnavailable = errors.New("trial is unavailable")
+	// ErrTrialAlreadyUsed means the customer has already consumed a trial or has prior subscription history.
+	ErrTrialAlreadyUsed = errors.New("trial already used")
+	// ErrCustomerNotFound means the customer record does not exist.
+	ErrCustomerNotFound = errors.New("customer not found")
 )
 
 func WithIdempotencyKey(ctx context.Context, key uuid.UUID) context.Context {
@@ -205,6 +211,7 @@ type PaymentService struct {
 	syncInFlight        sync.Map // key: customerID int64, value: struct{}
 	visionAlertMu       sync.Mutex
 	visionAlertLastSent map[string]time.Time
+	now                 func() time.Time
 }
 
 func NewPaymentService(
@@ -237,6 +244,7 @@ func NewPaymentService(
 		promoCodeRepository: promoCodeRepository,
 		walletTxRepo:        walletTxRepo,
 		visionAlertLastSent: make(map[string]time.Time),
+		now:                 time.Now,
 	}
 }
 
@@ -254,6 +262,59 @@ func (s *PaymentService) GetRevenueSummary(ctx context.Context, days int) ([]dat
 // UpdatePurchaseFields updates arbitrary (whitelisted) fields on a purchase record.
 func (s *PaymentService) UpdatePurchaseFields(ctx context.Context, id int64, fields map[string]interface{}) error {
 	return s.purchaseRepository.UpdateFields(ctx, id, fields)
+}
+
+func customerHasTrialHistory(customer *database.Customer, keyCount int) bool {
+	if customer == nil {
+		return false
+	}
+	return customer.TrialUsedAt != nil || customer.SubscriptionLink != nil || keyCount > 0
+}
+
+func trialUsername(ctx context.Context, telegramID int64) string {
+	if username, ok := ctx.Value(UsernameCtxKey).(string); ok && strings.TrimSpace(username) != "" {
+		return username
+	}
+	if username, ok := ctx.Value("username").(string); ok && strings.TrimSpace(username) != "" {
+		return username
+	}
+	return fmt.Sprintf("%d", telegramID)
+}
+
+func (s *PaymentService) trialEligibleForCustomer(ctx context.Context, customer *database.Customer) (bool, error) {
+	if customer == nil {
+		return false, ErrCustomerNotFound
+	}
+	if config.TrialDays() == 0 {
+		return false, ErrTrialUnavailable
+	}
+
+	keyCount := 0
+	if s.subKeyRepo != nil {
+		keys, err := s.subKeyRepo.FindByCustomerID(ctx, customer.ID)
+		if err != nil {
+			return false, err
+		}
+		keyCount = len(keys)
+	}
+
+	return !customerHasTrialHistory(customer, keyCount), nil
+}
+
+func (s *PaymentService) CanActivateTrial(ctx context.Context, telegramId int64) (bool, error) {
+	if config.TrialDays() == 0 {
+		return false, nil
+	}
+
+	customer, err := s.customerRepository.FindByTelegramId(ctx, telegramId)
+	if err != nil {
+		return false, err
+	}
+	if customer == nil {
+		return false, ErrCustomerNotFound
+	}
+
+	return s.trialEligibleForCustomer(ctx, customer)
 }
 
 func (s *PaymentService) findPurchaseByIdempotencyKey(ctx context.Context) (*database.Purchase, error) {
@@ -1423,17 +1484,36 @@ func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64
 
 func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (string, error) {
 	if config.TrialDays() == 0 {
-		return "", nil
+		return "", ErrTrialUnavailable
 	}
-	customer, err := s.customerRepository.FindByTelegramId(ctx, telegramId)
+	tx, err := s.customerRepository.BeginTx(ctx)
 	if err != nil {
-		slog.Error("Error finding customer", "error", err)
+		return "", err
+	}
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
+
+	customer, err := s.customerRepository.FindByTelegramIdForUpdateTx(ctx, tx, telegramId)
+	if err != nil {
+		slog.Error("Error finding customer for trial", "error", err)
 		return "", err
 	}
 	if customer == nil {
-		return "", fmt.Errorf("customer %d not found", telegramId)
+		return "", ErrCustomerNotFound
 	}
-	user, err := s.remnawaveClient.CreateOrUpdateUser(ctx, customer.ID, telegramId, config.TrialTrafficLimit(), config.TrialDays(), true)
+
+	eligible, err := s.trialEligibleForCustomer(ctx, customer)
+	if err != nil {
+		slog.Error("Error checking trial eligibility", "error", err)
+		return "", err
+	}
+	if !eligible {
+		return "", ErrTrialAlreadyUsed
+	}
+
+	ctxWithUsername := context.WithValue(ctx, "username", trialUsername(ctx, telegramId))
+	user, err := s.remnawaveClient.CreateOrUpdateUser(ctxWithUsername, customer.ID, telegramId, config.TrialTrafficLimit(), config.TrialDays(), true)
 	if err != nil {
 		slog.Error("Error creating user", "error", err)
 		return "", err
@@ -1442,15 +1522,19 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 	customerFilesToUpdate := map[string]interface{}{
 		"subscription_link": user.GetSubscriptionUrl(),
 		"expire_at":         user.GetExpireAt(),
+		"trial_used_at":     s.now().UTC(),
 	}
 
-	err = s.customerRepository.UpdateFields(ctx, customer.ID, customerFilesToUpdate)
+	err = s.customerRepository.UpdateFieldsTx(ctx, tx, customer.ID, customerFilesToUpdate)
 	if err != nil {
 		return "", err
 	}
 
-	return user.GetSubscriptionUrl(), nil
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
 
+	return user.GetSubscriptionUrl(), nil
 }
 
 func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {

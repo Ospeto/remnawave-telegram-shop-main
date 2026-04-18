@@ -2,29 +2,26 @@ package handler
 
 import (
 	"context"
+	"errors"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"log/slog"
 
 	"remnawave-tg-shop-bot/internal/config"
-	"remnawave-tg-shop-bot/utils"
+	"remnawave-tg-shop-bot/internal/payment"
 )
 
 func (h Handler) TrialCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if config.TrialDays() == 0 {
 		return
 	}
-	c, err := h.customerRepository.FindByTelegramId(ctx, update.CallbackQuery.From.ID)
+	eligible, err := h.paymentService.CanActivateTrial(ctx, update.CallbackQuery.From.ID)
 	if err != nil {
-		slog.Error("Error finding customer", "error", err)
+		slog.Error("Error checking trial eligibility", "error", err)
 		return
 	}
-	if c == nil {
-		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(update.CallbackQuery.From.ID), "error", err)
-		return
-	}
-	if c.SubscriptionLink != nil {
+	if !eligible {
 		return
 	}
 	callback := update.CallbackQuery.Message.Message
@@ -48,23 +45,14 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 	if config.TrialDays() == 0 {
 		return
 	}
-	c, err := h.customerRepository.FindByTelegramId(ctx, update.CallbackQuery.From.ID)
-	if err != nil {
-		slog.Error("Error finding customer", "error", err)
-		return
-	}
-	if c == nil {
-		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(update.CallbackQuery.From.ID), "error", err)
-		return
-	}
-	if c.SubscriptionLink != nil {
-		return
-	}
 	callback := update.CallbackQuery.Message.Message
 	langCode := update.CallbackQuery.From.LanguageCode
-	ctxWithUsername := context.WithValue(ctx, "username", update.CallbackQuery.From.Username)
-	_, err = h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
+	ctxWithUsername := context.WithValue(ctx, payment.UsernameCtxKey, update.CallbackQuery.From.Username)
+	_, err := h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
 	if err != nil {
+		if errors.Is(err, payment.ErrTrialAlreadyUsed) || errors.Is(err, payment.ErrCustomerNotFound) {
+			return
+		}
 		slog.Error("Error activating trial", "error", err)
 		_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:    callback.Chat.ID,

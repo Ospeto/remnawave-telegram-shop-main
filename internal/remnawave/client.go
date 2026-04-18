@@ -207,6 +207,10 @@ func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, teleg
 		existingUser = &users[0]
 	}
 
+	if isTrialUser {
+		return existingUser, nil
+	}
+
 	return r.updateUser(ctx, existingUser, trafficLimit, days)
 }
 

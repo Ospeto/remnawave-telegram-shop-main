@@ -382,6 +382,8 @@ type APIHandler struct {
 	deletePromoCode            func(context.Context, string) error
 	retirePromoCode            func(context.Context, string, time.Time) error
 	savePlansCatalog           func(context.Context, []config.Plan) error
+	findSubscriptionKeys       func(context.Context, int64) ([]database.SubscriptionKey, error)
+	activateCustomerTrial      func(context.Context, int64) (string, error)
 	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys            func(context.Context, int64, int64)
 	isAdminTelegramID          func(int64) bool
@@ -430,6 +432,26 @@ func (h *APIHandler) customerByTelegramID(ctx context.Context, telegramID int64)
 		return nil, errors.New("customer repository is unavailable")
 	}
 	return h.customerRepo.FindByTelegramId(ctx, telegramID)
+}
+
+func (h *APIHandler) subscriptionKeysByCustomerID(ctx context.Context, customerID int64) ([]database.SubscriptionKey, error) {
+	if h.findSubscriptionKeys != nil {
+		return h.findSubscriptionKeys(ctx, customerID)
+	}
+	if h.subKeyRepo == nil {
+		return nil, nil
+	}
+	return h.subKeyRepo.FindByCustomerID(ctx, customerID)
+}
+
+func (h *APIHandler) activateTrialForCustomer(ctx context.Context, telegramID int64) (string, error) {
+	if h.activateCustomerTrial != nil {
+		return h.activateCustomerTrial(ctx, telegramID)
+	}
+	if h.paymentService == nil {
+		return "", errors.New("payment service is unavailable")
+	}
+	return h.paymentService.ActivateTrial(ctx, telegramID)
 }
 
 func (h *APIHandler) allPromoCodes(ctx context.Context) ([]database.PromoCode, error) {
@@ -930,8 +952,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		statsMap[sk.ID] = sk
 	}
 
-	if h.subKeyRepo != nil {
-		localKeys, _ := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
+	if h.subKeyRepo != nil || h.findSubscriptionKeys != nil {
+		localKeys, _ := h.subscriptionKeysByCustomerID(r.Context(), customer.ID)
 		localKeys = compactSubscriptionKeysForDisplay(localKeys)
 		if len(localKeys) > 0 {
 			hasMigratedKeys = true
@@ -1012,7 +1034,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine trial eligibility: trial enabled + no subscription history.
-	trialEligible := config.TrialDays() > 0 && customer.SubscriptionLink == nil && len(keys) == 0 && !hasMigratedKeys
+	trialEligible := config.TrialDays() > 0 && customer.TrialUsedAt == nil && customer.SubscriptionLink == nil && len(keys) == 0 && !hasMigratedKeys
 
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
@@ -1345,47 +1367,24 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if config.TrialDays() == 0 {
-		http.Error(w, "Trial is not available", http.StatusBadRequest)
-		return
-	}
-
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// One trial per user: check if they ever had a subscription
-	if customer.SubscriptionLink != nil {
-		http.Error(w, "Trial already used", http.StatusConflict)
-		return
-	}
-	if h.subKeyRepo != nil {
-		keys, keyErr := h.subKeyRepo.FindByCustomerID(r.Context(), customer.ID)
-		if keyErr != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
-			return
-		}
-		if len(keys) > 0 {
-			http.Error(w, "Trial already used", http.StatusConflict)
-			return
-		}
-	}
-
 	// Use actual username if available, otherwise stringified ID. Ideally this logic belongs in service layer.
 	username, _ := r.Context().Value(payment.UsernameCtxKey).(string)
 	if username == "" {
 		username = fmt.Sprintf("%d", telegramID)
 	}
 	ctxWithUsername := context.WithValue(r.Context(), payment.UsernameCtxKey, username)
-	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
+	subURL, err := h.activateTrialForCustomer(ctxWithUsername, telegramID)
 	if err != nil {
-		http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, payment.ErrTrialUnavailable):
+			http.Error(w, "Trial is not available", http.StatusBadRequest)
+		case errors.Is(err, payment.ErrCustomerNotFound):
+			http.Error(w, "User not found", http.StatusNotFound)
+		case errors.Is(err, payment.ErrTrialAlreadyUsed):
+			http.Error(w, "Trial already used", http.StatusConflict)
+		default:
+			http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
+		}
 		return
 	}
 
