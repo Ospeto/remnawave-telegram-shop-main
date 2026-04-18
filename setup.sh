@@ -145,6 +145,24 @@ ask_reset_strategy() {
     done
 }
 
+# Ask for a screenshot analyzer fallback provider.
+ask_vision_fallback_provider() {
+    local prompt="$1"
+    local default="$2"
+    local varname="$3"
+
+    while true; do
+        ask "${prompt} (empty/openrouter/gemini)" "$default" "$varname"
+        local val="${CFG[$varname]}"
+        val="$(echo "$val" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$val" == "" || "$val" == "openrouter" || "$val" == "gemini" ]]; then
+            CFG["$varname"]="$val"
+            return
+        fi
+        print_error "Allowed values: empty, openrouter, gemini"
+    done
+}
+
 # Read key from .env with fallback default. Usage: env_get "KEY" "default"
 env_get() {
     local key="$1"
@@ -627,16 +645,19 @@ wizard() {
         ask "AyaPay Account Name (optional)" "" "MOBILE_BANKING_NAME_AYAPAY"
         ask_required "OpenRouter API Key" "" "OPENROUTER_API_KEY"
         ask "OpenRouter Model" "openai/gpt-4.1-mini" "OPENROUTER_MODEL"
-        ask "OpenRouter Fallback Model (optional)" "google/gemini-3.1-flash-lite-preview" "OPENROUTER_FALLBACK_MODEL"
-        CFG[GEMINI_API_KEY]=""
-        CFG[GEMINI_MODEL]=""
-        if [[ -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
-            CFG[VISION_PROVIDER_FALLBACK]="openrouter"
-        else
-            CFG[VISION_PROVIDER_FALLBACK]=""
+        ask "Gemini API Key (optional, for cross-provider fallback)" "" "GEMINI_API_KEY"
+        ask "Gemini Model" "gemini-3.1-flash-lite-preview" "GEMINI_MODEL"
+        local fallback_default=""
+        if [[ -n "${CFG[GEMINI_API_KEY]}" ]]; then
+            fallback_default="gemini"
+        fi
+        ask_vision_fallback_provider "Fallback provider after OpenRouter failure" "$fallback_default" "VISION_PROVIDER_FALLBACK"
+        ask "OpenRouter Fallback Model (optional, used only when fallback=openrouter)" "google/gemini-3.1-flash-lite-preview" "OPENROUTER_FALLBACK_MODEL"
+        if [[ "${CFG[VISION_PROVIDER_FALLBACK]}" == "gemini" && -z "${CFG[GEMINI_API_KEY]}" ]]; then
+            ask_required "Gemini API Key (required when fallback=gemini)" "${CFG[GEMINI_API_KEY]}" "GEMINI_API_KEY"
         fi
         ask_number "Retries per provider before failover" "1" "VISION_RETRY_ATTEMPTS"
-        if [[ -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
+        if [[ -n "${CFG[VISION_PROVIDER_FALLBACK]}" ]]; then
             ask_number "Max screenshot analysis attempts (total)" "3" "VISION_RETRY_MAX_ATTEMPTS"
         else
             ask_number "Max screenshot analysis attempts (total)" "2" "VISION_RETRY_MAX_ATTEMPTS"
@@ -652,7 +673,7 @@ wizard() {
         CFG[MOBILE_BANKING_NAME_WAVEPAY]=""
         CFG[MOBILE_BANKING_NAME_AYAPAY]=""
         CFG[GEMINI_API_KEY]=""
-        CFG[GEMINI_MODEL]=""
+        CFG[GEMINI_MODEL]="gemini-3.1-flash-lite-preview"
         CFG[OPENROUTER_API_KEY]=""
         CFG[OPENROUTER_MODEL]="openai/gpt-4.1-mini"
         CFG[OPENROUTER_FALLBACK_MODEL]="google/gemini-3.1-flash-lite-preview"
@@ -774,6 +795,8 @@ MOBILE_BANKING_NAME_WAVEPAY=${CFG[MOBILE_BANKING_NAME_WAVEPAY]}
 MOBILE_BANKING_NAME_AYAPAY=${CFG[MOBILE_BANKING_NAME_AYAPAY]}
 OPENROUTER_API_KEY=${CFG[OPENROUTER_API_KEY]}
 OPENROUTER_MODEL=${CFG[OPENROUTER_MODEL]}
+GEMINI_API_KEY=${CFG[GEMINI_API_KEY]}
+GEMINI_MODEL=${CFG[GEMINI_MODEL]}
 OPENROUTER_FALLBACK_MODEL=${CFG[OPENROUTER_FALLBACK_MODEL]}
 VISION_PROVIDER_FALLBACK=${CFG[VISION_PROVIDER_FALLBACK]}
 VISION_RETRY_ATTEMPTS=${CFG[VISION_RETRY_ATTEMPTS]}
@@ -1309,7 +1332,8 @@ do_edit_payments() {
     fi
 
     local cur_enabled cur_legacy
-    local cur_openrouter_key cur_openrouter_model cur_openrouter_fallback_model cur_retry_attempts cur_retry_max_attempts
+    local cur_openrouter_key cur_openrouter_model cur_openrouter_fallback_model cur_retry_attempts cur_retry_max_attempts cur_fallback_provider
+    local cur_gemini_key cur_gemini_model
     local cur_phone_kpay cur_phone_wave cur_phone_aya
     local cur_name_kpay cur_name_wave cur_name_aya
 
@@ -1317,7 +1341,10 @@ do_edit_payments() {
     cur_legacy="$(env_get "MOBILE_BANKING_PHONE" "")"
     cur_openrouter_key="$(env_get "OPENROUTER_API_KEY" "")"
     cur_openrouter_model="$(env_get "OPENROUTER_MODEL" "openai/gpt-4.1-mini")"
+    cur_gemini_key="$(env_get "GEMINI_API_KEY" "")"
+    cur_gemini_model="$(env_get "GEMINI_MODEL" "gemini-3.1-flash-lite-preview")"
     cur_openrouter_fallback_model="$(env_get "OPENROUTER_FALLBACK_MODEL" "google/gemini-3.1-flash-lite-preview")"
+    cur_fallback_provider="$(env_get "VISION_PROVIDER_FALLBACK" "")"
     cur_retry_attempts="$(env_get "VISION_RETRY_ATTEMPTS" "1")"
     cur_retry_max_attempts="$(env_get "VISION_RETRY_MAX_ATTEMPTS" "2")"
     cur_accept_confidence="$(env_get "VISION_ACCEPT_CONFIDENCE_THRESHOLD" "0.55")"
@@ -1348,16 +1375,23 @@ do_edit_payments() {
         ask "AyaPay Account Name (optional)" "$cur_name_aya" "MOBILE_BANKING_NAME_AYAPAY"
         ask_required "OpenRouter API Key" "$cur_openrouter_key" "OPENROUTER_API_KEY"
         ask "OpenRouter Model" "$cur_openrouter_model" "OPENROUTER_MODEL"
-        ask "OpenRouter Fallback Model (optional)" "$cur_openrouter_fallback_model" "OPENROUTER_FALLBACK_MODEL"
-        CFG[GEMINI_API_KEY]=""
-        CFG[GEMINI_MODEL]=""
-        if [[ -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
-            CFG[VISION_PROVIDER_FALLBACK]="openrouter"
-        else
-            CFG[VISION_PROVIDER_FALLBACK]=""
+        ask "Gemini API Key (optional, for cross-provider fallback)" "$cur_gemini_key" "GEMINI_API_KEY"
+        ask "Gemini Model" "$cur_gemini_model" "GEMINI_MODEL"
+        ask_vision_fallback_provider "Fallback provider after OpenRouter failure" "$cur_fallback_provider" "VISION_PROVIDER_FALLBACK"
+        ask "OpenRouter Fallback Model (optional, used only when fallback=openrouter)" "$cur_openrouter_fallback_model" "OPENROUTER_FALLBACK_MODEL"
+        if [[ "${CFG[VISION_PROVIDER_FALLBACK]}" == "gemini" && -z "${CFG[GEMINI_API_KEY]}" ]]; then
+            ask_required "Gemini API Key (required when fallback=gemini)" "${CFG[GEMINI_API_KEY]}" "GEMINI_API_KEY"
         fi
         ask_number "Retries per provider before failover" "$cur_retry_attempts" "VISION_RETRY_ATTEMPTS"
-        ask_number "Max screenshot analysis attempts (total)" "$cur_retry_max_attempts" "VISION_RETRY_MAX_ATTEMPTS"
+        local default_retry_max_attempts="$cur_retry_max_attempts"
+        if [[ -z "$default_retry_max_attempts" ]]; then
+            if [[ -n "${CFG[VISION_PROVIDER_FALLBACK]}" ]]; then
+                default_retry_max_attempts="3"
+            else
+                default_retry_max_attempts="2"
+            fi
+        fi
+        ask_number "Max screenshot analysis attempts (total)" "$default_retry_max_attempts" "VISION_RETRY_MAX_ATTEMPTS"
         ask "Accept confidence threshold (0-1)" "$cur_accept_confidence" "VISION_ACCEPT_CONFIDENCE_THRESHOLD"
         ask "Reject confidence threshold (0-1)" "$cur_reject_confidence" "VISION_REJECT_CONFIDENCE_THRESHOLD"
     else
@@ -1368,16 +1402,12 @@ do_edit_payments() {
         CFG[MOBILE_BANKING_NAME_KPAY]="$cur_name_kpay"
         CFG[MOBILE_BANKING_NAME_WAVEPAY]="$cur_name_wave"
         CFG[MOBILE_BANKING_NAME_AYAPAY]="$cur_name_aya"
-        CFG[GEMINI_API_KEY]=""
-        CFG[GEMINI_MODEL]=""
+        CFG[GEMINI_API_KEY]="$cur_gemini_key"
+        CFG[GEMINI_MODEL]="$cur_gemini_model"
         CFG[OPENROUTER_API_KEY]="$cur_openrouter_key"
         CFG[OPENROUTER_MODEL]="$cur_openrouter_model"
         CFG[OPENROUTER_FALLBACK_MODEL]="$cur_openrouter_fallback_model"
-        if [[ -n "$cur_openrouter_fallback_model" ]]; then
-            CFG[VISION_PROVIDER_FALLBACK]="openrouter"
-        else
-            CFG[VISION_PROVIDER_FALLBACK]=""
-        fi
+        CFG[VISION_PROVIDER_FALLBACK]="$cur_fallback_provider"
         CFG[VISION_RETRY_ATTEMPTS]="$cur_retry_attempts"
         CFG[VISION_RETRY_MAX_ATTEMPTS]="$cur_retry_max_attempts"
         CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]="$cur_accept_confidence"
@@ -1423,7 +1453,9 @@ do_edit_payments() {
         else
             print_info "Mobile banking is enabled, but all providers are OFF (no phone numbers set)."
         fi
-        if [[ -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
+        if [[ "${CFG[VISION_PROVIDER_FALLBACK]}" == "gemini" ]]; then
+            print_info "Screenshot verification: OpenRouter primary (${CFG[OPENROUTER_MODEL]}), Gemini fallback (${CFG[GEMINI_MODEL]}), retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}, accept confidence ${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}, reject confidence ${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}."
+        elif [[ "${CFG[VISION_PROVIDER_FALLBACK]}" == "openrouter" && -n "${CFG[OPENROUTER_FALLBACK_MODEL]}" ]]; then
             print_info "Screenshot verification: OpenRouter primary (${CFG[OPENROUTER_MODEL]}), OpenRouter fallback (${CFG[OPENROUTER_FALLBACK_MODEL]}), retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}, accept confidence ${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}, reject confidence ${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}."
         else
             print_info "Screenshot verification: OpenRouter primary only, retries ${CFG[VISION_RETRY_ATTEMPTS]}, max attempts ${CFG[VISION_RETRY_MAX_ATTEMPTS]}, accept confidence ${CFG[VISION_ACCEPT_CONFIDENCE_THRESHOLD]}, reject confidence ${CFG[VISION_REJECT_CONFIDENCE_THRESHOLD]}."

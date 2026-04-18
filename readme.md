@@ -294,6 +294,8 @@ The full template lives in [.env.sample](.env.sample).
 | `MOBILE_BANKING_PHONE` | Default display phone number |
 | `OPENROUTER_API_KEY` | OpenRouter API key for screenshot verification |
 | `OPENROUTER_MODEL` | Primary OpenRouter model |
+| `GEMINI_API_KEY` | Gemini API key for direct provider use or fallback |
+| `GEMINI_MODEL` | Gemini model used when Gemini is enabled |
 | `OPENROUTER_FALLBACK_MODEL` | Optional fallback model via OpenRouter |
 | `VISION_PROVIDER_FALLBACK` | Fallback provider, for example `openrouter` or `gemini` |
 | `VISION_RETRY_ATTEMPTS` | Retries per provider before failover |
@@ -305,7 +307,7 @@ Advanced note:
 
 - screenshot verification can use OpenRouter and Gemini-backed providers
 - the sample file is OpenRouter-first because that is the default production path in this repository
-- if you want Gemini available, configure `GEMINI_API_KEY` and optionally `GEMINI_MODEL`
+- if you want Gemini available, configure `GEMINI_API_KEY`, optionally `GEMINI_MODEL`, and set `VISION_PROVIDER_FALLBACK=gemini`
 - low-confidence or blurry results now trigger a clearer-screenshot response instead of a generic reject
 - analyzer logs include explicit `decision` values so operators can see retry, fallback, reject, and ask-clearer paths
 
