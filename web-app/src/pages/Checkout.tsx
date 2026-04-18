@@ -9,6 +9,7 @@ import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
+import { buildTelegramStartUrl } from '../lib/externalLinks';
 import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
@@ -29,7 +30,7 @@ interface PurchaseResponse {
     currency: string;
     instructions: string;
     invoice_type: string;
-    bot_url: string;
+    bot_url?: string;
     happ_link?: string;
     redirect_url?: string;
 }
@@ -100,6 +101,10 @@ export function Checkout() {
             }))
             : [];
     const paymentMethodsText = paymentProviders.map((provider) => provider.label).join(' · ');
+    const checkoutReferralUrl = buildTelegramStartUrl(
+        purchase?.bot_url,
+        tg?.initDataUnsafe?.user?.id ? `ref_${tg.initDataUnsafe.user.id}` : '',
+    );
 
     const handleBack = useCallback(() => {
         navigate(backTarget);
@@ -428,43 +433,36 @@ export function Checkout() {
                     {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
                 </TipBox>
 
-                {/* Referral CTA on Success */}
-                <div style={{
-                    marginTop: 24, marginBottom: 24,
-                    padding: '16px 20px', borderRadius: 16,
-                    background: 'linear-gradient(135deg, rgba(201,168,76,0.1) 0%, rgba(184,144,42,0.1) 100%)',
-                    border: '1px solid rgba(201,168,76,0.25)',
-                    textAlign: 'center'
-                }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-color)', marginBottom: 6 }}>
-                        {t('referral_checkout_title')}
+                {checkoutReferralUrl && (
+                    <div style={{
+                        marginTop: 24, marginBottom: 24,
+                        padding: '16px 20px', borderRadius: 16,
+                        background: 'linear-gradient(135deg, rgba(201,168,76,0.1) 0%, rgba(184,144,42,0.1) 100%)',
+                        border: '1px solid rgba(201,168,76,0.25)',
+                        textAlign: 'center'
+                    }}>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-color)', marginBottom: 6 }}>
+                            {t('referral_checkout_title')}
+                        </div>
+                        <div className="text-hint" style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.4 }}>
+                            {t('referral_checkout_desc')}
+                        </div>
+                        <button
+                            className="btn-primary"
+                            onClick={() => {
+                                playClick();
+                                openTelegramShareLink(tg, checkoutReferralUrl, t('referral_share_text'));
+                            }}
+                            style={{
+                                width: '100%', padding: '12px', fontSize: 14, fontWeight: 700,
+                                background: 'linear-gradient(135deg, #c9a84c 0%, #b8902a 100%)',
+                                color: '#000', border: 'none', boxShadow: '0 4px 12px rgba(201,168,76,0.3)'
+                            }}
+                        >
+                            {t('referral_checkout_btn')}
+                        </button>
                     </div>
-                    <div className="text-hint" style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.4 }}>
-                        {t('referral_checkout_desc')}
-                    </div>
-                    <button
-                        className="btn-primary"
-                        onClick={() => {
-                            playClick();
-                            const uid = tg?.initDataUnsafe?.user?.id;
-                            if (!uid) return;
-                            let botUrlToUse = "https://t.me/WavyVpnBot";
-                            if (purchase?.bot_url) {
-                                botUrlToUse = purchase.bot_url;
-                            }
-                            const text = t('referral_share_text');
-                            const url = `${botUrlToUse}?start=ref_${uid}`;
-                            openTelegramShareLink(tg, url, text);
-                        }}
-                        style={{
-                            width: '100%', padding: '12px', fontSize: 14, fontWeight: 700,
-                            background: 'linear-gradient(135deg, #c9a84c 0%, #b8902a 100%)',
-                            color: '#000', border: 'none', boxShadow: '0 4px 12px rgba(201,168,76,0.3)'
-                        }}
-                    >
-                        {t('referral_checkout_btn')}
-                    </button>
-                </div>
+                )}
 
                 <button className="btn-secondary" onClick={() => { playClick(); navigate(isWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%', opacity: 0.7 }}>
                     {isWalletTopup ? t('back_to_wallet') : t('go_home')}

@@ -56,6 +56,7 @@ type ValidationResponse struct {
 	ReferralStatsUnavailable bool               `json:"referral_stats_unavailable,omitempty"`
 	ReferralBonusAmount      float64            `json:"referral_bonus_amount"`
 	BotURL                   string             `json:"bot_url"`
+	SupportURL               string             `json:"support_url,omitempty"`
 }
 
 type PlanResponse struct {
@@ -1050,6 +1051,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		ReferralStatsUnavailable: referralStatsUnavailable,
 		ReferralBonusAmount:      payment.ReferralBonusAmount,
 		BotURL:                   config.BotURL(),
+		SupportURL:               config.SupportURL(),
 	}
 	if !referralStatsUnavailable {
 		resp.ReferralCount = &referralCount

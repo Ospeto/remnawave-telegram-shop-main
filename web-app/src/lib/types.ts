@@ -46,6 +46,7 @@ export interface UserData {
     referral_stats_unavailable?: boolean;
     referral_bonus_amount?: number;
     bot_url?: string;
+    support_url?: string;
     is_admin?: boolean;
 }
 

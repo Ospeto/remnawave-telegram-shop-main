@@ -159,6 +159,15 @@ func SetTrialConfigForTesting(days int, trafficLimitGB int) func() {
 	}
 }
 
+func SetSupportURLForTesting(url string) func() {
+	oldURL := conf.supportURL
+	conf.supportURL = url
+
+	return func() {
+		conf.supportURL = oldURL
+	}
+}
+
 func FeedbackURL() string {
 	return conf.feedbackURL
 }

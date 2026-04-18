@@ -7,13 +7,14 @@ import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { APIError, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth } from '../lib/auth';
+import { buildTelegramStartUrl } from '../lib/externalLinks';
 
 interface WalletData {
   balance: number;
   currency: string;
   auto_renew: boolean;
   auto_renew_duration: number | null;
-  bot_url: string;
+  bot_url?: string;
   referral_count?: number;
   referral_earned?: number;
   referral_stats_unavailable?: boolean;
@@ -50,6 +51,10 @@ export function Wallet() {
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
   const referralTotalsUnavailable = Boolean(wallet?.referral_stats_unavailable);
+  const referralShareUrl = buildTelegramStartUrl(
+    wallet?.bot_url,
+    tg?.initDataUnsafe?.user?.id ? `ref_${tg.initDataUnsafe.user.id}` : '',
+  );
   const loadWalletData = useCallback(async () => {
     if (!initData) {
       setLoading(false);
@@ -353,23 +358,16 @@ export function Wallet() {
         }
 
         {/* Share Button uses tg API if possible to pick chat, else copies */}
-        <button
-          onClick={() => {
-            const uid = tg?.initDataUnsafe?.user?.id;
-            if (!uid) return;
-            // Use the bot URL from the backend if available, otherwise just use the web App's URL parameter or fallback username
-            let botUrlToUse = "https://t.me/WavyVpnBot"; // absolute fallback
-            if (wallet?.bot_url) {
-              botUrlToUse = wallet.bot_url;
-            }
-            const text = t('referral_share_text');
-            const url = `${botUrlToUse}?start=ref_${uid}`;
-            openTelegramShareLink(tg, url, text);
-          }}
-          style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
-        >
-          🎁 {t('share_link')}
-        </button>
+        {referralShareUrl && (
+          <button
+            onClick={() => {
+              openTelegramShareLink(tg, referralShareUrl, t('referral_share_text'));
+            }}
+            style={{ width: '100%', padding: '12px', borderRadius: 10, background: 'var(--btn-bg)', color: 'var(--btn-text)', border: 'none', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}
+          >
+            🎁 {t('share_link')}
+          </button>
+        )}
       </div >
 
       {/* Transaction History */}
