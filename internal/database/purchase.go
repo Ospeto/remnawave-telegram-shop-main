@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"remnawave-tg-shop-bot/internal/config"
+
 	sq "github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4"
@@ -354,7 +356,7 @@ func (cr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
 }
 
-// RevenueSummaryRow represents a single row from the revenue_daily view.
+// RevenueSummaryRow represents a single row from the revenue summary query.
 type RevenueSummaryRow struct {
 	Day             string  `json:"day"`
 	PaymentMethod   string  `json:"payment_method"`
@@ -364,14 +366,33 @@ type RevenueSummaryRow struct {
 	UniqueCustomers int     `json:"unique_customers"`
 }
 
-// GetRevenueSummary fetches revenue data for the last N days from the revenue_daily view.
-func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) ([]RevenueSummaryRow, error) {
-	query := `SELECT day, COALESCE(payment_method, '') as payment_method, COALESCE(currency, '') as currency, total_purchases, total_revenue, unique_customers
-		FROM revenue_daily
-		WHERE day >= CURRENT_DATE - $1::int
-		ORDER BY day DESC, total_revenue DESC`
+const revenueSummaryTimezone = "Asia/Yangon"
 
-	rows, err := pr.pool.Query(ctx, query, days)
+func buildRevenueSummaryQuery() string {
+	return fmt.Sprintf(`
+		SELECT
+			(p.paid_at AT TIME ZONE '%s')::date AS day,
+			COALESCE(p.payment_method, '') AS payment_method,
+			COALESCE(p.currency, '') AS currency,
+			COUNT(*) AS total_purchases,
+			COALESCE(SUM(p.amount), 0) AS total_revenue,
+			COUNT(DISTINCT p.customer_id) AS unique_customers
+		FROM purchase p
+		JOIN customer c ON c.id = p.customer_id
+		WHERE p.status = 'paid'
+		  AND p.paid_at IS NOT NULL
+		  AND (p.paid_at AT TIME ZONE '%s')::date >= (CURRENT_TIMESTAMP AT TIME ZONE '%s')::date - $1::int
+		  AND ($2::bigint = 0 OR c.telegram_id <> $2)
+		GROUP BY 1, 2, 3
+		ORDER BY day DESC, total_revenue DESC`, revenueSummaryTimezone, revenueSummaryTimezone, revenueSummaryTimezone)
+}
+
+// GetRevenueSummary fetches revenue data for the last N days, excluding admin-account purchases.
+func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) ([]RevenueSummaryRow, error) {
+	query := buildRevenueSummaryQuery()
+	adminTelegramID := config.GetAdminTelegramId()
+
+	rows, err := pr.pool.Query(ctx, query, days, adminTelegramID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query revenue summary: %w", err)
 	}
