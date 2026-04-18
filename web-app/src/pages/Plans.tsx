@@ -245,7 +245,7 @@ export function Plans() {
         : -1;
 
     return (
-        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
+        <div className="page-wrapper animate-fade-in" style={{ gap: 16 }}>
             {/* Header */}
             <div style={{ textAlign: 'center', padding: '8px 0' }}>
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>

@@ -187,13 +187,7 @@ export function Home() {
     const supportUrl = resolveSupportUrl(data?.support_url, data?.bot_url);
 
     return (
-        <div className="animate-fade-in" style={{
-            padding: 'var(--layout-padding)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--layout-gap)',
-            minHeight: '100vh'
-        }}>
+        <div className="page-wrapper animate-fade-in">
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
                 <img
@@ -611,7 +605,7 @@ export function Home() {
                 </div>
             )}
 
-            <div style={{ flex: 1 }} />
+            <div className="home-footer-spacer" style={{ flex: 1 }} />
 
             {/* Trial Button */}
             {data?.trial_eligible && keys.length === 0 && (

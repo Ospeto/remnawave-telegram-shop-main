@@ -391,82 +391,85 @@ export function Checkout() {
 
     if (verificationResult?.status === 'success') {
         return (
-            <div className="animate-slide-up screen-center">
-                <div style={{ fontSize: 64, marginBottom: 8 }} aria-hidden="true">✅</div>
-                <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{t('success_title')}</h1>
-                <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
-                    {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
-                </p>
-
-                {verificationResult?.test_mode && (
-                    <TipBox
-                        variant={verificationResult.shadow_passed === false ? 'warning' : 'info'}
-                        icon={verificationResult.shadow_passed === false ? '🧪' : '✅'}
-                    >
-                        {verificationResult.message}
-                    </TipBox>
-                )}
-
-                {verificationResult?.happ_link && !isWalletTopup && (
-                    <button
-                        className="btn-primary"
-                        onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!, verificationResult.redirect_url); }}
-                        style={{ marginTop: 12, width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
-                    >
-                        {t('btn_open_happ')}
-                    </button>
-                )}
-
-                {verificationResult?.happ_link && !isWalletTopup && (
-                    <p className="text-hint" style={{ margin: '-8px 0 0', fontSize: 11 }}>
-                        {t('success_happ_hint')}
+            <div className="page-wrapper animate-fade-in">
+                <div className="success-shell animate-slide-up">
+                    <div style={{ fontSize: 64, marginBottom: 4 }} aria-hidden="true">✅</div>
+                    <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{t('success_title')}</h1>
+                    <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
+                        {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
                     </p>
-                )}
 
-                {!verificationResult?.happ_link && !isWalletTopup && (
-                    <TipBox variant="success" icon="✨">
-                        {t('check_home_for_key')}
-                    </TipBox>
-                )}
-
-                <TipBox variant="success" icon="💡">
-                    {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
-                </TipBox>
-
-                {checkoutReferralUrl && (
-                    <div style={{
-                        marginTop: 24, marginBottom: 24,
-                        padding: '16px 20px', borderRadius: 16,
-                        background: 'linear-gradient(135deg, rgba(201,168,76,0.1) 0%, rgba(184,144,42,0.1) 100%)',
-                        border: '1px solid rgba(201,168,76,0.25)',
-                        textAlign: 'center'
-                    }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-color)', marginBottom: 6 }}>
-                            {t('referral_checkout_title')}
-                        </div>
-                        <div className="text-hint" style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.4 }}>
-                            {t('referral_checkout_desc')}
-                        </div>
-                        <button
-                            className="btn-primary"
-                            onClick={() => {
-                                playClick();
-                                openTelegramShareLink(tg, checkoutReferralUrl, t('referral_share_text'));
-                            }}
-                            style={{
-                                width: '100%', padding: '12px', fontSize: 14, fontWeight: 700,
-                                background: 'linear-gradient(135deg, #c9a84c 0%, #b8902a 100%)',
-                                color: '#000', border: 'none', boxShadow: '0 4px 12px rgba(201,168,76,0.3)'
-                            }}
+                    {verificationResult?.test_mode && (
+                        <TipBox
+                            variant={verificationResult.shadow_passed === false ? 'warning' : 'info'}
+                            icon={verificationResult.shadow_passed === false ? '🧪' : '✅'}
                         >
-                            {t('referral_checkout_btn')}
+                            {verificationResult.message}
+                        </TipBox>
+                    )}
+
+                    {verificationResult?.happ_link && !isWalletTopup && (
+                        <>
+                            <button
+                                className="btn-primary"
+                                onClick={() => { playClick(); handleHappLink(verificationResult.happ_link!, verificationResult.redirect_url); }}
+                                style={{ width: '100%', padding: '14px', fontSize: 15, fontWeight: 700, boxShadow: '0 4px 16px rgba(0,122,255,0.3)' }}
+                            >
+                                {t('btn_open_happ')}
+                            </button>
+                            <p className="text-hint" style={{ margin: '-4px 0 0', fontSize: 11 }}>
+                                {t('success_happ_hint')}
+                            </p>
+                        </>
+                    )}
+
+                    {!verificationResult?.happ_link && !isWalletTopup && (
+                        <TipBox variant="success" icon="✨">
+                            {t('check_home_for_key')}
+                        </TipBox>
+                    )}
+
+                    <TipBox variant="success" icon="💡">
+                        {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
+                    </TipBox>
+
+                    {checkoutReferralUrl && (
+                        <div style={{
+                            padding: '16px 20px',
+                            borderRadius: 16,
+                            background: 'linear-gradient(135deg, rgba(201,168,76,0.1) 0%, rgba(184,144,42,0.1) 100%)',
+                            border: '1px solid rgba(201,168,76,0.25)',
+                            textAlign: 'center'
+                        }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--tg-text)', marginBottom: 6 }}>
+                                {t('referral_checkout_title')}
+                            </div>
+                            <div className="text-hint" style={{ fontSize: 13, marginBottom: 16, lineHeight: 1.4 }}>
+                                {t('referral_checkout_desc')}
+                            </div>
+                            <button
+                                className="btn-primary"
+                                onClick={() => {
+                                    playClick();
+                                    openTelegramShareLink(tg, checkoutReferralUrl, t('referral_share_text'));
+                                }}
+                                style={{
+                                    width: '100%', padding: '12px', fontSize: 14, fontWeight: 700,
+                                    background: 'linear-gradient(135deg, #c9a84c 0%, #b8902a 100%)',
+                                    color: '#000', border: 'none', boxShadow: '0 4px 12px rgba(201,168,76,0.3)'
+                                }}
+                            >
+                                {t('referral_checkout_btn')}
+                            </button>
+                        </div>
+                    )}
+
+                    <div className="success-shell-actions">
+                        <button className="btn-secondary" onClick={() => { playClick(); navigate(isWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%' }}>
+                            {isWalletTopup ? t('back_to_wallet') : t('go_home')}
                         </button>
                     </div>
-                )}
-
-                <button className="btn-secondary" onClick={() => { playClick(); navigate(isWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%', opacity: 0.7 }}>
-                    {isWalletTopup ? t('back_to_wallet') : t('go_home')}
-                </button>
+                </div>
             </div>
         );
     }
@@ -482,7 +485,7 @@ export function Checkout() {
     const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
 
     return (
-        <div className="animate-fade-in" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16, minHeight: '100vh' }}>
+        <div className="page-wrapper animate-fade-in" style={{ gap: 16 }}>
             {/* Step indicator */}
             {!isWalletTopup && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>

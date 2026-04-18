@@ -38,6 +38,8 @@
   --layout-padding: 16px;
   --layout-gap: 24px;
   --card-padding: 16px;
+  --page-max-width: 560px;
+  --page-desktop-max-width: 680px;
 
   /* ── Card System (Dark defaults) ── */
   --card-bg: rgba(255, 255, 255, 0.04);
@@ -489,9 +491,48 @@ body.theme-light {
   display: flex;
   flex-direction: column;
   gap: var(--layout-gap);
+  width: min(100%, var(--page-max-width));
+  margin: 0 auto;
   padding: var(--layout-padding);
   padding-bottom: calc(var(--layout-padding) + env(safe-area-inset-bottom, 0px));
   min-height: 100vh;
+}
+
+.success-shell {
+  width: 100%;
+  margin: auto 0;
+  display: grid;
+  gap: 14px;
+  padding: 24px 20px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top, rgba(94, 187, 255, 0.14), transparent 48%),
+    var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.12);
+  text-align: center;
+}
+
+.success-shell-actions {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+@media (min-width: 960px) {
+  .page-wrapper {
+    width: min(100%, var(--page-desktop-max-width));
+    padding-top: 24px;
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .success-shell {
+    padding: 30px 28px;
+  }
+
+  .home-footer-spacer {
+    display: none;
+  }
 }
 
 .admin-promo-shell {
