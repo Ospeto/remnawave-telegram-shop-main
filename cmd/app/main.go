@@ -275,7 +275,7 @@ func main() {
 	autoRenewCron.Start()
 	defer autoRenewCron.Stop()
 
-	syncService := sync.NewSyncService(remnawaveClient, customerRepository)
+	syncService := sync.NewSyncService(remnawaveClient, customerRepository, subKeyRepo)
 
 	appConfigRepo := database.NewAppConfigRepository(pool)
 	if err := config.LoadPlansCatalog(ctx, appConfigRepo); err != nil {

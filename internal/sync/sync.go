@@ -6,16 +6,38 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/remnawave"
+
+	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v4"
 )
 
-type SyncService struct {
-	client             *remnawave.Client
-	customerRepository *database.CustomerRepository
+type remnawaveUserLister interface {
+	GetUsers(ctx context.Context) (*[]remapi.User, error)
 }
 
-func NewSyncService(client *remnawave.Client, customerRepository *database.CustomerRepository) *SyncService {
+type customerStore interface {
+	FindByTelegramIds(ctx context.Context, telegramIDs []int64) ([]database.Customer, error)
+	BeginTx(ctx context.Context) (pgx.Tx, error)
+	CreateBatchTx(ctx context.Context, tx pgx.Tx, customers []database.Customer) error
+	UpdateBatchTx(ctx context.Context, tx pgx.Tx, customers []database.Customer) error
+}
+
+type subscriptionKeyStore interface {
+	MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error)
+}
+
+type SyncService struct {
+	client             remnawaveUserLister
+	customerRepository customerStore
+	subscriptionKeys   subscriptionKeyStore
+}
+
+func NewSyncService(client *remnawave.Client, customerRepository *database.CustomerRepository, subscriptionKeys *database.SubscriptionKeyRepository) *SyncService {
 	return &SyncService{
-		client: client, customerRepository: customerRepository,
+		client:             client,
+		customerRepository: customerRepository,
+		subscriptionKeys:   subscriptionKeys,
 	}
 }
 
@@ -30,10 +52,18 @@ func (s SyncService) Sync() {
 		slog.Error("Error while getting users from remnawave", "error", err)
 		return
 	}
-	if users == nil || len(*users) == 0 {
-		slog.Error("No users found in remnawave")
+	if users == nil {
+		slog.Warn("Remnawave returned no user list during sync")
 		return
 	}
+
+	if len(*users) == 0 {
+		slog.Warn("No users found in remnawave")
+		slog.Info("Synchronization completed")
+		return
+	}
+
+	s.markMissingRemoteKeysDeleted(ctx, *users)
 
 	for _, user := range *users {
 		if user.TelegramId.Null {
@@ -55,6 +85,11 @@ func (s SyncService) Sync() {
 			SubscriptionLink: &subscriptionURL,
 			Language:         config.DefaultLanguage(),
 		})
+	}
+
+	if s.customerRepository == nil {
+		slog.Error("Customer repository is unavailable during sync")
+		return
 	}
 
 	existingCustomers, err := s.customerRepository.FindByTelegramIds(ctx, telegramIDs)
@@ -116,4 +151,31 @@ func (s SyncService) Sync() {
 		return
 	}
 	slog.Info("Synchronization completed")
+}
+
+func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []remapi.User) {
+	if s.subscriptionKeys == nil {
+		return
+	}
+
+	remoteUUIDs := make([]uuid.UUID, 0, len(users))
+	for _, user := range users {
+		if user.UUID == uuid.Nil {
+			continue
+		}
+		remoteUUIDs = append(remoteUUIDs, user.UUID)
+	}
+	if len(users) > 0 && len(remoteUUIDs) == 0 {
+		slog.Error("Remnawave sync returned users without UUIDs; skipping deleted key reconciliation")
+		return
+	}
+
+	deletedCount, err := s.subscriptionKeys.MarkMissingRemoteKeysDeleted(ctx, remoteUUIDs)
+	if err != nil {
+		slog.Error("Error while marking missing remote subscription keys deleted", "error", err)
+		return
+	}
+	if deletedCount > 0 {
+		slog.Info("Marked local subscription keys deleted after Remnawave sync", "count", deletedCount)
+	}
 }

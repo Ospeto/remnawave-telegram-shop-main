@@ -1,9 +1,28 @@
 package database
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
+
+func TestSubscriptionKeyRepositoryCanMarkMissingRemoteKeysDeleted(t *testing.T) {
+	var _ interface {
+		MarkMissingRemoteKeysDeleted(context.Context, []uuid.UUID) (int64, error)
+	} = (*SubscriptionKeyRepository)(nil)
+}
+
+func TestMarkMissingRemoteKeysDeletedSkipsEmptyRemoteUUIDs(t *testing.T) {
+	affected, err := (&SubscriptionKeyRepository{}).MarkMissingRemoteKeysDeleted(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("MarkMissingRemoteKeysDeleted() error = %v", err)
+	}
+	if affected != 0 {
+		t.Fatalf("MarkMissingRemoteKeysDeleted() affected = %d, want 0", affected)
+	}
+}
 
 func TestPrimarySubscriptionKey(t *testing.T) {
 	now := time.Now()
