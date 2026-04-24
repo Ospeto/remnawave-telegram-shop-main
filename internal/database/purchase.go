@@ -296,6 +296,36 @@ func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates
 	return nil
 }
 
+// CancelAwaitingVerification marks a customer's screenshot-verification purchase as cancelled.
+// The status predicate keeps a late cancel from overwriting a purchase that is already processing or paid.
+func (pr *PurchaseRepository) CancelAwaitingVerification(ctx context.Context, purchaseID, customerID int64) (bool, error) {
+	query := `
+		UPDATE purchase
+		SET status = $1, paid_at = NULL
+		WHERE id = $2
+		  AND customer_id = $3
+		  AND invoice_type IN ($4, $5)
+		  AND status IN ($6, $7)
+	`
+
+	tag, err := pr.pool.Exec(
+		ctx,
+		query,
+		PurchaseStatusCancel,
+		purchaseID,
+		customerID,
+		InvoiceTypeMobileBanking,
+		InvoiceTypeWalletTopUp,
+		PurchaseStatusNew,
+		PurchaseStatusPending,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to cancel purchase %d: %w", purchaseID, err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}
+
 // TryMarkAsProcessing atomically claims a purchase for fulfillment.
 // It returns false when another worker already won the race or the purchase
 // is already in a terminal or in-flight state.

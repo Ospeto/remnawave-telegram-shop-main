@@ -77,6 +77,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/session", public(handler.CreateSession))
 	mux.HandleFunc("/api/plans", public(handler.GetPlans))
 	mux.HandleFunc("/api/purchase", withAuth(handler.CreatePurchase))
+	mux.HandleFunc("/api/purchase/cancel", withAuth(handler.CancelPurchase))
 	mux.HandleFunc("/api/upload_screenshot", withUploadAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))

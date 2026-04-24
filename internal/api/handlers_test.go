@@ -262,3 +262,71 @@ func TestValidateScreenshotUploadAccessRejectsCryptoPurchase(t *testing.T) {
 		t.Fatalf("validateScreenshotUploadAccess() message = %q, want screenshot rejection", message)
 	}
 }
+
+func TestValidatePendingPurchaseCancellationAccess(t *testing.T) {
+	customer := &database.Customer{
+		ID:         5,
+		TelegramID: 42,
+	}
+
+	t.Run("allows customer pending screenshot purchase", func(t *testing.T) {
+		status, message, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if !ok {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() ok = false, status = %d, message = %q", status, message)
+		}
+	})
+
+	t.Run("rejects another customer", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  6,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for another customer")
+		}
+		if status != http.StatusNotFound {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusNotFound)
+		}
+	})
+
+	t.Run("rejects paid screenshot purchase", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPaid,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for paid purchase")
+		}
+		if status != http.StatusConflict {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusConflict)
+		}
+	})
+
+	t.Run("rejects non screenshot purchase", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeWalletPayment,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for wallet purchase")
+		}
+		if status != http.StatusConflict {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusConflict)
+		}
+	})
+}

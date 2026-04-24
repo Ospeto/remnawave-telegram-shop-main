@@ -89,6 +89,8 @@ export function Checkout() {
     const [selectedAction, setSelectedAction] = useState<CheckoutAction | null>(null);
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
     const [pendingPaymentNotice, setPendingPaymentNotice] = useState<string | null>(null);
+    const [cancellingPayment, setCancellingPayment] = useState(false);
+    const [cancelPaymentError, setCancelPaymentError] = useState<string | null>(null);
     const [authExpired, setAuthExpired] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -120,6 +122,18 @@ export function Checkout() {
             ? data.payment_providers.map((provider: PaymentProvider) => provider.key)
             : (data.payment_phones ? Object.keys(data.payment_phones) : []);
         setSelectedProvider(providerKeys[0] || null);
+    }, []);
+
+    const resetPendingPurchaseState = useCallback(() => {
+        setPurchase(null);
+        setPendingPaymentNotice(null);
+        setVerificationResult(null);
+        setSelectedProvider(null);
+        setSelectedAction(null);
+        setWalletPayError(null);
+        setPurchaseError(null);
+        setCancelPaymentError(null);
+        purchaseIntentRef.current = { action: null, key: null };
     }, []);
 
     const handleBack = useCallback(() => {
@@ -188,6 +202,8 @@ export function Checkout() {
         setWalletPayError(null);
         setWalletBalanceError(null);
         setWalletBalance(null);
+        setCancelPaymentError(null);
+        setCancellingPayment(false);
         setAuthExpired(false);
         purchaseIntentRef.current = { action: null, key: null };
 
@@ -244,6 +260,7 @@ export function Checkout() {
         setPurchaseError(null);
         setWalletPayError(null);
         setPendingPaymentNotice(null);
+        setCancelPaymentError(null);
 
         try {
             const body: Record<string, unknown> = {};
@@ -311,6 +328,7 @@ export function Checkout() {
                     const amount = (pendingPurchase.amount || 0).toLocaleString();
                     const currency = pendingPurchase.currency || selectedPlan?.currency || 'MMK';
                     setPendingPaymentNotice(t('pending_payment_resume', { amount, currency }));
+                    setCancelPaymentError(null);
                     setPurchaseError(null);
                     setSelectedAction(pendingPurchase.invoice_type === 'wallet_topup' ? 'topup' : 'manual');
                     return;
@@ -341,6 +359,35 @@ export function Checkout() {
             setCreatingPurchase(false);
         }
     }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCode, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t]);
+
+    const cancelPendingPayment = useCallback(async () => {
+        if (!initData || !purchase || cancellingPayment) return;
+
+        setCancellingPayment(true);
+        setCancelPaymentError(null);
+        try {
+            const res = await fetchWithTelegramAuth(`/api/purchase/cancel?id=${purchase.purchase_id}`, initData, {
+                method: 'POST',
+            });
+            if (!res.ok) {
+                if (res.status === 401) {
+                    clearTelegramSession();
+                    setAuthExpired(true);
+                    return;
+                }
+                const errText = await res.text();
+                throw new Error(errText.trim() || t('pending_payment_cancel_error'));
+            }
+
+            resetPendingPurchaseState();
+            navigate(backTarget);
+        } catch (err: unknown) {
+            const message = err instanceof Error && err.message ? err.message : t('pending_payment_cancel_error');
+            setCancelPaymentError(message);
+        } finally {
+            setCancellingPayment(false);
+        }
+    }, [backTarget, cancellingPayment, initData, navigate, purchase, resetPendingPurchaseState, t]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -577,8 +624,29 @@ export function Checkout() {
                 )}
 
                 {pendingPaymentNotice && purchase ? (
-                    <div className="text-hint" style={{ fontSize: 12 }}>
-                        {t('pending_payment_upload_hint')}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div className="text-hint" style={{ fontSize: 12 }}>
+                            {t('pending_payment_upload_hint')}
+                        </div>
+                        {cancelPaymentError && (
+                            <div role="alert" style={{
+                                padding: 10, borderRadius: 8,
+                                background: 'rgba(255, 59, 48, 0.08)', border: '1px solid rgba(255, 59, 48, 0.15)',
+                                color: 'var(--color-danger)', fontSize: 13
+                            }}>
+                                {cancelPaymentError}
+                            </div>
+                        )}
+                        <button
+                            className="btn-secondary"
+                            onClick={() => { playClick(); void cancelPendingPayment(); }}
+                            disabled={cancellingPayment || uploading}
+                            style={{ width: '100%', opacity: cancellingPayment ? 0.7 : 1 }}
+                        >
+                            {cancellingPayment
+                                ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('pending_payment_canceling')}</>
+                                : t('pending_payment_cancel_btn')}
+                        </button>
                     </div>
                 ) : isWalletTopup ? (
                     <button

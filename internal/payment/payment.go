@@ -280,6 +280,13 @@ func (s *PaymentService) UpdatePurchaseFields(ctx context.Context, id int64, fie
 	return s.purchaseRepository.UpdateFields(ctx, id, fields)
 }
 
+func (s *PaymentService) CancelAwaitingVerificationPurchase(ctx context.Context, purchaseID, customerID int64) (bool, error) {
+	if s.purchaseRepository == nil {
+		return false, fmt.Errorf("purchase repository is not configured")
+	}
+	return s.purchaseRepository.CancelAwaitingVerification(ctx, purchaseID, customerID)
+}
+
 func customerHasTrialHistory(customer *database.Customer, keyCount int) bool {
 	if customer == nil {
 		return false

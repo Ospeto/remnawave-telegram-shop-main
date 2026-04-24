@@ -120,6 +120,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'pending_payment_current_label': 'Unfinished payment',
         'pending_payment_resume': 'You already have an unfinished bank-transfer payment for {{amount}} {{currency}}. Finish this one first, then start a new payment.',
         'pending_payment_upload_hint': 'Use the payment details below and upload the screenshot after sending this exact amount.',
+        'pending_payment_cancel_btn': 'Cancel this payment and choose another plan',
+        'pending_payment_canceling': 'Cancelling payment...',
+        'pending_payment_cancel_error': 'Unable to cancel this payment right now. Please try again.',
 
         // ── Checkout Guide Steps ──
         'guide_title': 'How to pay',
@@ -422,6 +425,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'pending_payment_current_label': 'မပြီးသေးသော ငွေပေးချေမှု',
         'pending_payment_resume': '{{amount}} {{currency}} အတွက် မပြီးသေးသော ငွေလွှဲ payment တစ်ခုရှိနေပါသည်။ Payment အသစ်မစမီ ဤ payment ကို အရင်ပြီးအောင်လုပ်ပါ။',
         'pending_payment_upload_hint': 'အောက်ပါ payment detail အတိုင်း ငွေပမာဏအတိအကျ လွှဲပြီး Screenshot တင်ပေးပါ။',
+        'pending_payment_cancel_btn': 'ဤ payment ကို cancel လုပ်ပြီး plan ပြောင်းရွေးမည်',
+        'pending_payment_canceling': 'Payment ကို cancel လုပ်နေပါသည်...',
+        'pending_payment_cancel_error': 'ဤ payment ကို cancel လုပ်၍မရပါ။ ခဏအကြာတွင် ထပ်မံကြိုးစားပါ။',
 
         // ── Checkout Guide Steps ──
         'guide_title': 'ငွေပေးချေနည်း အဆင့်ဆင့်',
