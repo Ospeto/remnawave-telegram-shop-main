@@ -117,6 +117,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'upload_btn': '📤 Upload Payment Screenshot',
         'uploading_btn': 'Verifying your payment...',
         'upload_hint': 'Send the transfer, then take a clear screenshot of the confirmation screen and upload it here. Our system verifies it automatically in seconds.',
+        'pending_payment_current_label': 'Unfinished payment',
+        'pending_payment_resume': 'You already have an unfinished bank-transfer payment for {{amount}} {{currency}}. Finish this one first, then start a new payment.',
+        'pending_payment_upload_hint': 'Use the payment details below and upload the screenshot after sending this exact amount.',
 
         // ── Checkout Guide Steps ──
         'guide_title': 'How to pay',
@@ -416,6 +419,9 @@ export const translations: Record<Language, Record<string, string>> = {
         'upload_btn': '📤 ငွေလွှဲပြေစာ (Screenshot) ပေးပို့ရန်',
         'uploading_btn': 'စစ်ဆေးအတည်ပြုနေပါသည်...',
         'upload_hint': 'ငွေလွှဲပြောင်းမှု အောင်မြင်ပြီးနောက် အတည်ပြုချက်ပြသော စာမျက်နှာကို Screenshot ရှင်းလင်းစွာရိုက်၍ ဤနေရာတွင် ပေးပို့ပါ။ စက္ကန့်ပိုင်းအတွင်း အလိုအလျောက် စစ်ဆေးပေးမည် ဖြစ်ပါသည်။',
+        'pending_payment_current_label': 'မပြီးသေးသော ငွေပေးချေမှု',
+        'pending_payment_resume': '{{amount}} {{currency}} အတွက် မပြီးသေးသော ငွေလွှဲ payment တစ်ခုရှိနေပါသည်။ Payment အသစ်မစမီ ဤ payment ကို အရင်ပြီးအောင်လုပ်ပါ။',
+        'pending_payment_upload_hint': 'အောက်ပါ payment detail အတိုင်း ငွေပမာဏအတိအကျ လွှဲပြီး Screenshot တင်ပေးပါ။',
 
         // ── Checkout Guide Steps ──
         'guide_title': 'ငွေပေးချေနည်း အဆင့်ဆင့်',

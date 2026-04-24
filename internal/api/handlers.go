@@ -87,9 +87,16 @@ type CreatePurchaseResponse struct {
 	Currency         string                    `json:"currency"`
 	Instructions     string                    `json:"instructions,omitempty"`
 	InvoiceType      string                    `json:"invoice_type"`
+	ExtendKeyID      *int64                    `json:"extend_key_id,omitempty"`
 	BotURL           string                    `json:"bot_url"`
 	HappLink         string                    `json:"happ_link,omitempty"`
 	RedirectURL      string                    `json:"redirect_url,omitempty"`
+}
+
+type PendingPurchaseConflictResponse struct {
+	Code            string                 `json:"code"`
+	Message         string                 `json:"message"`
+	PendingPurchase CreatePurchaseResponse `json:"pending_purchase"`
 }
 
 type SessionExchangeResponse struct {
@@ -696,6 +703,45 @@ func promoValidationStatus(promo *database.PromoCode, lookupErr error, now time.
 	return http.StatusOK
 }
 
+func (h *APIHandler) pendingPurchaseConflictResponse(customer *database.Customer, purchase *database.Purchase) PendingPurchaseConflictResponse {
+	currency := purchase.Currency
+	if strings.TrimSpace(currency) == "" {
+		currency = config.Currency()
+	}
+
+	instructions := ""
+	mobileNumber := ""
+	var paymentPhones map[string]string
+	var paymentProviders []payment.PaymentProvider
+	if payment.SupportsScreenshotVerification(purchase.InvoiceType) {
+		instructions = fmt.Sprintf(
+			h.translation.GetText(customer.Language, "mobile_pay_instructions"),
+			int(purchase.Amount),
+			payment.BuildPaymentReceiversHTML(),
+		)
+		mobileNumber = payment.GetFirstPaymentPhone()
+		paymentPhones = payment.GetAllPaymentPhones()
+		paymentProviders = payment.GetEnabledPaymentProviders()
+	}
+
+	return PendingPurchaseConflictResponse{
+		Code:    "pending_screenshot_payment",
+		Message: "You already have a pending screenshot payment. Please finish it before creating another one.",
+		PendingPurchase: CreatePurchaseResponse{
+			PurchaseID:       purchase.ID,
+			PaymentPhone:     mobileNumber,
+			PaymentPhones:    paymentPhones,
+			PaymentProviders: paymentProviders,
+			Amount:           int(purchase.Amount),
+			Currency:         currency,
+			Instructions:     instructions,
+			InvoiceType:      string(purchase.InvoiceType),
+			ExtendKeyID:      purchase.ExtendKeyID,
+			BotURL:           config.BotURL(),
+		},
+	}
+}
+
 func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -847,6 +893,13 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid or expired promo code", http.StatusBadRequest)
 			return
 		}
+		var pendingErr *payment.AwaitingReceiptVerificationError
+		if errors.As(err, &pendingErr) && pendingErr.Purchase != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(h.pendingPurchaseConflictResponse(customer, pendingErr.Purchase))
+			return
+		}
 		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
 			http.Error(w, "You already have a pending screenshot payment. Please finish it before creating another one.", http.StatusConflict)
 			return
@@ -912,6 +965,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		Currency:         config.Currency(),
 		Instructions:     instructions,
 		InvoiceType:      string(purchase.InvoiceType),
+		ExtendKeyID:      purchase.ExtendKeyID,
 		BotURL:           config.BotURL(),
 		HappLink:         happLink,
 		RedirectURL:      signedRedirectURLForTarget(happLink),

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/translation"
 )
 
 func TestUploadScreenshotFailureResponsePreservesVerificationReason(t *testing.T) {
@@ -30,6 +32,30 @@ func TestUploadScreenshotFailureResponsePreservesVerificationReason(t *testing.T
 	}
 	if resp.Reason != result.ReasonKey {
 		t.Fatalf("uploadScreenshotFailureResponse() reason = %q, want %q", resp.Reason, result.ReasonKey)
+	}
+}
+
+func TestPendingPurchaseConflictResponseCarriesExtendKeyID(t *testing.T) {
+	tm := translation.GetInstance()
+	if err := tm.InitTranslations(filepath.Join("..", "..", "translations"), "en"); err != nil {
+		t.Fatalf("InitTranslations() error = %v", err)
+	}
+
+	handler := NewAPIHandler(nil, nil, nil, tm, nil, nil, nil, nil, nil)
+	extendKeyID := int64(77)
+
+	resp := handler.pendingPurchaseConflictResponse(&database.Customer{
+		Language: "en",
+	}, &database.Purchase{
+		ID:          55,
+		InvoiceType: database.InvoiceTypeMobileBanking,
+		Amount:      18200,
+		Currency:    "MMK",
+		ExtendKeyID: &extendKeyID,
+	})
+
+	if resp.PendingPurchase.ExtendKeyID == nil || *resp.PendingPurchase.ExtendKeyID != extendKeyID {
+		t.Fatalf("pendingPurchaseConflictResponse() extend_key_id = %v, want %d", resp.PendingPurchase.ExtendKeyID, extendKeyID)
 	}
 }
 

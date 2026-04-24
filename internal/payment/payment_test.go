@@ -158,6 +158,27 @@ func TestSupportsScreenshotVerification(t *testing.T) {
 	}
 }
 
+func TestAwaitingReceiptVerificationErrorCarriesPendingPurchase(t *testing.T) {
+	pending := &database.Purchase{
+		ID:          42,
+		InvoiceType: database.InvoiceTypeWalletTopUp,
+		Amount:      30000,
+	}
+
+	err := awaitingReceiptVerificationError(pending)
+	if !errors.Is(err, ErrAwaitingReceiptVerification) {
+		t.Fatalf("awaitingReceiptVerificationError() does not wrap ErrAwaitingReceiptVerification: %v", err)
+	}
+
+	var pendingErr *AwaitingReceiptVerificationError
+	if !errors.As(err, &pendingErr) {
+		t.Fatal("awaitingReceiptVerificationError() does not expose AwaitingReceiptVerificationError")
+	}
+	if pendingErr.Purchase != pending {
+		t.Fatalf("AwaitingReceiptVerificationError.Purchase = %#v, want original pending purchase", pendingErr.Purchase)
+	}
+}
+
 func TestAccumulatedTrafficLimitGB(t *testing.T) {
 	const gib = 1073741824
 

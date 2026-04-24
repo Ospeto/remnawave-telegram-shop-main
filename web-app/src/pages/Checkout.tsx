@@ -30,9 +30,16 @@ interface PurchaseResponse {
     currency: string;
     instructions: string;
     invoice_type: string;
+    extend_key_id?: number | null;
     bot_url?: string;
     happ_link?: string;
     redirect_url?: string;
+}
+
+interface PendingPurchaseErrorResponse {
+    code?: string;
+    message?: string;
+    pending_purchase?: PurchaseResponse;
 }
 
 interface VerificationResponse {
@@ -81,6 +88,7 @@ export function Checkout() {
     const [creatingPurchase, setCreatingPurchase] = useState(false);
     const [selectedAction, setSelectedAction] = useState<CheckoutAction | null>(null);
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
+    const [pendingPaymentNotice, setPendingPaymentNotice] = useState<string | null>(null);
     const [authExpired, setAuthExpired] = useState(false);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -105,6 +113,14 @@ export function Checkout() {
         purchase?.bot_url,
         tg?.initDataUnsafe?.user?.id ? `ref_${tg.initDataUnsafe.user.id}` : '',
     );
+
+    const setActivePurchase = useCallback((data: PurchaseResponse) => {
+        setPurchase(data);
+        const providerKeys = Array.isArray(data.payment_providers) && data.payment_providers.length > 0
+            ? data.payment_providers.map((provider: PaymentProvider) => provider.key)
+            : (data.payment_phones ? Object.keys(data.payment_phones) : []);
+        setSelectedProvider(providerKeys[0] || null);
+    }, []);
 
     const handleBack = useCallback(() => {
         navigate(backTarget);
@@ -168,6 +184,7 @@ export function Checkout() {
         setVerificationResult(null);
         setSelectedAction(null);
         setSelectedProvider(null);
+        setPendingPaymentNotice(null);
         setWalletPayError(null);
         setWalletBalanceError(null);
         setWalletBalance(null);
@@ -226,6 +243,7 @@ export function Checkout() {
         setSelectedAction(action);
         setPurchaseError(null);
         setWalletPayError(null);
+        setPendingPaymentNotice(null);
 
         try {
             const body: Record<string, unknown> = {};
@@ -275,15 +293,33 @@ export function Checkout() {
                     return;
                 }
                 const text = await res.text();
-                throw new Error(text || t('creating_purchase'));
+                let pendingPurchase: PurchaseResponse | undefined;
+                let message = text;
+                try {
+                    const parsed = JSON.parse(text) as PendingPurchaseErrorResponse;
+                    if (parsed?.code === 'pending_screenshot_payment' && parsed.pending_purchase?.purchase_id) {
+                        pendingPurchase = parsed.pending_purchase;
+                        message = parsed.message || message;
+                    } else if (parsed?.message) {
+                        message = parsed.message;
+                    }
+                } catch {
+                    // Plain-text API errors are still supported.
+                }
+                if (res.status === 409 && pendingPurchase) {
+                    setActivePurchase(pendingPurchase);
+                    const amount = (pendingPurchase.amount || 0).toLocaleString();
+                    const currency = pendingPurchase.currency || selectedPlan?.currency || 'MMK';
+                    setPendingPaymentNotice(t('pending_payment_resume', { amount, currency }));
+                    setPurchaseError(null);
+                    setSelectedAction(pendingPurchase.invoice_type === 'wallet_topup' ? 'topup' : 'manual');
+                    return;
+                }
+                throw new Error(message || t('creating_purchase'));
             }
 
             const data = await res.json();
-            setPurchase(data);
-            const providerKeys = Array.isArray(data.payment_providers) && data.payment_providers.length > 0
-                ? data.payment_providers.map((provider: PaymentProvider) => provider.key)
-                : (data.payment_phones ? Object.keys(data.payment_phones) : []);
-            setSelectedProvider(providerKeys[0] || null);
+            setActivePurchase(data);
 
             if (action === 'wallet') {
                 setVerificationResult({
@@ -304,7 +340,7 @@ export function Checkout() {
         } finally {
             setCreatingPurchase(false);
         }
-    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCode, resolvedPlan.legacyIndex, selectedPlan, t]);
+    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCode, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t]);
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -389,6 +425,9 @@ export function Checkout() {
         );
     }
 
+    const activeCheckoutIsWalletTopup = purchase?.invoice_type === 'wallet_topup' || (isWalletTopup && purchase?.invoice_type !== 'mobile_banking');
+    const activeCheckoutIsExtension = !activeCheckoutIsWalletTopup && (purchase ? Boolean(purchase.extend_key_id) : Boolean(extendKeyId));
+
     if (verificationResult?.status === 'success') {
         return (
             <div className="page-wrapper animate-fade-in">
@@ -396,7 +435,7 @@ export function Checkout() {
                     <div style={{ fontSize: 64, marginBottom: 4 }} aria-hidden="true">✅</div>
                     <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>{t('success_title')}</h1>
                     <p className="text-hint" style={{ margin: 0, fontSize: 14 }}>
-                        {isWalletTopup ? t('success_topup_desc') : (extendKeyId ? t('success_extend') : t('success_new'))}
+                        {activeCheckoutIsWalletTopup ? t('success_topup_desc') : (activeCheckoutIsExtension ? t('success_extend') : t('success_new'))}
                     </p>
 
                     {verificationResult?.test_mode && (
@@ -408,7 +447,7 @@ export function Checkout() {
                         </TipBox>
                     )}
 
-                    {verificationResult?.happ_link && !isWalletTopup && (
+                    {verificationResult?.happ_link && !activeCheckoutIsWalletTopup && (
                         <>
                             <button
                                 className="btn-primary"
@@ -423,14 +462,14 @@ export function Checkout() {
                         </>
                     )}
 
-                    {!verificationResult?.happ_link && !isWalletTopup && (
+                    {!verificationResult?.happ_link && !activeCheckoutIsWalletTopup && (
                         <TipBox variant="success" icon="✨">
                             {t('check_home_for_key')}
                         </TipBox>
                     )}
 
                     <TipBox variant="success" icon="💡">
-                        {isWalletTopup ? t('funds_added') : (extendKeyId ? t('success_tip_extend') : t('success_tip_new'))}
+                        {activeCheckoutIsWalletTopup ? t('funds_added') : (activeCheckoutIsExtension ? t('success_tip_extend') : t('success_tip_new'))}
                     </TipBox>
 
                     {checkoutReferralUrl && (
@@ -465,8 +504,8 @@ export function Checkout() {
                     )}
 
                     <div className="success-shell-actions">
-                        <button className="btn-secondary" onClick={() => { playClick(); navigate(isWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%' }}>
-                            {isWalletTopup ? t('back_to_wallet') : t('go_home')}
+                        <button className="btn-secondary" onClick={() => { playClick(); navigate(activeCheckoutIsWalletTopup ? '/wallet' : '/'); }} style={{ width: '100%' }}>
+                            {activeCheckoutIsWalletTopup ? t('back_to_wallet') : t('go_home')}
                         </button>
                     </div>
                 </div>
@@ -483,6 +522,11 @@ export function Checkout() {
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;
     const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
     const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
+    const displayAmount = pendingPaymentNotice && purchase ? purchase.amount : targetAmount;
+    const displayCurrency = pendingPaymentNotice && purchase ? (purchase.currency || selectedPlan?.currency || 'MMK') : (selectedPlan?.currency || 'MMK');
+    const displayLabel = pendingPaymentNotice && purchase
+        ? t('pending_payment_current_label')
+        : (isWalletTopup ? t('top_up_amount', { amount: targetAmount.toLocaleString(), currency: selectedPlan?.currency || 'MMK' }) : selectedPlan?.label);
 
     return (
         <div className="page-wrapper animate-fade-in" style={{ gap: 16 }}>
@@ -506,8 +550,8 @@ export function Checkout() {
                 </h2>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 12 }}>
-                    <span className="text-hint">{isWalletTopup ? t('top_up_amount', { amount: targetAmount.toLocaleString(), currency: selectedPlan?.currency || 'MMK' }) : selectedPlan?.label}</span>
-                    <strong>{targetAmount.toLocaleString()} {selectedPlan?.currency || 'MMK'}</strong>
+                    <span className="text-hint">{displayLabel}</span>
+                    <strong>{displayAmount.toLocaleString()} {displayCurrency}</strong>
                 </div>
 
                 {extendKeyId && extendingKey && (
@@ -526,7 +570,17 @@ export function Checkout() {
                     </div>
                 )}
 
-                {isWalletTopup ? (
+                {pendingPaymentNotice && purchase && (
+                    <TipBox variant="warning" icon="!" style={{ marginBottom: 12 }}>
+                        {pendingPaymentNotice}
+                    </TipBox>
+                )}
+
+                {pendingPaymentNotice && purchase ? (
+                    <div className="text-hint" style={{ fontSize: 12 }}>
+                        {t('pending_payment_upload_hint')}
+                    </div>
+                ) : isWalletTopup ? (
                     <button
                         className="btn-primary"
                         onClick={() => { playClick(); void createPurchase('topup'); }}

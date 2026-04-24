@@ -61,6 +61,22 @@ var (
 	ErrCustomerNotFound = errors.New("customer not found")
 )
 
+type AwaitingReceiptVerificationError struct {
+	Purchase *database.Purchase
+}
+
+func (e *AwaitingReceiptVerificationError) Error() string {
+	return ErrAwaitingReceiptVerification.Error()
+}
+
+func (e *AwaitingReceiptVerificationError) Unwrap() error {
+	return ErrAwaitingReceiptVerification
+}
+
+func awaitingReceiptVerificationError(purchase *database.Purchase) error {
+	return &AwaitingReceiptVerificationError{Purchase: purchase}
+}
+
 func WithIdempotencyKey(ctx context.Context, key uuid.UUID) context.Context {
 	return context.WithValue(ctx, idempotencyCtxKey{}, key)
 }
@@ -1557,7 +1573,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 			slog.Info("Reusing pending mobile banking purchase", "purchase_id", utils.MaskHalfInt64(existing.ID), "customer_id", utils.MaskHalfInt64(customer.ID))
 			return "", existing.ID, nil
 		}
-		return "", 0, ErrAwaitingReceiptVerification
+		return "", 0, awaitingReceiptVerificationError(existing)
 	}
 
 	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
@@ -2410,7 +2426,7 @@ func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount fl
 			slog.Info("Reusing pending wallet top-up purchase", "purchase_id", utils.MaskHalfInt64(existing.ID), "customer_id", utils.MaskHalfInt64(customer.ID))
 			return "", existing.ID, nil
 		}
-		return "", 0, ErrAwaitingReceiptVerification
+		return "", 0, awaitingReceiptVerificationError(existing)
 	}
 
 	purchaseId, existing, err := s.createPurchaseRecord(ctx, &database.Purchase{
