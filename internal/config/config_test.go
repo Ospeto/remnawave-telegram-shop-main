@@ -28,6 +28,107 @@ func (f *fakeAppConfigStore) Set(_ context.Context, key string, value string) er
 	return nil
 }
 
+func setBaseConfigEnv(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("DISABLE_ENV_FILE", "true")
+	for _, key := range []string{
+		"PLANS",
+		"PRICE_1",
+		"PRICE_3",
+		"PRICE_6",
+		"PRICE_12",
+		"CRYPTO_PAY_ENABLED",
+		"MOBILE_BANKING_ENABLED",
+		"SQUAD_UUIDS",
+		"BLOCKED_TELEGRAM_IDS",
+		"WHITELISTED_TELEGRAM_IDS",
+		"TRIAL_INTERNAL_SQUADS",
+		"TRIAL_EXTERNAL_SQUAD_UUID",
+		"VISION_PROVIDER_FALLBACK",
+		"REMNAWAVE_MODE",
+		"HEALTH_CHECK_PORT",
+		"DAYS_IN_MONTH",
+		"TRAFFIC_LIMIT",
+		"VISION_RETRY_ATTEMPTS",
+		"VISION_RETRY_MAX_ATTEMPTS",
+		"VISION_MAX_ATTEMPTS",
+		"VISION_ACCEPT_CONFIDENCE_THRESHOLD",
+		"VISION_REJECT_CONFIDENCE_THRESHOLD",
+		"BACKUP_RETENTION_DAYS",
+		"BACKUP_MAX_LOCAL_FILES",
+		"BACKUP_CONFIRM_TTL_MINUTES",
+		"BACKUP_JOB_TIMEOUT_SECONDS",
+		"BACKUP_RESTORE_TIMEOUT_SECONDS",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("ADMIN_TELEGRAM_ID", "123456")
+	t.Setenv("TELEGRAM_TOKEN", "telegram-token")
+	t.Setenv("TRIAL_TRAFFIC_LIMIT", "1")
+	t.Setenv("TRIAL_DAYS", "1")
+	t.Setenv("REMNAWAVE_URL", "https://remnawave.example.com")
+	t.Setenv("REMNAWAVE_TOKEN", "remnawave-token")
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/app")
+	t.Setenv("REFERRAL_DAYS", "30")
+}
+
+func requireInitConfigError(t *testing.T, contains string) {
+	t.Helper()
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("InitConfig() panicked: %v", recovered)
+		}
+	}()
+
+	err := InitConfig()
+	if err == nil {
+		t.Fatalf("InitConfig() error = nil, want error containing %q", contains)
+	}
+	if !strings.Contains(err.Error(), contains) {
+		t.Fatalf("InitConfig() error = %q, want substring %q", err.Error(), contains)
+	}
+}
+
+func TestInitConfigReportsMissingRequiredEnvWithoutPanic(t *testing.T) {
+	t.Setenv("DISABLE_ENV_FILE", "true")
+	t.Setenv("ADMIN_TELEGRAM_ID", "")
+
+	requireInitConfigError(t, "ADMIN_TELEGRAM_ID")
+}
+
+func TestInitConfigReportsInvalidNumericEnvWithoutPanic(t *testing.T) {
+	setBaseConfigEnv(t)
+	t.Setenv("HEALTH_CHECK_PORT", "not-a-port")
+
+	requireInitConfigError(t, "HEALTH_CHECK_PORT")
+}
+
+func TestInitConfigReportsInvalidVisionFallbackWithoutPanic(t *testing.T) {
+	setBaseConfigEnv(t)
+	t.Setenv("MOBILE_BANKING_ENABLED", "true")
+	t.Setenv("MOBILE_BANKING_PHONE", "09123456789")
+	t.Setenv("OPENROUTER_API_KEY", "openrouter-key")
+	t.Setenv("VISION_PROVIDER_FALLBACK", "bogus")
+
+	requireInitConfigError(t, "unsupported VISION_PROVIDER_FALLBACK")
+}
+
+func TestInitConfigLoadsMinimalValidEnvironment(t *testing.T) {
+	setBaseConfigEnv(t)
+
+	if err := InitConfig(); err != nil {
+		t.Fatalf("InitConfig() error = %v", err)
+	}
+	if got := GetAdminTelegramId(); got != 123456 {
+		t.Fatalf("GetAdminTelegramId() = %d, want 123456", got)
+	}
+	if got := RemnawaveMode(); got != "remote" {
+		t.Fatalf("RemnawaveMode() = %q, want remote", got)
+	}
+}
+
 func TestDefaultLanguageFallback(t *testing.T) {
 	old := conf.defaultLanguage
 	t.Cleanup(func() {
