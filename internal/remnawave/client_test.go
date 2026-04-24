@@ -110,9 +110,21 @@ func TestPingFallsBackToRawUsersListWhenStrictDecodeDrifts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL, "token", "")
+	client, err := NewClient(server.URL, "token", "")
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
 
 	if err := client.Ping(context.Background()); err != nil {
 		t.Fatalf("Ping() error = %v, want nil", err)
+	}
+}
+
+func TestNewClientRejectsMissingConnectionConfig(t *testing.T) {
+	if _, err := NewClient("", "token", ""); err == nil {
+		t.Fatal("NewClient() error = nil for empty URL, want error")
+	}
+	if _, err := NewClient("https://remnawave.example.com", "", ""); err == nil {
+		t.Fatal("NewClient() error = nil for empty token, want error")
 	}
 }

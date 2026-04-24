@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"strconv"
@@ -371,33 +370,36 @@ func TrialTrafficLimitResetStrategy() string {
 
 const bytesInGigabyte = 1073741824
 
-func mustEnv(key string) string {
+func requiredEnv(key string) (string, error) {
 	v := os.Getenv(key)
-	if v == "" {
-		log.Panicf("env %q not set", key)
+	if strings.TrimSpace(v) == "" {
+		return "", fmt.Errorf("%s is required", key)
 	}
-	return v
+	return v, nil
 }
 
-func mustEnvInt(key string) int {
-	v := mustEnv(key)
-	i, err := strconv.Atoi(v)
+func requiredEnvInt(key string) (int, error) {
+	v, err := requiredEnv(key)
 	if err != nil {
-		log.Panicf("invalid int in %q: %v", key, err)
-	}
-	return i
-}
-
-func envIntDefault(key string, def int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
+		return 0, err
 	}
 	i, err := strconv.Atoi(v)
 	if err != nil {
-		log.Panicf("invalid int in %q: %v", key, err)
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
-	return i
+	return i, nil
+}
+
+func envIntDefault(key string, def int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	return i, nil
 }
 
 func envStringDefault(key string, def string) string {
@@ -412,41 +414,41 @@ func envBool(key string) bool {
 	return os.Getenv(key) == "true"
 }
 
-func envOptionalInt(key string) (int, bool) {
+func envOptionalInt(key string) (int, bool, error) {
 	v, ok := os.LookupEnv(key)
 	if !ok || strings.TrimSpace(v) == "" {
-		return 0, false
+		return 0, false, nil
 	}
 
 	i, err := strconv.Atoi(v)
 	if err != nil {
-		log.Panicf("invalid int in %q: %v", key, err)
+		return 0, false, fmt.Errorf("invalid %s: %w", key, err)
 	}
-	return i, true
+	return i, true, nil
 }
 
-func envFloatDefault(key string, def float64) float64 {
+func envFloatDefault(key string, def float64) (float64, error) {
 	v := os.Getenv(key)
 	if strings.TrimSpace(v) == "" {
-		return def
+		return def, nil
 	}
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil {
-		log.Panicf("invalid float in %q: %v", key, err)
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
 	}
-	return f
+	return f, nil
 }
 
-func normalizeVisionProvider(value string) string {
+func normalizeVisionProvider(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "":
-		return ""
+		return "", nil
 	case "gemini":
-		return "gemini"
+		return "gemini", nil
 	case "openrouter":
-		return "openrouter"
+		return "openrouter", nil
 	default:
-		panic(fmt.Sprintf("unsupported VISION_PROVIDER_FALLBACK %q", value))
+		return "", fmt.Errorf("unsupported VISION_PROVIDER_FALLBACK %q", value)
 	}
 }
 
@@ -469,7 +471,10 @@ func resolveVisionProviders(geminiAPIKey, openRouterAPIKey, openRouterFallbackMo
 		return primary, fallback, nil
 	}
 
-	normalizedFallback := normalizeVisionProvider(fallbackRaw)
+	normalizedFallback, err := normalizeVisionProvider(fallbackRaw)
+	if err != nil {
+		return "", "", err
+	}
 	if normalizedFallback == "openrouter" && primary == "openrouter" && !hasOpenRouterFallback {
 		return "", "", fmt.Errorf("VISION_PROVIDER_FALLBACK=openrouter requires OPENROUTER_FALLBACK_MODEL")
 	}
@@ -494,19 +499,32 @@ func resolveVisionProviders(geminiAPIKey, openRouterAPIKey, openRouterFallbackMo
 	return primary, normalizedFallback, nil
 }
 
-func InitConfig() {
+func InitConfig() (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("load config: %v", recovered)
+		}
+	}()
+
 	if os.Getenv("DISABLE_ENV_FILE") != "true" {
 		if err := godotenv.Load(".env"); err != nil {
-			log.Println("No .env loaded:", err)
+			slog.Info("No .env loaded", "error", err)
 		}
 	}
-	var err error
-	conf.adminTelegramId, err = strconv.ParseInt(os.Getenv("ADMIN_TELEGRAM_ID"), 10, 64)
+
+	adminTelegramID := strings.TrimSpace(os.Getenv("ADMIN_TELEGRAM_ID"))
+	if adminTelegramID == "" {
+		return fmt.Errorf("ADMIN_TELEGRAM_ID is required")
+	}
+	conf.adminTelegramId, err = strconv.ParseInt(adminTelegramID, 10, 64)
 	if err != nil {
-		panic("ADMIN_TELEGRAM_ID .env variable not set")
+		return fmt.Errorf("invalid ADMIN_TELEGRAM_ID: %w", err)
 	}
 
-	conf.telegramToken = mustEnv("TELEGRAM_TOKEN")
+	conf.telegramToken, err = requiredEnv("TELEGRAM_TOKEN")
+	if err != nil {
+		return err
+	}
 
 	conf.isWebAppLinkEnabled = func() bool {
 		isWebAppLinkEnabled := os.Getenv("IS_WEB_APP_LINK") == "true"
@@ -528,18 +546,27 @@ func InitConfig() {
 	if externalSquadUUIDStr != "" {
 		parsedUUID, err := uuid.Parse(externalSquadUUIDStr)
 		if err != nil {
-			panic(fmt.Sprintf("invalid EXTERNAL_SQUAD_UUID format: %v", err))
+			return fmt.Errorf("invalid EXTERNAL_SQUAD_UUID: %w", err)
 		}
 		conf.externalSquadUUID = parsedUUID
 	} else {
 		conf.externalSquadUUID = uuid.Nil
 	}
 
-	conf.trialTrafficLimit = mustEnvInt("TRIAL_TRAFFIC_LIMIT")
+	conf.trialTrafficLimit, err = requiredEnvInt("TRIAL_TRAFFIC_LIMIT")
+	if err != nil {
+		return err
+	}
 
-	conf.healthCheckPort = envIntDefault("HEALTH_CHECK_PORT", 8080)
+	conf.healthCheckPort, err = envIntDefault("HEALTH_CHECK_PORT", 8080)
+	if err != nil {
+		return err
+	}
 
-	conf.trialDays = mustEnvInt("TRIAL_DAYS")
+	conf.trialDays, err = requiredEnvInt("TRIAL_DAYS")
+	if err != nil {
+		return err
+	}
 
 	conf.enableAutoPayment = envBool("ENABLE_AUTO_PAYMENT")
 
@@ -548,14 +575,20 @@ func InitConfig() {
 	if plansStr != "" {
 		plans, err := ParsePlansEnv(plansStr)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("parse PLANS: %w", err)
 		}
 		setPlans(plans)
 		slog.Info("Loaded plans from PLANS env", "count", len(plans))
 	} else {
 		// Backward compat: fall back to PRICE_1/3/6/12
-		daysInMonth := envIntDefault("DAYS_IN_MONTH", 30)
-		trafficLimit := envIntDefault("TRAFFIC_LIMIT", 0)
+		daysInMonth, err := envIntDefault("DAYS_IN_MONTH", 30)
+		if err != nil {
+			return err
+		}
+		trafficLimit, err := envIntDefault("TRAFFIC_LIMIT", 0)
+		if err != nil {
+			return err
+		}
 		label := envStringDefault("PLAN_LABEL", "Unlimited")
 		var plans []Plan
 		for _, m := range []int{1, 3, 6, 12} {
@@ -566,7 +599,7 @@ func InitConfig() {
 			}
 			p, err := strconv.Atoi(pStr)
 			if err != nil {
-				panic(fmt.Sprintf("invalid %s: %v", key, err))
+				return fmt.Errorf("invalid %s: %w", key, err)
 			}
 			if p > 0 {
 				plans = append(plans, Plan{
@@ -584,32 +617,42 @@ func InitConfig() {
 		slog.Info("Loaded plans from PRICE_X env (legacy)", "count", len(plans))
 	}
 
-	conf.remnawaveUrl = mustEnv("REMNAWAVE_URL")
+	conf.remnawaveUrl, err = requiredEnv("REMNAWAVE_URL")
+	if err != nil {
+		return err
+	}
 
-	conf.remnawaveMode = func() string {
-		v := os.Getenv("REMNAWAVE_MODE")
-		if v != "" {
-			if v != "remote" && v != "local" {
-				panic("REMNAWAVE_MODE .env variable must be either 'remote' or 'local'")
-			} else {
-				return v
-			}
-		} else {
-			return "remote"
-		}
-	}()
+	conf.remnawaveMode = envStringDefault("REMNAWAVE_MODE", "remote")
+	if conf.remnawaveMode != "remote" && conf.remnawaveMode != "local" {
+		return fmt.Errorf("REMNAWAVE_MODE must be either remote or local")
+	}
 
-	conf.remnawaveToken = mustEnv("REMNAWAVE_TOKEN")
+	conf.remnawaveToken, err = requiredEnv("REMNAWAVE_TOKEN")
+	if err != nil {
+		return err
+	}
 
-	conf.databaseURL = mustEnv("DATABASE_URL")
+	conf.databaseURL, err = requiredEnv("DATABASE_URL")
+	if err != nil {
+		return err
+	}
 
 	conf.isCryptoEnabled = envBool("CRYPTO_PAY_ENABLED")
 	if conf.isCryptoEnabled {
-		conf.cryptoPayURL = mustEnv("CRYPTO_PAY_URL")
-		conf.cryptoPayToken = mustEnv("CRYPTO_PAY_TOKEN")
+		conf.cryptoPayURL, err = requiredEnv("CRYPTO_PAY_URL")
+		if err != nil {
+			return err
+		}
+		conf.cryptoPayToken, err = requiredEnv("CRYPTO_PAY_TOKEN")
+		if err != nil {
+			return err
+		}
 	}
 
-	conf.referralDays = mustEnvInt("REFERRAL_DAYS")
+	conf.referralDays, err = requiredEnvInt("REFERRAL_DAYS")
+	if err != nil {
+		return err
+	}
 
 	conf.serverStatusURL = os.Getenv("SERVER_STATUS_URL")
 	conf.supportURL = os.Getenv("SUPPORT_URL")
@@ -617,91 +660,71 @@ func InitConfig() {
 	conf.channelURL = os.Getenv("CHANNEL_URL")
 	conf.tosURL = os.Getenv("TOS_URL")
 
-	conf.squadUUIDs = func() map[uuid.UUID]uuid.UUID {
-		v := os.Getenv("SQUAD_UUIDS")
-		if v != "" {
-			uuids := strings.Split(v, ",")
-			var inboundsMap = make(map[uuid.UUID]uuid.UUID)
-			for _, value := range uuids {
-				uuid, err := uuid.Parse(value)
-				if err != nil {
-					panic(err)
-				}
-				inboundsMap[uuid] = uuid
+	conf.squadUUIDs = map[uuid.UUID]uuid.UUID{}
+	if v := os.Getenv("SQUAD_UUIDS"); v != "" {
+		uuids := strings.Split(v, ",")
+		for _, value := range uuids {
+			parsedUUID, err := uuid.Parse(strings.TrimSpace(value))
+			if err != nil {
+				return fmt.Errorf("invalid SQUAD_UUIDS: %w", err)
 			}
-			slog.Info("Loaded squad UUIDs", "uuids", uuids)
-			return inboundsMap
-		} else {
-			slog.Info("No squad UUIDs specified, all will be used")
-			return map[uuid.UUID]uuid.UUID{}
+			conf.squadUUIDs[parsedUUID] = parsedUUID
 		}
-	}()
+		slog.Info("Loaded squad UUIDs", "uuids", uuids)
+	} else {
+		slog.Info("No squad UUIDs specified, all will be used")
+	}
 
-	conf.blockedTelegramIds = func() map[int64]bool {
-		v := os.Getenv("BLOCKED_TELEGRAM_IDS")
-		if v != "" {
-			ids := strings.Split(v, ",")
-			var blockedMap = make(map[int64]bool)
-			for _, idStr := range ids {
-				id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
-				if err != nil {
-					panic(fmt.Sprintf("invalid telegram ID in BLOCKED_TELEGRAM_IDS: %v", err))
-				}
-				blockedMap[id] = true
+	conf.blockedTelegramIds = map[int64]bool{}
+	if v := os.Getenv("BLOCKED_TELEGRAM_IDS"); v != "" {
+		ids := strings.Split(v, ",")
+		for _, idStr := range ids {
+			id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid BLOCKED_TELEGRAM_IDS: %w", err)
 			}
-			slog.Info("Loaded blocked telegram IDs", "count", len(blockedMap))
-			return blockedMap
-		} else {
-			slog.Info("No blocked telegram IDs specified")
-			return map[int64]bool{}
+			conf.blockedTelegramIds[id] = true
 		}
-	}()
+		slog.Info("Loaded blocked telegram IDs", "count", len(conf.blockedTelegramIds))
+	} else {
+		slog.Info("No blocked telegram IDs specified")
+	}
 
-	conf.whitelistedTelegramIds = func() map[int64]bool {
-		v := os.Getenv("WHITELISTED_TELEGRAM_IDS")
-		if v != "" {
-			ids := strings.Split(v, ",")
-			var whitelistedMap = make(map[int64]bool)
-			for _, idStr := range ids {
-				id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
-				if err != nil {
-					panic(fmt.Sprintf("invalid telegram ID in WHITELISTED_TELEGRAM_IDS: %v", err))
-				}
-				whitelistedMap[id] = true
+	conf.whitelistedTelegramIds = map[int64]bool{}
+	if v := os.Getenv("WHITELISTED_TELEGRAM_IDS"); v != "" {
+		ids := strings.Split(v, ",")
+		for _, idStr := range ids {
+			id, err := strconv.ParseInt(strings.TrimSpace(idStr), 10, 64)
+			if err != nil {
+				return fmt.Errorf("invalid WHITELISTED_TELEGRAM_IDS: %w", err)
 			}
-			slog.Info("Loaded whitelisted telegram IDs", "count", len(whitelistedMap))
-			return whitelistedMap
-		} else {
-			slog.Info("No whitelisted telegram IDs specified")
-			return map[int64]bool{}
+			conf.whitelistedTelegramIds[id] = true
 		}
-	}()
+		slog.Info("Loaded whitelisted telegram IDs", "count", len(conf.whitelistedTelegramIds))
+	} else {
+		slog.Info("No whitelisted telegram IDs specified")
+	}
 
-	conf.trialInternalSquads = func() map[uuid.UUID]uuid.UUID {
-		v := os.Getenv("TRIAL_INTERNAL_SQUADS")
-		if v != "" {
-			uuids := strings.Split(v, ",")
-			var trialSquadsMap = make(map[uuid.UUID]uuid.UUID)
-			for _, value := range uuids {
-				parsedUUID, err := uuid.Parse(strings.TrimSpace(value))
-				if err != nil {
-					panic(fmt.Sprintf("invalid UUID in TRIAL_INTERNAL_SQUADS: %v", err))
-				}
-				trialSquadsMap[parsedUUID] = parsedUUID
+	conf.trialInternalSquads = map[uuid.UUID]uuid.UUID{}
+	if v := os.Getenv("TRIAL_INTERNAL_SQUADS"); v != "" {
+		uuids := strings.Split(v, ",")
+		for _, value := range uuids {
+			parsedUUID, err := uuid.Parse(strings.TrimSpace(value))
+			if err != nil {
+				return fmt.Errorf("invalid TRIAL_INTERNAL_SQUADS: %w", err)
 			}
-			slog.Info("Loaded trial internal squad UUIDs", "uuids", uuids)
-			return trialSquadsMap
-		} else {
-			slog.Info("No trial internal squads specified, will use regular SQUAD_UUIDS for trial users")
-			return map[uuid.UUID]uuid.UUID{}
+			conf.trialInternalSquads[parsedUUID] = parsedUUID
 		}
-	}()
+		slog.Info("Loaded trial internal squad UUIDs", "uuids", uuids)
+	} else {
+		slog.Info("No trial internal squads specified, will use regular SQUAD_UUIDS for trial users")
+	}
 
 	trialExternalSquadUUIDStr := os.Getenv("TRIAL_EXTERNAL_SQUAD_UUID")
 	if trialExternalSquadUUIDStr != "" {
 		parsedUUID, err := uuid.Parse(trialExternalSquadUUIDStr)
 		if err != nil {
-			panic(fmt.Sprintf("invalid TRIAL_EXTERNAL_SQUAD_UUID format: %v", err))
+			return fmt.Errorf("invalid TRIAL_EXTERNAL_SQUAD_UUID: %w", err)
 		}
 		conf.trialExternalSquadUUID = parsedUUID
 		slog.Info("Loaded trial external squad UUID", "uuid", trialExternalSquadUUIDStr)
@@ -735,7 +758,10 @@ func InitConfig() {
 
 	conf.mobileBankingEnabled = envBool("MOBILE_BANKING_ENABLED")
 	if conf.mobileBankingEnabled {
-		conf.mobileBankingPhone = mustEnv("MOBILE_BANKING_PHONE")
+		conf.mobileBankingPhone, err = requiredEnv("MOBILE_BANKING_PHONE")
+		if err != nil {
+			return err
+		}
 		conf.geminiAPIKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 		conf.geminiModel = envStringDefault("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 		conf.openRouterAPIKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))
@@ -743,21 +769,30 @@ func InitConfig() {
 		conf.openRouterFallbackModel = strings.TrimSpace(os.Getenv("OPENROUTER_FALLBACK_MODEL"))
 		primary, fallback, err := resolveVisionProviders(conf.geminiAPIKey, conf.openRouterAPIKey, conf.openRouterFallbackModel, os.Getenv("VISION_PROVIDER_FALLBACK"))
 		if err != nil {
-			panic(err.Error())
+			return err
 		}
 		conf.visionProviderPrimary = primary
 		conf.visionProviderFallback = fallback
-		conf.visionRetryAttempts = envIntDefault("VISION_RETRY_ATTEMPTS", 1)
-		if conf.visionRetryAttempts < 0 {
-			panic("VISION_RETRY_ATTEMPTS must be >= 0")
+		conf.visionRetryAttempts, err = envIntDefault("VISION_RETRY_ATTEMPTS", 1)
+		if err != nil {
+			return err
 		}
-		explicitMaxAttempts, ok := envOptionalInt("VISION_RETRY_MAX_ATTEMPTS")
+		if conf.visionRetryAttempts < 0 {
+			return fmt.Errorf("VISION_RETRY_ATTEMPTS must be >= 0")
+		}
+		explicitMaxAttempts, ok, err := envOptionalInt("VISION_RETRY_MAX_ATTEMPTS")
+		if err != nil {
+			return err
+		}
 		if !ok {
-			explicitMaxAttempts, ok = envOptionalInt("VISION_MAX_ATTEMPTS")
+			explicitMaxAttempts, ok, err = envOptionalInt("VISION_MAX_ATTEMPTS")
+			if err != nil {
+				return err
+			}
 		}
 		if ok {
 			if explicitMaxAttempts < 1 {
-				panic("VISION_RETRY_MAX_ATTEMPTS/VISION_MAX_ATTEMPTS must be >= 1")
+				return fmt.Errorf("VISION_RETRY_MAX_ATTEMPTS/VISION_MAX_ATTEMPTS must be >= 1")
 			}
 			conf.visionMaxAttempts = explicitMaxAttempts
 		} else {
@@ -767,13 +802,19 @@ func InitConfig() {
 			}
 			conf.visionMaxAttempts = providerCount * (conf.visionRetryAttempts + 1)
 		}
-		conf.visionAcceptConfidenceThreshold = envFloatDefault("VISION_ACCEPT_CONFIDENCE_THRESHOLD", 0.55)
-		conf.visionRejectConfidenceThreshold = envFloatDefault("VISION_REJECT_CONFIDENCE_THRESHOLD", 0.90)
+		conf.visionAcceptConfidenceThreshold, err = envFloatDefault("VISION_ACCEPT_CONFIDENCE_THRESHOLD", 0.55)
+		if err != nil {
+			return err
+		}
+		conf.visionRejectConfidenceThreshold, err = envFloatDefault("VISION_REJECT_CONFIDENCE_THRESHOLD", 0.90)
+		if err != nil {
+			return err
+		}
 		if conf.visionAcceptConfidenceThreshold <= 0 || conf.visionAcceptConfidenceThreshold > 1 {
-			panic("VISION_ACCEPT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
+			return fmt.Errorf("VISION_ACCEPT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
 		}
 		if conf.visionRejectConfidenceThreshold <= 0 || conf.visionRejectConfidenceThreshold > 1 {
-			panic("VISION_REJECT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
+			return fmt.Errorf("VISION_REJECT_CONFIDENCE_THRESHOLD must be > 0 and <= 1")
 		}
 	}
 
@@ -782,8 +823,14 @@ func InitConfig() {
 	conf.backupScheduleCron = envStringDefault("BACKUP_SCHEDULE_CRON", "10 0 * * *")
 	conf.backupTimezone = envStringDefault("BACKUP_TIMEZONE", "Asia/Rangoon")
 	conf.backupDir = envStringDefault("BACKUP_DIR", "/backups")
-	conf.backupRetentionDays = envIntDefault("BACKUP_RETENTION_DAYS", 7)
-	conf.backupMaxLocalFiles = envIntDefault("BACKUP_MAX_LOCAL_FILES", 7)
+	conf.backupRetentionDays, err = envIntDefault("BACKUP_RETENTION_DAYS", 7)
+	if err != nil {
+		return err
+	}
+	conf.backupMaxLocalFiles, err = envIntDefault("BACKUP_MAX_LOCAL_FILES", 7)
+	if err != nil {
+		return err
+	}
 	conf.backupSendToTelegram = func() bool {
 		if os.Getenv("BACKUP_SEND_TO_TELEGRAM") == "" {
 			return true
@@ -791,7 +838,17 @@ func InitConfig() {
 		return envBool("BACKUP_SEND_TO_TELEGRAM")
 	}()
 	conf.backupRestoreEnabled = envBool("BACKUP_RESTORE_ENABLED")
-	conf.backupConfirmTTLMinutes = envIntDefault("BACKUP_CONFIRM_TTL_MINUTES", 10)
-	conf.backupJobTimeoutSeconds = envIntDefault("BACKUP_JOB_TIMEOUT_SECONDS", 900)
-	conf.backupRestoreTimeoutSeconds = envIntDefault("BACKUP_RESTORE_TIMEOUT_SECONDS", 1800)
+	conf.backupConfirmTTLMinutes, err = envIntDefault("BACKUP_CONFIRM_TTL_MINUTES", 10)
+	if err != nil {
+		return err
+	}
+	conf.backupJobTimeoutSeconds, err = envIntDefault("BACKUP_JOB_TIMEOUT_SECONDS", 900)
+	if err != nil {
+		return err
+	}
+	conf.backupRestoreTimeoutSeconds, err = envIntDefault("BACKUP_RESTORE_TIMEOUT_SECONDS", 1800)
+	if err != nil {
+		return err
+	}
+	return nil
 }

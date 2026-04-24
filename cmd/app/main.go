@@ -114,6 +114,14 @@ func visionProviderName(provider gemini.Provider) string {
 	return provider.Name()
 }
 
+func fatalStartup(component string, err error) {
+	if err == nil {
+		return
+	}
+	slog.Error("Application startup failed", "component", component, "error", err)
+	os.Exit(1)
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "--health" {
 		os.Exit(runHealthProbe())
@@ -122,26 +130,28 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer cancel()
 
-	config.InitConfig()
+	if err := config.InitConfig(); err != nil {
+		fatalStartup("config", err)
+	}
 	slog.Info("Application starting", "version", Version, "commit", Commit, "buildDate", BuildDate)
 
 	tm := translation.GetInstance()
 	err := tm.InitTranslations("./translations", config.DefaultLanguage())
 	if err != nil {
-		panic(err)
+		fatalStartup("translations", err)
 	}
 
 	pool, err := initDatabase(ctx, config.DatabaseUrl())
 	if err != nil {
-		panic(err)
+		fatalStartup("database", err)
 	}
 	if err := api.ConfigureStateStores(pool, config.TelegramToken()); err != nil {
-		panic(err)
+		fatalStartup("api state stores", err)
 	}
 
 	err = database.RunMigrations(ctx, &database.MigrationConfig{Direction: "up", MigrationsPath: "./db/migrations", Steps: 0}, pool)
 	if err != nil {
-		panic(err)
+		fatalStartup("database migrations", err)
 	}
 	messageCache := cache.NewCache(30 * time.Minute)
 	customerRepository := database.NewCustomerRepository(pool)
@@ -154,7 +164,10 @@ func main() {
 	// Initialize repositories first
 	// walletTxRepo is already Init at line 68
 
-	remnawaveClient := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
+	remnawaveClient, err := remnawave.NewClient(config.RemnawaveUrl(), config.RemnawaveToken(), config.RemnawaveMode())
+	if err != nil {
+		fatalStartup("remnawave client", err)
+	}
 
 	// Mobile banking / screenshot analyzer
 	var paymentAnalyzer gemini.Analyzer
@@ -169,7 +182,7 @@ func main() {
 			"",
 		)
 		if err != nil {
-			panic(err)
+			fatalStartup("vision primary provider", err)
 		}
 
 		fallbackOpenRouterModel := config.OpenRouterFallbackModel()
@@ -182,7 +195,7 @@ func main() {
 			fallbackOpenRouterModel,
 		)
 		if err != nil {
-			panic(err)
+			fatalStartup("vision fallback provider", err)
 		}
 
 		paymentAnalyzer = gemini.NewAnalyzer(gemini.AnalyzerOptions{
@@ -207,7 +220,7 @@ func main() {
 
 	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
 	if err != nil {
-		panic(err)
+		fatalStartup("telegram bot", err)
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
@@ -218,7 +231,10 @@ func main() {
 
 	subService := notification.NewSubscriptionService(subKeyRepo, customerRepository, b, tm)
 
-	subscriptionNotificationCronScheduler := subscriptionChecker(ctx, subService)
+	subscriptionNotificationCronScheduler, err := subscriptionChecker(ctx, subService)
+	if err != nil {
+		fatalStartup("subscription notification cron", err)
+	}
 	subscriptionNotificationCronScheduler.Start()
 	defer subscriptionNotificationCronScheduler.Stop()
 
@@ -232,7 +248,7 @@ func main() {
 		})
 	})
 	if err != nil {
-		panic(err)
+		fatalStartup("auto-renew cron", err)
 	}
 	autoRenewCron.Start()
 	defer autoRenewCron.Stop()
@@ -241,7 +257,7 @@ func main() {
 
 	appConfigRepo := database.NewAppConfigRepository(pool)
 	if err := config.LoadPlansCatalog(ctx, appConfigRepo); err != nil {
-		panic(err)
+		fatalStartup("plans catalog", err)
 	}
 	bonusStr, err := appConfigRepo.Get(ctx, "referral_bonus_amount")
 	if err == nil {
@@ -316,7 +332,7 @@ func main() {
 
 	backupScheduleTime, err := parseDailyScheduleTime(config.BackupScheduleCron())
 	if err != nil {
-		panic(err)
+		fatalStartup("backup schedule", err)
 	}
 	backupService := backup.NewService(appConfigRepo, backup.Options{
 		DatabaseURL:         config.DatabaseUrl(),
@@ -349,7 +365,7 @@ func main() {
 
 	me, err := b.GetMe(ctx)
 	if err != nil {
-		panic(err)
+		fatalStartup("telegram getMe", err)
 	}
 
 	miniAppURL := strings.TrimSpace(config.GetMiniAppURL())
@@ -512,7 +528,7 @@ func main() {
 		cron.WithLocation(mmtZone),
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
-	c.AddFunc("0 0 * * *", func() {
+	if _, err := c.AddFunc("0 0 * * *", func() {
 		runCronJob(ctx, "daily_revenue_report", 30*time.Second, func(cronCtx context.Context) {
 			rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
 			if err != nil {
@@ -552,20 +568,25 @@ func main() {
 					yesterday, strings.Join(lines, "\n"), totalRevenue, totalTxns)
 			}
 
-			b.SendMessage(cronCtx, &bot.SendMessageParams{
+			if _, err := b.SendMessage(cronCtx, &bot.SendMessageParams{
 				ChatID:    adminID,
 				Text:      text,
 				ParseMode: models.ParseModeHTML,
-			})
+			}); err != nil {
+				slog.Error("Daily revenue report send failed", "error", err)
+				return
+			}
 			slog.Info("Daily revenue report sent", "total", totalRevenue, "txns", totalTxns)
 		})
-	})
+	}); err != nil {
+		fatalStartup("daily revenue cron", err)
+	}
 	c.Start()
 	defer c.Stop()
 
 	backupLocation, err := time.LoadLocation(config.BackupTimezone())
 	if err != nil {
-		panic(err)
+		fatalStartup("backup timezone", err)
 	}
 	backupCron := cron.New(
 		cron.WithLocation(backupLocation),
@@ -579,7 +600,7 @@ func main() {
 		})
 	})
 	if err != nil {
-		panic(err)
+		fatalStartup("backup cron", err)
 	}
 	backupCron.Start()
 	defer backupCron.Stop()
@@ -744,7 +765,7 @@ func isAdminMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	}
 }
 
-func subscriptionChecker(parent context.Context, subService *notification.SubscriptionService) *cron.Cron {
+func subscriptionChecker(parent context.Context, subService *notification.SubscriptionService) (*cron.Cron, error) {
 	c := cron.New(
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
@@ -759,9 +780,9 @@ func subscriptionChecker(parent context.Context, subService *notification.Subscr
 	})
 
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return c
+	return c, nil
 }
 
 func initDatabase(ctx context.Context, connString string) (*pgxpool.Pool, error) {

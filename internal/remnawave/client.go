@@ -48,7 +48,16 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(r)
 }
 
-func NewClient(baseURL, token, mode string) *Client {
+func NewClient(baseURL, token, mode string) (*Client, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	token = strings.TrimSpace(token)
+	if baseURL == "" {
+		return nil, errors.New("remnawave URL is required")
+	}
+	if token == "" {
+		return nil, errors.New("remnawave token is required")
+	}
+
 	local := mode == "local"
 	headers := config.RemnawaveHeaders()
 
@@ -63,14 +72,14 @@ func NewClient(baseURL, token, mode string) *Client {
 
 	api, err := remapi.NewClient(baseURL, remapi.StaticToken{Token: token}, remapi.WithClient(client))
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("create Remnawave API client: %w", err)
 	}
 	return &Client{
 		client:     remapi.NewClientExt(api),
 		httpClient: client,
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		baseURL:    baseURL,
 		token:      token,
-	}
+	}, nil
 }
 
 func (r *Client) Ping(ctx context.Context) error {
