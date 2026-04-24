@@ -48,7 +48,7 @@ func TestSyncMarksLocalKeysMissingFromPanelDeleted(t *testing.T) {
 	}
 }
 
-func TestSyncMarksAllLocalKeysDeletedWhenPanelHasNoUsers(t *testing.T) {
+func TestSyncSkipsDeletedKeyReconciliationWhenPanelHasNoUsers(t *testing.T) {
 	users := []remapi.User{}
 	keyStore := &recordingSubscriptionKeyStore{}
 
@@ -59,11 +59,8 @@ func TestSyncMarksAllLocalKeysDeletedWhenPanelHasNoUsers(t *testing.T) {
 
 	service.Sync()
 
-	if keyStore.calls != 1 {
-		t.Fatalf("MarkMissingRemoteKeysDeleted calls = %d, want 1", keyStore.calls)
-	}
-	if len(keyStore.remoteUUIDs) != 0 {
-		t.Fatalf("remote UUIDs = %v, want empty slice so all non-deleted local keys are hidden", keyStore.remoteUUIDs)
+	if keyStore.calls != 0 {
+		t.Fatalf("MarkMissingRemoteKeysDeleted calls = %d, want 0 for empty full-panel snapshot", keyStore.calls)
 	}
 }
 

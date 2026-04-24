@@ -54,17 +54,16 @@ func (s SyncService) Sync() {
 	}
 	if users == nil {
 		slog.Warn("Remnawave returned no user list during sync")
-		emptyUsers := []remapi.User{}
-		users = &emptyUsers
+		return
 	}
-
-	s.markMissingRemoteKeysDeleted(ctx, *users)
 
 	if len(*users) == 0 {
 		slog.Warn("No users found in remnawave")
 		slog.Info("Synchronization completed")
 		return
 	}
+
+	s.markMissingRemoteKeysDeleted(ctx, *users)
 
 	for _, user := range *users {
 		if user.TelegramId.Null {
