@@ -57,6 +57,9 @@ func TestPendingPurchaseConflictResponseCarriesExtendKeyID(t *testing.T) {
 	if resp.PendingPurchase.ExtendKeyID == nil || *resp.PendingPurchase.ExtendKeyID != extendKeyID {
 		t.Fatalf("pendingPurchaseConflictResponse() extend_key_id = %v, want %d", resp.PendingPurchase.ExtendKeyID, extendKeyID)
 	}
+	if !strings.Contains(strings.ToLower(resp.Message), "cancel") {
+		t.Fatalf("pendingPurchaseConflictResponse() message = %q, want cancel guidance", resp.Message)
+	}
 }
 
 func TestCompactSubscriptionKeysForDisplayCollapsesDuplicateIdentityBySubscriptionURL(t *testing.T) {

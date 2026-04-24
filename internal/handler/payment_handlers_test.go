@@ -41,3 +41,50 @@ func TestMobilePayResultTextUsesProviderAuthTranslation(t *testing.T) {
 		t.Fatalf("mobilePayResultText() Myanmar locale reused English text: %q", myText)
 	}
 }
+
+func TestBuildMobilePayKeyboardAddsChangePlanWebAppButton(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+	h := Handler{translation: tm}
+
+	markup := h.buildMobilePayKeyboard("en", 2, "https://mini.example.com/app?source=bot", true)
+
+	if len(markup.InlineKeyboard) != 2 {
+		t.Fatalf("buildMobilePayKeyboard() rows = %d, want 2", len(markup.InlineKeyboard))
+	}
+	changePlan := markup.InlineKeyboard[0][0]
+	if changePlan.WebApp == nil {
+		t.Fatal("change-plan button missing WebApp payload")
+	}
+	if changePlan.WebApp.URL != "https://mini.example.com/app/plans?source=bot" {
+		t.Fatalf("change-plan URL = %q, want plans URL", changePlan.WebApp.URL)
+	}
+	if !strings.Contains(strings.ToLower(changePlan.Text), "change") {
+		t.Fatalf("change-plan text = %q, want change-plan copy", changePlan.Text)
+	}
+
+	back := markup.InlineKeyboard[1][0]
+	if back.CallbackData != "sell?plan=2" {
+		t.Fatalf("back callback = %q, want sell?plan=2", back.CallbackData)
+	}
+}
+
+func TestBuildMobilePayKeyboardFallsBackWithoutMiniAppURL(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+	h := Handler{translation: tm}
+
+	markup := h.buildMobilePayKeyboard("en", 4, "", true)
+
+	if len(markup.InlineKeyboard) != 1 {
+		t.Fatalf("buildMobilePayKeyboard() rows = %d, want only back row", len(markup.InlineKeyboard))
+	}
+	if markup.InlineKeyboard[0][0].CallbackData != "sell?plan=4" {
+		t.Fatalf("back callback = %q, want sell?plan=4", markup.InlineKeyboard[0][0].CallbackData)
+	}
+}
+
+func TestMiniAppURLWithPath(t *testing.T) {
+	got := miniAppURLWithPath("https://mini.example.com/base/?v=123", "plans")
+	if got != "https://mini.example.com/base/plans?v=123" {
+		t.Fatalf("miniAppURLWithPath() = %q, want path appended with query preserved", got)
+	}
+}

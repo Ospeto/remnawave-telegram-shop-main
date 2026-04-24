@@ -747,7 +747,7 @@ func (h *APIHandler) pendingPurchaseConflictResponse(customer *database.Customer
 
 	return PendingPurchaseConflictResponse{
 		Code:    "pending_screenshot_payment",
-		Message: "You already have a pending screenshot payment. Please finish it before creating another one.",
+		Message: "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.",
 		PendingPurchase: CreatePurchaseResponse{
 			PurchaseID:       purchase.ID,
 			PaymentPhone:     mobileNumber,
@@ -922,7 +922,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
-			http.Error(w, "You already have a pending screenshot payment. Please finish it before creating another one.", http.StatusConflict)
+			http.Error(w, "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.", http.StatusConflict)
 			return
 		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create purchase", err)
