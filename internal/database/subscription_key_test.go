@@ -14,6 +14,16 @@ func TestSubscriptionKeyRepositoryCanMarkMissingRemoteKeysDeleted(t *testing.T) 
 	} = (*SubscriptionKeyRepository)(nil)
 }
 
+func TestMarkMissingRemoteKeysDeletedSkipsEmptyRemoteUUIDs(t *testing.T) {
+	affected, err := (&SubscriptionKeyRepository{}).MarkMissingRemoteKeysDeleted(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("MarkMissingRemoteKeysDeleted() error = %v", err)
+	}
+	if affected != 0 {
+		t.Fatalf("MarkMissingRemoteKeysDeleted() affected = %d, want 0", affected)
+	}
+}
+
 func TestPrimarySubscriptionKey(t *testing.T) {
 	now := time.Now()
 	earlier := now.Add(24 * time.Hour)

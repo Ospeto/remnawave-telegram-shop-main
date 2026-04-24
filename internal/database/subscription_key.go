@@ -204,13 +204,15 @@ func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, 
 }
 
 func (r *SubscriptionKeyRepository) MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error) {
+	if len(remoteUUIDs) == 0 {
+		return 0, nil
+	}
+
 	query := sq.Update("subscription_key").
 		Set("status", "deleted").
 		Where(sq.NotEq{"status": "deleted"}).
+		Where(sq.NotEq{"remnawave_uuid": remoteUUIDs}).
 		PlaceholderFormat(sq.Dollar)
-	if len(remoteUUIDs) > 0 {
-		query = query.Where(sq.NotEq{"remnawave_uuid": remoteUUIDs})
-	}
 
 	sql, args, err := query.ToSql()
 	if err != nil {
