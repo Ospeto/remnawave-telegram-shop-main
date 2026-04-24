@@ -1724,6 +1724,12 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	period, err := database.NormalizeRevenueSummaryPeriod(r.URL.Query().Get("period"))
+	if err != nil {
+		http.Error(w, "period must be day, week, or month", http.StatusBadRequest)
+		return
+	}
+
 	daysStr := r.URL.Query().Get("days")
 	days := 30
 	if daysStr != "" {
@@ -1732,7 +1738,18 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	summary, err := h.paymentService.GetRevenueSummary(r.Context(), days)
+	var summary []database.RevenueSummaryRow
+	if period == database.RevenuePeriodDay {
+		summary, err = h.paymentService.GetRevenueSummary(r.Context(), days)
+	} else {
+		periods := 12
+		if periodsStr := r.URL.Query().Get("periods"); periodsStr != "" {
+			if p, parseErr := strconv.Atoi(periodsStr); parseErr == nil && p > 0 && p <= 120 {
+				periods = p
+			}
+		}
+		summary, err = h.paymentService.GetRevenueSummaryForPeriods(r.Context(), period, periods)
+	}
 	if err != nil {
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", err)
 		return

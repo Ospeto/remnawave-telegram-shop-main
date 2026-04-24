@@ -435,7 +435,7 @@ The Go app serves the Mini App and these API routes:
 | `/api/wallet/autorenew` | Wallet-based auto-renew settings |
 | `/api/referrals` | Referral information |
 | `/api/keys/autorenew` | Per-key auto-renew settings |
-| `/api/revenue` | Admin revenue summary |
+| `/api/revenue` | Admin revenue summary. Supports `period=day|week|month`; use `days` for daily history and `periods` for weekly/monthly history. |
 | `/redirect` | Simple redirect helper |
 
 Notes:

@@ -275,6 +275,10 @@ func (s *PaymentService) GetRevenueSummary(ctx context.Context, days int) ([]dat
 	return s.purchaseRepository.GetRevenueSummary(ctx, days)
 }
 
+func (s *PaymentService) GetRevenueSummaryForPeriods(ctx context.Context, period database.RevenueSummaryPeriod, periods int) ([]database.RevenueSummaryRow, error) {
+	return s.purchaseRepository.GetRevenueSummaryForPeriods(ctx, period, periods)
+}
+
 // UpdatePurchaseFields updates arbitrary (whitelisted) fields on a purchase record.
 func (s *PaymentService) UpdatePurchaseFields(ctx context.Context, id int64, fields map[string]interface{}) error {
 	return s.purchaseRepository.UpdateFields(ctx, id, fields)

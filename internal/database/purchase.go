@@ -386,43 +386,247 @@ func (cr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
 }
 
-// RevenueSummaryRow represents a single row from the revenue summary query.
+type RevenueSummaryPeriod string
+
+const (
+	RevenuePeriodDay   RevenueSummaryPeriod = "day"
+	RevenuePeriodWeek  RevenueSummaryPeriod = "week"
+	RevenuePeriodMonth RevenueSummaryPeriod = "month"
+)
+
+func NormalizeRevenueSummaryPeriod(period string) (RevenueSummaryPeriod, error) {
+	switch RevenueSummaryPeriod(period) {
+	case "", RevenuePeriodDay:
+		return RevenuePeriodDay, nil
+	case RevenuePeriodWeek:
+		return RevenuePeriodWeek, nil
+	case RevenuePeriodMonth:
+		return RevenuePeriodMonth, nil
+	default:
+		return "", fmt.Errorf("unsupported revenue period: %s", period)
+	}
+}
+
+// RevenueSummaryRow represents a single breakdown row from the revenue summary query.
+// TotalRevenue intentionally means service revenue, not wallet cash-in. Wallet top-ups
+// are cash collected and wallet liability movement, then wallet spends are counted when
+// the service is delivered.
 type RevenueSummaryRow struct {
-	Day             string  `json:"day"`
-	PaymentMethod   string  `json:"payment_method"`
-	Currency        string  `json:"currency"`
-	TotalPurchases  int     `json:"total_purchases"`
-	TotalRevenue    float64 `json:"total_revenue"`
-	UniqueCustomers int     `json:"unique_customers"`
+	Day                        string  `json:"day"`
+	Period                     string  `json:"period"`
+	PeriodStart                string  `json:"period_start"`
+	PaymentMethod              string  `json:"payment_method"`
+	InvoiceType                string  `json:"invoice_type"`
+	RevenueCategory            string  `json:"revenue_category"`
+	Currency                   string  `json:"currency"`
+	TotalPurchases             int     `json:"total_purchases"`
+	TotalRevenue               float64 `json:"total_revenue"`
+	UniqueCustomers            int     `json:"unique_customers"`
+	CashCollected              float64 `json:"cash_collected"`
+	WalletTopUps               float64 `json:"wallet_topups"`
+	WalletSpend                float64 `json:"wallet_spend"`
+	ServiceRevenue             float64 `json:"service_revenue"`
+	NewKeyPurchases            int     `json:"new_key_purchases"`
+	ExtensionPurchases         int     `json:"extension_purchases"`
+	WalletTopUpPurchases       int     `json:"wallet_topup_purchases"`
+	PeriodTotalPurchases       int     `json:"period_total_purchases"`
+	PeriodServicePurchases     int     `json:"period_service_purchases"`
+	PeriodUniqueCustomers      int     `json:"period_unique_customers"`
+	PeriodCashCollected        float64 `json:"period_cash_collected"`
+	PeriodWalletTopUps         float64 `json:"period_wallet_topups"`
+	PeriodWalletSpend          float64 `json:"period_wallet_spend"`
+	PeriodServiceRevenue       float64 `json:"period_service_revenue"`
+	PeriodNewKeyPurchases      int     `json:"period_new_key_purchases"`
+	PeriodExtensionPurchases   int     `json:"period_extension_purchases"`
+	PeriodWalletTopUpPurchases int     `json:"period_wallet_topup_purchases"`
 }
 
 const revenueSummaryTimezone = "Asia/Yangon"
 
-func buildRevenueSummaryQuery() string {
+func revenuePeriodExpression(period RevenueSummaryPeriod) (string, error) {
+	switch period {
+	case RevenuePeriodDay:
+		return fmt.Sprintf("(p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
+	case RevenuePeriodWeek:
+		return fmt.Sprintf("DATE_TRUNC('week', p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
+	case RevenuePeriodMonth:
+		return fmt.Sprintf("DATE_TRUNC('month', p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
+	default:
+		return "", fmt.Errorf("unsupported revenue period: %s", period)
+	}
+}
+
+func buildRevenueSummaryQuery(period RevenueSummaryPeriod) (string, error) {
+	periodExpr, err := revenuePeriodExpression(period)
+	if err != nil {
+		return "", err
+	}
+
 	return fmt.Sprintf(`
+		WITH paid AS (
+			SELECT
+				p.id,
+				p.customer_id,
+				p.amount,
+				COALESCE(NULLIF(p.currency, ''), 'MMK') AS currency,
+				COALESCE(
+					NULLIF(p.payment_method, ''),
+					CASE
+						WHEN p.invoice_type = 'wallet_payment' THEN 'wallet'
+						ELSE 'unknown'
+					END
+				) AS payment_method,
+				p.invoice_type,
+				p.extend_key_id,
+				%s AS period_start,
+				CASE
+					WHEN p.invoice_type = 'wallet_topup' THEN 'wallet_topup'
+					WHEN p.extend_key_id IS NOT NULL THEN 'extension'
+					ELSE 'new_key'
+				END AS revenue_category
+			FROM purchase p
+			JOIN customer c ON c.id = p.customer_id
+			WHERE p.status = 'paid'
+			  AND p.paid_at IS NOT NULL
+			  AND p.paid_at >= $1
+			  AND p.paid_at < $2
+			  AND ($3::bigint = 0 OR c.telegram_id <> $3)
+		),
+		period_totals AS (
+			SELECT
+				period_start,
+				currency,
+				COUNT(*) AS period_total_purchases,
+				COUNT(*) FILTER (WHERE invoice_type <> 'wallet_topup') AS period_service_purchases,
+				COUNT(DISTINCT customer_id) AS period_unique_customers,
+				COALESCE(SUM(CASE WHEN invoice_type IN ('crypto', 'mobile_banking', 'wallet_topup') THEN amount ELSE 0 END), 0) AS period_cash_collected,
+				COALESCE(SUM(CASE WHEN invoice_type = 'wallet_topup' THEN amount ELSE 0 END), 0) AS period_wallet_topups,
+				COALESCE(SUM(CASE WHEN invoice_type = 'wallet_payment' THEN amount ELSE 0 END), 0) AS period_wallet_spend,
+				COALESCE(SUM(CASE WHEN invoice_type <> 'wallet_topup' THEN amount ELSE 0 END), 0) AS period_service_revenue,
+				COUNT(*) FILTER (WHERE invoice_type <> 'wallet_topup' AND extend_key_id IS NULL) AS period_new_key_purchases,
+				COUNT(*) FILTER (WHERE invoice_type <> 'wallet_topup' AND extend_key_id IS NOT NULL) AS period_extension_purchases,
+				COUNT(*) FILTER (WHERE invoice_type = 'wallet_topup') AS period_wallet_topup_purchases
+			FROM paid
+			GROUP BY 1, 2
+		),
+		breakdown AS (
+			SELECT
+				period_start,
+				payment_method,
+				invoice_type,
+				revenue_category,
+				currency,
+				COUNT(*) AS total_purchases,
+				COALESCE(SUM(CASE WHEN invoice_type <> 'wallet_topup' THEN amount ELSE 0 END), 0) AS total_revenue,
+				COUNT(DISTINCT customer_id) AS unique_customers,
+				COALESCE(SUM(CASE WHEN invoice_type IN ('crypto', 'mobile_banking', 'wallet_topup') THEN amount ELSE 0 END), 0) AS cash_collected,
+				COALESCE(SUM(CASE WHEN invoice_type = 'wallet_topup' THEN amount ELSE 0 END), 0) AS wallet_topups,
+				COALESCE(SUM(CASE WHEN invoice_type = 'wallet_payment' THEN amount ELSE 0 END), 0) AS wallet_spend,
+				COALESCE(SUM(CASE WHEN invoice_type <> 'wallet_topup' THEN amount ELSE 0 END), 0) AS service_revenue,
+				COUNT(*) FILTER (WHERE invoice_type <> 'wallet_topup' AND extend_key_id IS NULL) AS new_key_purchases,
+				COUNT(*) FILTER (WHERE invoice_type <> 'wallet_topup' AND extend_key_id IS NOT NULL) AS extension_purchases,
+				COUNT(*) FILTER (WHERE invoice_type = 'wallet_topup') AS wallet_topup_purchases
+			FROM paid
+			GROUP BY 1, 2, 3, 4, 5
+		)
 		SELECT
-			(p.paid_at AT TIME ZONE '%s')::date AS day,
-			COALESCE(p.payment_method, '') AS payment_method,
-			COALESCE(p.currency, '') AS currency,
-			COUNT(*) AS total_purchases,
-			COALESCE(SUM(p.amount), 0) AS total_revenue,
-			COUNT(DISTINCT p.customer_id) AS unique_customers
-		FROM purchase p
-		JOIN customer c ON c.id = p.customer_id
-		WHERE p.status = 'paid'
-		  AND p.paid_at IS NOT NULL
-		  AND (p.paid_at AT TIME ZONE '%s')::date >= (CURRENT_TIMESTAMP AT TIME ZONE '%s')::date - $1::int
-		  AND ($2::bigint = 0 OR c.telegram_id <> $2)
-		GROUP BY 1, 2, 3
-		ORDER BY day DESC, total_revenue DESC`, revenueSummaryTimezone, revenueSummaryTimezone, revenueSummaryTimezone)
+			b.period_start,
+			b.payment_method,
+			b.invoice_type,
+			b.revenue_category,
+			b.currency,
+			b.total_purchases,
+			b.total_revenue,
+			b.unique_customers,
+			b.cash_collected,
+			b.wallet_topups,
+			b.wallet_spend,
+			b.service_revenue,
+			b.new_key_purchases,
+			b.extension_purchases,
+			b.wallet_topup_purchases,
+			pt.period_total_purchases,
+			pt.period_service_purchases,
+			pt.period_unique_customers,
+			pt.period_cash_collected,
+			pt.period_wallet_topups,
+			pt.period_wallet_spend,
+			pt.period_service_revenue,
+			pt.period_new_key_purchases,
+			pt.period_extension_purchases,
+			pt.period_wallet_topup_purchases
+		FROM breakdown b
+		JOIN period_totals pt ON pt.period_start = b.period_start AND pt.currency = b.currency
+		ORDER BY b.period_start DESC, b.service_revenue DESC, b.cash_collected DESC`, periodExpr), nil
 }
 
 // GetRevenueSummary fetches revenue data for the last N days, excluding admin-account purchases.
 func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) ([]RevenueSummaryRow, error) {
-	query := buildRevenueSummaryQuery()
+	if days <= 0 {
+		days = 1
+	}
+	location := revenueSummaryLocation()
+	end := startOfRevenueDay(time.Now().In(location)).AddDate(0, 0, 1)
+	start := end.AddDate(0, 0, -days)
+
+	return pr.GetRevenueSummaryRange(ctx, start, end, RevenuePeriodDay)
+}
+
+func revenueSummaryLocation() *time.Location {
+	location, err := time.LoadLocation(revenueSummaryTimezone)
+	if err != nil {
+		return time.FixedZone("MMT", 6*3600+30*60)
+	}
+	return location
+}
+
+func startOfRevenueDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
+
+func (pr *PurchaseRepository) GetRevenueSummaryForPeriods(ctx context.Context, period RevenueSummaryPeriod, periods int) ([]RevenueSummaryRow, error) {
+	if periods <= 0 {
+		periods = 1
+	}
+	location := revenueSummaryLocation()
+	now := time.Now().In(location)
+	var start, end time.Time
+
+	switch period {
+	case RevenuePeriodDay:
+		end = startOfRevenueDay(now).AddDate(0, 0, 1)
+		start = end.AddDate(0, 0, -periods)
+	case RevenuePeriodWeek:
+		end = startOfRevenueWeek(now).AddDate(0, 0, 7)
+		start = end.AddDate(0, 0, -7*periods)
+	case RevenuePeriodMonth:
+		end = startOfRevenueMonth(now).AddDate(0, 1, 0)
+		start = end.AddDate(0, -periods, 0)
+	default:
+		return nil, fmt.Errorf("unsupported revenue period: %s", period)
+	}
+
+	return pr.GetRevenueSummaryRange(ctx, start, end, period)
+}
+
+func startOfRevenueWeek(t time.Time) time.Time {
+	day := startOfRevenueDay(t)
+	daysSinceMonday := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -daysSinceMonday)
+}
+
+func startOfRevenueMonth(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+}
+
+func (pr *PurchaseRepository) GetRevenueSummaryRange(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]RevenueSummaryRow, error) {
+	query, err := buildRevenueSummaryQuery(period)
+	if err != nil {
+		return nil, err
+	}
 	adminTelegramID := config.GetAdminTelegramId()
 
-	rows, err := pr.pool.Query(ctx, query, days, adminTelegramID)
+	rows, err := pr.pool.Query(ctx, query, start, end, adminTelegramID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query revenue summary: %w", err)
 	}
@@ -431,11 +635,39 @@ func (pr *PurchaseRepository) GetRevenueSummary(ctx context.Context, days int) (
 	var result []RevenueSummaryRow
 	for rows.Next() {
 		var r RevenueSummaryRow
-		var dayTime time.Time
-		if err := rows.Scan(&dayTime, &r.PaymentMethod, &r.Currency, &r.TotalPurchases, &r.TotalRevenue, &r.UniqueCustomers); err != nil {
+		var periodStart time.Time
+		if err := rows.Scan(
+			&periodStart,
+			&r.PaymentMethod,
+			&r.InvoiceType,
+			&r.RevenueCategory,
+			&r.Currency,
+			&r.TotalPurchases,
+			&r.TotalRevenue,
+			&r.UniqueCustomers,
+			&r.CashCollected,
+			&r.WalletTopUps,
+			&r.WalletSpend,
+			&r.ServiceRevenue,
+			&r.NewKeyPurchases,
+			&r.ExtensionPurchases,
+			&r.WalletTopUpPurchases,
+			&r.PeriodTotalPurchases,
+			&r.PeriodServicePurchases,
+			&r.PeriodUniqueCustomers,
+			&r.PeriodCashCollected,
+			&r.PeriodWalletTopUps,
+			&r.PeriodWalletSpend,
+			&r.PeriodServiceRevenue,
+			&r.PeriodNewKeyPurchases,
+			&r.PeriodExtensionPurchases,
+			&r.PeriodWalletTopUpPurchases,
+		); err != nil {
 			return nil, fmt.Errorf("failed to scan revenue row: %w", err)
 		}
-		r.Day = dayTime.Format("2006-01-02")
+		r.Period = string(period)
+		r.PeriodStart = periodStart.Format("2006-01-02")
+		r.Day = r.PeriodStart
 		result = append(result, r)
 	}
 	return result, rows.Err()
