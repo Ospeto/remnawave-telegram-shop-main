@@ -194,6 +194,13 @@ describe('Checkout', () => {
                     },
                 }, 409);
             }
+            if (url === '/api/purchase/cancel?id=55') {
+                expect(init?.method).toBe('POST');
+                return jsonResponse({
+                    purchase_id: 55,
+                    status: 'cancel',
+                });
+            }
 
             throw new Error(`Unhandled fetch: ${url}`);
         });
@@ -208,9 +215,16 @@ describe('Checkout', () => {
         fireEvent.click(manualButton);
 
         expect(await screen.findByText('Unfinished payment')).toBeTruthy();
-        expect(screen.getByText('You already have an unfinished bank-transfer payment for 30,000 MMK. Finish this one first, then start a new payment.')).toBeTruthy();
+        expect(screen.getByText('You already have an unfinished bank-transfer payment for 30,000 MMK. Upload its screenshot below, or cancel it to choose another plan.')).toBeTruthy();
         expect(screen.getByText('How to pay')).toBeTruthy();
         expect(screen.getByRole('button', { name: '📤 Upload Payment Screenshot' })).toBeTruthy();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel this payment and choose another plan' }));
+
+        expect(await screen.findByText('Plans')).toBeTruthy();
+        await waitFor(() => {
+            expect(fetchMock.mock.calls.find(([url]) => url === '/api/purchase/cancel?id=55')).toBeTruthy();
+        });
     });
 
     it('uses the resumed purchase extension state for the success copy', async () => {

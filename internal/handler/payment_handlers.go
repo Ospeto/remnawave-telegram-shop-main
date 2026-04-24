@@ -2,10 +2,12 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +164,11 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
 	_, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
 	if err != nil {
+		var pendingErr *payment.AwaitingReceiptVerificationError
+		if errors.As(err, &pendingErr) && pendingErr.Purchase != nil {
+			h.handlePendingMobileBankingPayment(ctx, b, callback, pendingErr.Purchase, planIdx, langCode)
+			return
+		}
 		slog.Error("Error creating mobile banking purchase", "error", err)
 		return
 	}
@@ -169,28 +176,100 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 	// Store pending state: telegramID → purchaseID
 	h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
 
+	h.editMobileBankingInstructions(ctx, b, callback, plan.Price, planIdx, langCode, false)
+}
+
+func (h Handler) handlePendingMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, pending *database.Purchase, planIdx int, langCode string) {
+	h.mobilePayCache.Set(callback.Chat.ID, int(pending.ID))
+
+	amount := int(pending.Amount)
+	text := fmt.Sprintf(
+		"%s\n\n%s",
+		fmt.Sprintf(h.translation.GetText(langCode, "mobile_pay_pending_resume"), amount),
+		h.mobilePayInstructions(langCode, amount),
+	)
+
+	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      callback.Chat.ID,
+		MessageID:   callback.ID,
+		ParseMode:   models.ParseModeHTML,
+		Text:        text,
+		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), true),
+	})
+	if err != nil {
+		slog.Error("Error sending pending mobile pay instructions", "error", err)
+	}
+}
+
+func (h Handler) editMobileBankingInstructions(ctx context.Context, b *bot.Bot, callback *models.Message, amount int, planIdx int, langCode string, includeChangePlan bool) {
 	instructions := fmt.Sprintf(
 		h.translation.GetText(langCode, "mobile_pay_instructions"),
-		plan.Price,
+		amount,
 		payment.BuildPaymentReceiversHTML(),
 	)
 
-	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:    callback.Chat.ID,
-		MessageID: callback.ID,
-		ParseMode: models.ParseModeHTML,
-		Text:      instructions,
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{
-				{
-					{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
-				},
-			},
-		},
+	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      callback.Chat.ID,
+		MessageID:   callback.ID,
+		ParseMode:   models.ParseModeHTML,
+		Text:        instructions,
+		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), includeChangePlan),
 	})
 	if err != nil {
 		slog.Error("Error sending mobile pay instructions", "error", err)
 	}
+}
+
+func (h Handler) mobilePayInstructions(langCode string, amount int) string {
+	return fmt.Sprintf(
+		h.translation.GetText(langCode, "mobile_pay_instructions"),
+		amount,
+		payment.BuildPaymentReceiversHTML(),
+	)
+}
+
+func (h Handler) buildMobilePayKeyboard(langCode string, planIdx int, miniAppURL string, includeChangePlan bool) models.InlineKeyboardMarkup {
+	inlineKeyboard := make([][]models.InlineKeyboardButton, 0, 2)
+	if includeChangePlan {
+		if plansURL := miniAppURLWithPath(miniAppURL, "/plans"); plansURL != "" {
+			inlineKeyboard = append(inlineKeyboard, []models.InlineKeyboardButton{{
+				Text: h.translation.GetText(langCode, "mobile_pay_cancel_change_plan_button"),
+				WebApp: &models.WebAppInfo{
+					URL: plansURL,
+				},
+			}})
+		}
+	}
+
+	inlineKeyboard = append(inlineKeyboard, []models.InlineKeyboardButton{
+		{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
+	})
+
+	return models.InlineKeyboardMarkup{InlineKeyboard: inlineKeyboard}
+}
+
+func miniAppURLWithPath(rawURL string, suffixPath string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return ""
+	}
+	if !strings.HasPrefix(suffixPath, "/") {
+		suffixPath = "/" + suffixPath
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(rawURL, "/") + suffixPath
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + suffixPath
+	return parsed.String()
+}
+
+func mobilePaySuccessTranslationKey(invoiceType database.InvoiceType) string {
+	if invoiceType == database.InvoiceTypeWalletTopUp {
+		return "mobile_pay_topup_success"
+	}
+	return "mobile_pay_success"
 }
 
 func (h Handler) handleCryptoPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
@@ -285,10 +364,13 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 
 	// Check if this user has a pending mobile banking purchase
 	purchaseID, hasPending := h.mobilePayCache.Get(chatID)
+	var pendingPurchase *database.Purchase
 	if hasPending {
 		purchase, err := h.purchaseRepository.FindById(ctx, int64(purchaseID))
 		if err != nil || purchase == nil || (purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew) {
 			hasPending = false
+		} else {
+			pendingPurchase = purchase
 		}
 	}
 	if !hasPending {
@@ -297,6 +379,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 			purchase, pendingErr := h.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID)
 			if pendingErr == nil && purchase != nil {
 				purchaseID = int(purchase.ID)
+				pendingPurchase = purchase
 				hasPending = true
 				h.mobilePayCache.Set(chatID, purchaseID)
 			}
@@ -346,7 +429,11 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 
 	if result.Success {
 		h.mobilePayCache.Delete(chatID)
-		h.sendMobilePayResult(ctx, b, chatID, langCode, result.ReasonKey, 0)
+		successKey := result.ReasonKey
+		if successKey == "mobile_pay_success" && pendingPurchase != nil {
+			successKey = mobilePaySuccessTranslationKey(pendingPurchase.InvoiceType)
+		}
+		h.sendMobilePayResult(ctx, b, chatID, langCode, successKey, 0)
 		return
 	}
 

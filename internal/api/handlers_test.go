@@ -57,6 +57,9 @@ func TestPendingPurchaseConflictResponseCarriesExtendKeyID(t *testing.T) {
 	if resp.PendingPurchase.ExtendKeyID == nil || *resp.PendingPurchase.ExtendKeyID != extendKeyID {
 		t.Fatalf("pendingPurchaseConflictResponse() extend_key_id = %v, want %d", resp.PendingPurchase.ExtendKeyID, extendKeyID)
 	}
+	if !strings.Contains(strings.ToLower(resp.Message), "cancel") {
+		t.Fatalf("pendingPurchaseConflictResponse() message = %q, want cancel guidance", resp.Message)
+	}
 }
 
 func TestCompactSubscriptionKeysForDisplayCollapsesDuplicateIdentityBySubscriptionURL(t *testing.T) {
@@ -260,5 +263,91 @@ func TestValidateScreenshotUploadAccessRejectsCryptoPurchase(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(message), "does not accept screenshot") {
 		t.Fatalf("validateScreenshotUploadAccess() message = %q, want screenshot rejection", message)
+	}
+}
+
+func TestValidatePendingPurchaseCancellationAccess(t *testing.T) {
+	customer := &database.Customer{
+		ID:         5,
+		TelegramID: 42,
+	}
+
+	t.Run("allows customer pending screenshot purchase", func(t *testing.T) {
+		status, message, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if !ok {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() ok = false, status = %d, message = %q", status, message)
+		}
+	})
+
+	t.Run("rejects another customer", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  6,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for another customer")
+		}
+		if status != http.StatusNotFound {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusNotFound)
+		}
+	})
+
+	t.Run("rejects paid screenshot purchase", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPaid,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for paid purchase")
+		}
+		if status != http.StatusConflict {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusConflict)
+		}
+	})
+
+	t.Run("rejects non screenshot purchase", func(t *testing.T) {
+		status, _, ok := validatePendingPurchaseCancellationAccess(&database.Purchase{
+			ID:          10,
+			CustomerID:  5,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeWalletPayment,
+		}, customer, 42)
+
+		if ok {
+			t.Fatal("validatePendingPurchaseCancellationAccess() ok = true, want false for wallet purchase")
+		}
+		if status != http.StatusConflict {
+			t.Fatalf("validatePendingPurchaseCancellationAccess() status = %d, want %d", status, http.StatusConflict)
+		}
+	})
+}
+
+func TestScreenshotVerificationInFlight(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	if handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = true before verification starts")
+	}
+	if err := handler.beginScreenshotVerification(55, 42); err != nil {
+		t.Fatalf("beginScreenshotVerification() error = %v", err)
+	}
+	if !handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = false while verification is active")
+	}
+	handler.finishScreenshotVerification(55)
+	if handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = true after verification finishes")
 	}
 }

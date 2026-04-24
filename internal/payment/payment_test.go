@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -358,6 +359,44 @@ func TestProviderAuthVerificationResult(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(result.Reason), "openrouter") {
 		t.Fatalf("providerAuthVerificationResult() reason leaked provider name: %q", result.Reason)
+	}
+}
+
+func TestScreenshotVerificationStatusFailure(t *testing.T) {
+	if got := screenshotVerificationStatusFailure(database.PurchaseStatusPending); got != nil {
+		t.Fatalf("pending status failure = %#v, want nil", got)
+	}
+	if got := screenshotVerificationStatusFailure(database.PurchaseStatusNew); got != nil {
+		t.Fatalf("new status failure = %#v, want nil", got)
+	}
+
+	paid := screenshotVerificationStatusFailure(database.PurchaseStatusPaid)
+	if paid == nil || paid.Success || paid.Reason != "Purchase already completed" {
+		t.Fatalf("paid status failure = %#v, want already-completed failure", paid)
+	}
+
+	cancelled := screenshotVerificationStatusFailure(database.PurchaseStatusCancel)
+	if cancelled == nil || cancelled.Success || cancelled.Reason != "Purchase is not awaiting verification" {
+		t.Fatalf("cancel status failure = %#v, want not-awaiting-verification failure", cancelled)
+	}
+}
+
+func TestDuplicateTransactionResultFromError(t *testing.T) {
+	err := fmt.Errorf("insert mobile_payment_verification: %w", &pgconn.PgError{Code: "23505"})
+
+	result, ok := duplicateTransactionResultFromError(err)
+	if !ok {
+		t.Fatal("duplicateTransactionResultFromError() ok = false, want true")
+	}
+	if result.Success {
+		t.Fatal("duplicate transaction result should fail verification")
+	}
+	if result.ReasonKey != mobilePayDuplicateReasonKey {
+		t.Fatalf("duplicate transaction reason key = %q, want %q", result.ReasonKey, mobilePayDuplicateReasonKey)
+	}
+
+	if result, ok := duplicateTransactionResultFromError(errors.New("other error")); ok || result != nil {
+		t.Fatalf("non-unique error result = %#v, ok = %v; want nil false", result, ok)
 	}
 }
 

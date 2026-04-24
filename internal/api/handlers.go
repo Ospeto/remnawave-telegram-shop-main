@@ -99,6 +99,11 @@ type PendingPurchaseConflictResponse struct {
 	PendingPurchase CreatePurchaseResponse `json:"pending_purchase"`
 }
 
+type CancelPurchaseResponse struct {
+	PurchaseID int64  `json:"purchase_id"`
+	Status     string `json:"status"`
+}
+
 type SessionExchangeResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -580,6 +585,13 @@ func (h *APIHandler) finishScreenshotVerification(purchaseID int64) {
 	delete(h.screenshotInFlight, purchaseID)
 }
 
+func (h *APIHandler) screenshotVerificationInFlight(purchaseID int64) bool {
+	h.screenshotMu.Lock()
+	defer h.screenshotMu.Unlock()
+	_, exists := h.screenshotInFlight[purchaseID]
+	return exists
+}
+
 func validateScreenshotUploadAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
 	if purchase == nil {
 		return http.StatusNotFound, "Purchase not found", false
@@ -592,6 +604,22 @@ func validateScreenshotUploadAccess(purchase *database.Purchase, customer *datab
 	}
 	if !payment.SupportsScreenshotVerification(purchase.InvoiceType) {
 		return http.StatusConflict, "This purchase does not accept screenshot verification", false
+	}
+	return 0, "", true
+}
+
+func validatePendingPurchaseCancellationAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
+	if purchase == nil {
+		return http.StatusNotFound, "Purchase not found", false
+	}
+	if customer == nil || customer.TelegramID != telegramID || purchase.CustomerID != customer.ID {
+		return http.StatusNotFound, "Purchase not found", false
+	}
+	if !payment.SupportsScreenshotVerification(purchase.InvoiceType) {
+		return http.StatusConflict, "This purchase cannot be cancelled here", false
+	}
+	if purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
+		return http.StatusConflict, "Purchase is not awaiting verification", false
 	}
 	return 0, "", true
 }
@@ -726,7 +754,7 @@ func (h *APIHandler) pendingPurchaseConflictResponse(customer *database.Customer
 
 	return PendingPurchaseConflictResponse{
 		Code:    "pending_screenshot_payment",
-		Message: "You already have a pending screenshot payment. Please finish it before creating another one.",
+		Message: "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.",
 		PendingPurchase: CreatePurchaseResponse{
 			PurchaseID:       purchase.ID,
 			PaymentPhone:     mobileNumber,
@@ -901,7 +929,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
-			http.Error(w, "You already have a pending screenshot payment. Please finish it before creating another one.", http.StatusConflict)
+			http.Error(w, "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.", http.StatusConflict)
 			return
 		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create purchase", err)
@@ -1586,6 +1614,65 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) CancelPurchase(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	purchaseIDStr := r.URL.Query().Get("id")
+	if purchaseIDStr == "" {
+		http.Error(w, "Missing purchase id", http.StatusBadRequest)
+		return
+	}
+	purchaseID, err := strconv.Atoi(purchaseIDStr)
+	if err != nil {
+		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		return
+	}
+
+	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
+	if err != nil || purchase == nil {
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	if status, message, ok := validatePendingPurchaseCancellationAccess(purchase, customer, telegramID); !ok {
+		http.Error(w, message, status)
+		return
+	}
+	if h.screenshotVerificationInFlight(purchase.ID) {
+		http.Error(w, "Verification is already in progress for this purchase", http.StatusConflict)
+		return
+	}
+
+	cancelled, err := h.paymentService.CancelAwaitingVerificationPurchase(r.Context(), purchase.ID, customer.ID)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Unable to cancel purchase right now. Please try again.", err)
+		return
+	}
+	if !cancelled {
+		http.Error(w, "Purchase is not awaiting verification", http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(CancelPurchaseResponse{
+		PurchaseID: purchase.ID,
+		Status:     string(database.PurchaseStatusCancel),
+	})
 }
 
 func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {

@@ -280,6 +280,13 @@ func (s *PaymentService) UpdatePurchaseFields(ctx context.Context, id int64, fie
 	return s.purchaseRepository.UpdateFields(ctx, id, fields)
 }
 
+func (s *PaymentService) CancelAwaitingVerificationPurchase(ctx context.Context, purchaseID, customerID int64) (bool, error) {
+	if s.purchaseRepository == nil {
+		return false, fmt.Errorf("purchase repository is not configured")
+	}
+	return s.purchaseRepository.CancelAwaitingVerification(ctx, purchaseID, customerID)
+}
+
 func customerHasTrialHistory(customer *database.Customer, keyCount int) bool {
 	if customer == nil {
 		return false
@@ -1363,6 +1370,13 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 		} else if existing != nil {
 			return s.resumeExistingPurchase(ctx, existing)
 		}
+		if invoiceType == database.InvoiceTypeMobileBanking {
+			if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+				return "", 0, lookupErr
+			} else if existing != nil {
+				return "", 0, awaitingReceiptVerificationError(existing)
+			}
+		}
 
 		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
 		if err != nil {
@@ -1798,6 +1812,7 @@ type VerificationResult struct {
 const (
 	visionProviderAlertCooldown         = 30 * time.Minute
 	mobilePayProviderAuthReasonKey      = "mobile_pay_failed_provider_auth"
+	mobilePayDuplicateReasonKey         = "mobile_pay_failed_duplicate"
 	mobilePayUnclearScreenshotReasonKey = "mobile_pay_failed_unclear_screenshot"
 	mobilePayProviderAuthFailureMessage = "Screenshot verification is temporarily unavailable right now. Please try again later or contact support."
 	mobilePayUnclearScreenshotMessage   = "The screenshot is too unclear to verify safely. Ask the user for a clearer payment confirmation screenshot."
@@ -1830,6 +1845,42 @@ func providerAuthVerificationResult() *VerificationResult {
 		Reason:    mobilePayProviderAuthFailureMessage,
 		ReasonKey: mobilePayProviderAuthReasonKey,
 	}
+}
+
+func duplicateTransactionVerificationResult() *VerificationResult {
+	return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: mobilePayDuplicateReasonKey}
+}
+
+func screenshotVerificationStatusFailure(status database.PurchaseStatus) *VerificationResult {
+	switch status {
+	case database.PurchaseStatusNew, database.PurchaseStatusPending:
+		return nil
+	case database.PurchaseStatusPaid:
+		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}
+	default:
+		return &VerificationResult{Success: false, Reason: "Purchase is not awaiting verification", ReasonKey: "mobile_pay_failed_generic"}
+	}
+}
+
+func duplicateTransactionResultFromError(err error) (*VerificationResult, bool) {
+	if isUniqueViolation(err) {
+		return duplicateTransactionVerificationResult(), true
+	}
+	return nil, false
+}
+
+func (s *PaymentService) terminalScreenshotVerificationFailure(ctx context.Context, purchaseID int64) (*VerificationResult, bool) {
+	purchase, err := s.purchaseRepository.FindById(ctx, purchaseID)
+	if err != nil || purchase == nil {
+		return nil, false
+	}
+	switch purchase.Status {
+	case database.PurchaseStatusCancel, database.PurchaseStatusPaid:
+		if failure := screenshotVerificationStatusFailure(purchase.Status); failure != nil {
+			return failure, true
+		}
+	}
+	return nil, false
 }
 
 func (s *PaymentService) claimVisionAlertSlot(key string, now time.Time) bool {
@@ -2025,6 +2076,9 @@ func (s *PaymentService) completeTestModeVerification(
 
 	if err := s.ProcessPurchaseById(ctx, purchaseID); err != nil {
 		slog.Error("Error processing verified mobile purchase (test mode)", "purchase_id", purchaseID, "error", err)
+		if failure, ok := s.terminalScreenshotVerificationFailure(ctx, purchaseID); ok {
+			return failure, nil
+		}
 
 		shadowPassedCopy := shadowPassed
 		shadowLabel := "failed"
@@ -2094,9 +2148,8 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		return nil, fmt.Errorf("purchase %d not found", purchaseID)
 	}
 
-	// Guard: prevent re-verification of already-paid purchases
-	if purchase.Status == database.PurchaseStatusPaid {
-		return &VerificationResult{Success: false, Reason: "Purchase already completed", ReasonKey: "mobile_pay_failed_generic"}, nil
+	if failure := screenshotVerificationStatusFailure(purchase.Status); failure != nil {
+		return failure, nil
 	}
 	if !SupportsScreenshotVerification(purchase.InvoiceType) {
 		return &VerificationResult{
@@ -2205,10 +2258,10 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		if testModeBypass {
 			return s.completeTestModeVerification(ctx, purchaseID, info, info.Provider, &verificationFailure{
 				reason:    "Duplicate transaction ID",
-				reasonKey: "mobile_pay_failed_duplicate",
+				reasonKey: mobilePayDuplicateReasonKey,
 			})
 		}
-		return &VerificationResult{Success: false, Reason: "Duplicate transaction ID", ReasonKey: "mobile_pay_failed_duplicate"}, nil
+		return duplicateTransactionVerificationResult(), nil
 	}
 
 	// 3. Check the receipt matches one of the enabled providers.
@@ -2290,6 +2343,9 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	})
 	if err != nil {
 		slog.Error("Error recording mobile payment", "error", err)
+		if duplicateResult, ok := duplicateTransactionResultFromError(err); ok {
+			return duplicateResult, nil
+		}
 		return nil, err
 	}
 
@@ -2298,6 +2354,9 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		slog.Error("Error processing verified mobile purchase", "error", err)
 		if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), info.TransactionID); delErr != nil {
 			slog.Error("Error deleting mobile payment record after failure", "error", delErr)
+		}
+		if failure, ok := s.terminalScreenshotVerificationFailure(ctx, purchaseID); ok {
+			return failure, nil
 		}
 		return nil, err
 	}
