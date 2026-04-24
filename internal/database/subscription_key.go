@@ -203,6 +203,27 @@ func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, 
 	return err
 }
 
+func (r *SubscriptionKeyRepository) MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error) {
+	query := sq.Update("subscription_key").
+		Set("status", "deleted").
+		Where(sq.NotEq{"status": "deleted"}).
+		PlaceholderFormat(sq.Dollar)
+	if len(remoteUUIDs) > 0 {
+		query = query.Where(sq.NotEq{"remnawave_uuid": remoteUUIDs})
+	}
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build missing remote key update: %w", err)
+	}
+
+	tag, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark missing remote keys deleted: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (r *SubscriptionKeyRepository) UpdateSubscriptionURL(ctx context.Context, id int64, url string) error {
 	query := sq.Update("subscription_key").
 		Set("subscription_url", url).
