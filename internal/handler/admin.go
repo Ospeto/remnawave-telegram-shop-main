@@ -11,6 +11,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/payment"
 	appPromo "remnawave-tg-shop-bot/internal/promo"
+	"remnawave-tg-shop-bot/internal/reporting"
 	"remnawave-tg-shop-bot/internal/service/backup"
 
 	"github.com/go-telegram/bot"
@@ -565,88 +566,9 @@ func (h Handler) RevenueCommandHandler(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 
-	if len(rows) == 0 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   "📊 No revenue data for the last 7 days.",
-		})
-		return
-	}
-
-	// Group by day
-	today := time.Now().Format("2006-01-02")
-	var todayLines []string
-	var todayTotal float64
-	var todayTxns int
-
-	// map[day] => aggregated line
-	type daySummary struct {
-		Revenue  float64
-		Txns     int
-		Users    int
-		Currency string
-	}
-	dayMap := make(map[string]*daySummary)
-	var dayOrder []string
-
-	for _, r := range rows {
-		method := r.PaymentMethod
-		if method == "" {
-			method = "unknown"
-		}
-		currency := r.Currency
-		if currency == "" {
-			currency = "MMK"
-		}
-
-		if r.Day == today {
-			todayLines = append(todayLines, fmt.Sprintf("  %s: %s %s (%d txns)",
-				method, formatNumber(r.TotalRevenue), currency, r.TotalPurchases))
-			todayTotal += r.TotalRevenue
-			todayTxns += r.TotalPurchases
-		}
-
-		if _, ok := dayMap[r.Day]; !ok {
-			dayMap[r.Day] = &daySummary{Currency: currency}
-			dayOrder = append(dayOrder, r.Day)
-		}
-		d := dayMap[r.Day]
-		d.Revenue += r.TotalRevenue
-		d.Txns += r.TotalPurchases
-		if r.UniqueCustomers > d.Users {
-			d.Users = r.UniqueCustomers
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📊 <b>Revenue Summary</b>\n\n")
-
-	// Today section
-	sb.WriteString("<b>Today</b>\n")
-	if len(todayLines) > 0 {
-		for _, l := range todayLines {
-			sb.WriteString(l + "\n")
-		}
-		sb.WriteString(fmt.Sprintf("  <b>Total: %s (%d txns)</b>\n", formatNumber(todayTotal), todayTxns))
-	} else {
-		sb.WriteString("  No sales yet today\n")
-	}
-
-	// 7-day breakdown
-	sb.WriteString("\n<b>Last 7 Days</b>\n")
-	for _, day := range dayOrder {
-		d := dayMap[day]
-		label := day
-		if day == today {
-			label = day + " (today)"
-		}
-		sb.WriteString(fmt.Sprintf("  %s: %s %s (%d txns, %d users)\n",
-			label, formatNumber(d.Revenue), d.Currency, d.Txns, d.Users))
-	}
-
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      sb.String(),
+		Text:      reporting.FormatRevenueCommand(rows, time.Now().In(reporting.YangonLocation()).Format("2006-01-02")),
 		ParseMode: models.ParseModeHTML,
 	})
 }

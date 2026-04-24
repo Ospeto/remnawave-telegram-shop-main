@@ -18,6 +18,7 @@ import (
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/remnawave"
+	"remnawave-tg-shop-bot/internal/reporting"
 	"remnawave-tg-shop-bot/internal/service/autorenew"
 	"remnawave-tg-shop-bot/internal/service/backup"
 	"remnawave-tg-shop-bot/internal/service/healthcheck"
@@ -83,6 +84,27 @@ func versionedMiniAppURL(rawURL string) string {
 	query.Set("v", version)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func sendRevenueReport(ctx context.Context, b *bot.Bot, purchaseRepository *database.PurchaseRepository, jobName, title string, period database.RevenueSummaryPeriod, start, end time.Time) {
+	rows, err := purchaseRepository.GetRevenueSummaryRange(ctx, start, end, period)
+	if err != nil {
+		slog.Error("Revenue report failed", "job", jobName, "error", err)
+		return
+	}
+
+	text := reporting.FormatTelegramPeriodRevenueReport(title, reporting.FormatDateRange(start, end), rows)
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    config.GetAdminTelegramId(),
+		Text:      text,
+		ParseMode: models.ParseModeHTML,
+	}); err != nil {
+		slog.Error("Revenue report send failed", "job", jobName, "error", err)
+		return
+	}
+
+	totals, _ := reporting.SummarizeRevenuePeriod(rows)
+	slog.Info("Revenue report sent", "job", jobName, "service_revenue", totals.ServiceRevenue, "cash_collected", totals.CashCollected, "txns", totals.TotalPurchases)
 }
 
 func newVisionProvider(providerName, geminiAPIKey, geminiModel, openRouterAPIKey, openRouterModel, openRouterFallbackModel string) (gemini.Provider, error) {
@@ -522,67 +544,38 @@ func main() {
 		}
 	}()
 
-	// Daily revenue report cron job — runs at midnight Myanmar time (UTC+6:30)
-	mmtZone := time.FixedZone("MMT", 6*3600+30*60)
-	c := cron.New(
+	// Revenue report cron jobs run on Myanmar calendar boundaries.
+	mmtZone := reporting.YangonLocation()
+	revenueCron := cron.New(
 		cron.WithLocation(mmtZone),
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
-	if _, err := c.AddFunc("0 0 * * *", func() {
+	if _, err := revenueCron.AddFunc("0 0 * * *", func() {
 		runCronJob(ctx, "daily_revenue_report", 30*time.Second, func(cronCtx context.Context) {
-			rows, err := purchaseRepository.GetRevenueSummary(cronCtx, 2)
-			if err != nil {
-				slog.Error("Daily revenue report failed", "error", err)
-				return
-			}
-
-			adminID := config.GetAdminTelegramId()
-			yesterday := time.Now().Add(-24 * time.Hour).Format("2006-01-02")
-			var totalRevenue float64
-			var totalTxns int
-			var lines []string
-
-			for _, r := range rows {
-				if r.Day != yesterday {
-					continue
-				}
-				method := r.PaymentMethod
-				if method == "" {
-					method = "unknown"
-				}
-				currency := r.Currency
-				if currency == "" {
-					currency = "MMK"
-				}
-				lines = append(lines, fmt.Sprintf("  %s: %.0f %s (%d txns, %d users)",
-					method, r.TotalRevenue, currency, r.TotalPurchases, r.UniqueCustomers))
-				totalRevenue += r.TotalRevenue
-				totalTxns += r.TotalPurchases
-			}
-
-			var text string
-			if len(lines) == 0 {
-				text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n%s: No sales yesterday.", yesterday)
-			} else {
-				text = fmt.Sprintf("📊 <b>Daily Revenue Report</b>\n\n<b>%s</b>\n%s\n\n<b>Total: %.0f MMK (%d txns)</b>",
-					yesterday, strings.Join(lines, "\n"), totalRevenue, totalTxns)
-			}
-
-			if _, err := b.SendMessage(cronCtx, &bot.SendMessageParams{
-				ChatID:    adminID,
-				Text:      text,
-				ParseMode: models.ParseModeHTML,
-			}); err != nil {
-				slog.Error("Daily revenue report send failed", "error", err)
-				return
-			}
-			slog.Info("Daily revenue report sent", "total", totalRevenue, "txns", totalTxns)
+			start, end := reporting.PreviousDayRange(time.Now().In(mmtZone))
+			sendRevenueReport(cronCtx, b, purchaseRepository, "daily_revenue_report", "Daily Revenue Report", database.RevenuePeriodDay, start, end)
 		})
 	}); err != nil {
 		fatalStartup("daily revenue cron", err)
 	}
-	c.Start()
-	defer c.Stop()
+	if _, err := revenueCron.AddFunc("5 0 * * 1", func() {
+		runCronJob(ctx, "weekly_revenue_report", 30*time.Second, func(cronCtx context.Context) {
+			start, end := reporting.PreviousWeekRange(time.Now().In(mmtZone))
+			sendRevenueReport(cronCtx, b, purchaseRepository, "weekly_revenue_report", "Weekly Revenue Report", database.RevenuePeriodWeek, start, end)
+		})
+	}); err != nil {
+		fatalStartup("weekly revenue cron", err)
+	}
+	if _, err := revenueCron.AddFunc("10 0 1 * *", func() {
+		runCronJob(ctx, "monthly_revenue_report", 30*time.Second, func(cronCtx context.Context) {
+			start, end := reporting.PreviousMonthRange(time.Now().In(mmtZone))
+			sendRevenueReport(cronCtx, b, purchaseRepository, "monthly_revenue_report", "Monthly Revenue Report", database.RevenuePeriodMonth, start, end)
+		})
+	}); err != nil {
+		fatalStartup("monthly revenue cron", err)
+	}
+	revenueCron.Start()
+	defer revenueCron.Stop()
 
 	backupLocation, err := time.LoadLocation(config.BackupTimezone())
 	if err != nil {
