@@ -425,6 +425,7 @@ The Go app serves the Mini App and these API routes:
 | `/api/me` | Current authenticated customer |
 | `/api/plans` | Available plans |
 | `/api/purchase` | Create a purchase |
+| `/api/purchase/cancel` | Cancel the authenticated customer's unfinished screenshot payment |
 | `/api/upload_screenshot` | Upload screenshot for mobile banking verification |
 | `/api/purchase/status` | Poll purchase state |
 | `/api/promo/validate` | Validate promo code |
