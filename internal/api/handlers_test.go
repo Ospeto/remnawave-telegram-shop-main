@@ -333,3 +333,21 @@ func TestValidatePendingPurchaseCancellationAccess(t *testing.T) {
 		}
 	})
 }
+
+func TestScreenshotVerificationInFlight(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	if handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = true before verification starts")
+	}
+	if err := handler.beginScreenshotVerification(55, 42); err != nil {
+		t.Fatalf("beginScreenshotVerification() error = %v", err)
+	}
+	if !handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = false while verification is active")
+	}
+	handler.finishScreenshotVerification(55)
+	if handler.screenshotVerificationInFlight(55) {
+		t.Fatal("screenshotVerificationInFlight() = true after verification finishes")
+	}
+}

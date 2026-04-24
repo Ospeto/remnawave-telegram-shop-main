@@ -585,6 +585,13 @@ func (h *APIHandler) finishScreenshotVerification(purchaseID int64) {
 	delete(h.screenshotInFlight, purchaseID)
 }
 
+func (h *APIHandler) screenshotVerificationInFlight(purchaseID int64) bool {
+	h.screenshotMu.Lock()
+	defer h.screenshotMu.Unlock()
+	_, exists := h.screenshotInFlight[purchaseID]
+	return exists
+}
+
 func validateScreenshotUploadAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
 	if purchase == nil {
 		return http.StatusNotFound, "Purchase not found", false
@@ -1644,6 +1651,10 @@ func (h *APIHandler) CancelPurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	if status, message, ok := validatePendingPurchaseCancellationAccess(purchase, customer, telegramID); !ok {
 		http.Error(w, message, status)
+		return
+	}
+	if h.screenshotVerificationInFlight(purchase.ID) {
+		http.Error(w, "Verification is already in progress for this purchase", http.StatusConflict)
 		return
 	}
 

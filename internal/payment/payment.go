@@ -1370,6 +1370,13 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 		} else if existing != nil {
 			return s.resumeExistingPurchase(ctx, existing)
 		}
+		if invoiceType == database.InvoiceTypeMobileBanking {
+			if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+				return "", 0, lookupErr
+			} else if existing != nil {
+				return "", 0, awaitingReceiptVerificationError(existing)
+			}
+		}
 
 		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
 		if err != nil {
@@ -1862,6 +1869,20 @@ func duplicateTransactionResultFromError(err error) (*VerificationResult, bool) 
 	return nil, false
 }
 
+func (s *PaymentService) terminalScreenshotVerificationFailure(ctx context.Context, purchaseID int64) (*VerificationResult, bool) {
+	purchase, err := s.purchaseRepository.FindById(ctx, purchaseID)
+	if err != nil || purchase == nil {
+		return nil, false
+	}
+	switch purchase.Status {
+	case database.PurchaseStatusCancel, database.PurchaseStatusPaid:
+		if failure := screenshotVerificationStatusFailure(purchase.Status); failure != nil {
+			return failure, true
+		}
+	}
+	return nil, false
+}
+
 func (s *PaymentService) claimVisionAlertSlot(key string, now time.Time) bool {
 	if strings.TrimSpace(key) == "" {
 		return false
@@ -2055,6 +2076,9 @@ func (s *PaymentService) completeTestModeVerification(
 
 	if err := s.ProcessPurchaseById(ctx, purchaseID); err != nil {
 		slog.Error("Error processing verified mobile purchase (test mode)", "purchase_id", purchaseID, "error", err)
+		if failure, ok := s.terminalScreenshotVerificationFailure(ctx, purchaseID); ok {
+			return failure, nil
+		}
 
 		shadowPassedCopy := shadowPassed
 		shadowLabel := "failed"
@@ -2330,6 +2354,9 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 		slog.Error("Error processing verified mobile purchase", "error", err)
 		if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), info.TransactionID); delErr != nil {
 			slog.Error("Error deleting mobile payment record after failure", "error", delErr)
+		}
+		if failure, ok := s.terminalScreenshotVerificationFailure(ctx, purchaseID); ok {
+			return failure, nil
 		}
 		return nil, err
 	}

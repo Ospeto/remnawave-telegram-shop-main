@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/translation"
 )
 
@@ -86,5 +87,14 @@ func TestMiniAppURLWithPath(t *testing.T) {
 	got := miniAppURLWithPath("https://mini.example.com/base/?v=123", "plans")
 	if got != "https://mini.example.com/base/plans?v=123" {
 		t.Fatalf("miniAppURLWithPath() = %q, want path appended with query preserved", got)
+	}
+}
+
+func TestMobilePaySuccessTranslationKey(t *testing.T) {
+	if got := mobilePaySuccessTranslationKey(database.InvoiceTypeWalletTopUp); got != "mobile_pay_topup_success" {
+		t.Fatalf("wallet top-up success key = %q, want mobile_pay_topup_success", got)
+	}
+	if got := mobilePaySuccessTranslationKey(database.InvoiceTypeMobileBanking); got != "mobile_pay_success" {
+		t.Fatalf("mobile banking success key = %q, want mobile_pay_success", got)
 	}
 }

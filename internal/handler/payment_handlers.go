@@ -265,6 +265,13 @@ func miniAppURLWithPath(rawURL string, suffixPath string) string {
 	return parsed.String()
 }
 
+func mobilePaySuccessTranslationKey(invoiceType database.InvoiceType) string {
+	if invoiceType == database.InvoiceTypeWalletTopUp {
+		return "mobile_pay_topup_success"
+	}
+	return "mobile_pay_success"
+}
+
 func (h Handler) handleCryptoPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
 	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto, "")
 	if err != nil {
@@ -357,10 +364,13 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 
 	// Check if this user has a pending mobile banking purchase
 	purchaseID, hasPending := h.mobilePayCache.Get(chatID)
+	var pendingPurchase *database.Purchase
 	if hasPending {
 		purchase, err := h.purchaseRepository.FindById(ctx, int64(purchaseID))
 		if err != nil || purchase == nil || (purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew) {
 			hasPending = false
+		} else {
+			pendingPurchase = purchase
 		}
 	}
 	if !hasPending {
@@ -369,6 +379,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 			purchase, pendingErr := h.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID)
 			if pendingErr == nil && purchase != nil {
 				purchaseID = int(purchase.ID)
+				pendingPurchase = purchase
 				hasPending = true
 				h.mobilePayCache.Set(chatID, purchaseID)
 			}
@@ -418,7 +429,11 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 
 	if result.Success {
 		h.mobilePayCache.Delete(chatID)
-		h.sendMobilePayResult(ctx, b, chatID, langCode, result.ReasonKey, 0)
+		successKey := result.ReasonKey
+		if successKey == "mobile_pay_success" && pendingPurchase != nil {
+			successKey = mobilePaySuccessTranslationKey(pendingPurchase.InvoiceType)
+		}
+		h.sendMobilePayResult(ctx, b, chatID, langCode, successKey, 0)
 		return
 	}
 
