@@ -13,6 +13,7 @@ import (
 	"remnawave-tg-shop-bot/internal/payment"
 	walletsvc "remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/translation"
+	"remnawave-tg-shop-bot/utils"
 	"sort"
 	"strconv"
 	"strings"
@@ -390,6 +391,7 @@ type APIHandler struct {
 	screenshotInFlight         map[int64]struct{}
 	now                        func() time.Time
 	findCustomerByTelegramID   func(context.Context, int64) (*database.Customer, error)
+	getPurchaseByID            func(context.Context, int64) (*database.Purchase, error)
 	listPromoCodes             func(context.Context) ([]database.PromoCode, error)
 	createPromoCode            func(context.Context, string, int, int, time.Time) error
 	deletePromoCode            func(context.Context, string) error
@@ -445,6 +447,16 @@ func (h *APIHandler) customerByTelegramID(ctx context.Context, telegramID int64)
 		return nil, errors.New("customer repository is unavailable")
 	}
 	return h.customerRepo.FindByTelegramId(ctx, telegramID)
+}
+
+func (h *APIHandler) purchaseByID(ctx context.Context, purchaseID int64) (*database.Purchase, error) {
+	if h.getPurchaseByID != nil {
+		return h.getPurchaseByID(ctx, purchaseID)
+	}
+	if h.paymentService == nil {
+		return nil, errors.New("payment service is unavailable")
+	}
+	return h.paymentService.GetPurchaseByID(ctx, purchaseID)
 }
 
 func (h *APIHandler) subscriptionKeysByCustomerID(ctx context.Context, customerID int64) ([]database.SubscriptionKey, error) {
@@ -550,6 +562,53 @@ const (
 
 var errScreenshotVerificationRateLimited = errors.New("too many verification attempts")
 
+const (
+	uploadRejectMethodNotAllowed          = "method_not_allowed"
+	uploadRejectMissingTelegramAuth       = "missing_telegram_auth"
+	uploadRejectMissingPurchaseID         = "missing_purchase_id"
+	uploadRejectInvalidPurchaseID         = "invalid_purchase_id"
+	uploadRejectPurchaseLookupFailed      = "purchase_lookup_failed"
+	uploadRejectPurchaseNotFound          = "purchase_not_found"
+	uploadRejectCustomerLookupFailed      = "customer_lookup_failed"
+	uploadRejectPurchaseOwnerMismatch     = "purchase_owner_mismatch"
+	uploadRejectPurchaseNotAwaiting       = "purchase_not_awaiting_verification"
+	uploadRejectUnsupportedInvoiceType    = "unsupported_invoice_type"
+	uploadRejectVerificationRateLimited   = "verification_rate_limited"
+	uploadRejectVerificationInProgress    = "verification_already_in_progress"
+	uploadRejectInvalidMultipartForm      = "invalid_multipart_form"
+	uploadRejectMissingFileField          = "missing_file_field"
+	uploadRejectFileReadFailed            = "file_read_failed"
+	uploadRejectVerificationServiceFailed = "verification_service_failed"
+)
+
+func logUploadScreenshotReject(level slog.Level, r *http.Request, reason string, statusCode int, err error, attrs ...any) {
+	logAttrs := []any{
+		"event", "upload_screenshot_rejected",
+		"reason", reason,
+		"status_code", statusCode,
+	}
+	if r != nil {
+		logAttrs = append(logAttrs,
+			"method", r.Method,
+			"path", r.URL.Path,
+			"content_length", r.ContentLength,
+		)
+		if contentType := strings.TrimSpace(r.Header.Get("Content-Type")); contentType != "" {
+			logAttrs = append(logAttrs, "content_type", contentType)
+		}
+	}
+	if err != nil {
+		logAttrs = append(logAttrs, "error", err)
+	}
+	logAttrs = append(logAttrs, attrs...)
+
+	if level >= slog.LevelError {
+		slog.Error("Upload screenshot rejected", logAttrs...)
+		return
+	}
+	slog.Warn("Upload screenshot rejected", logAttrs...)
+}
+
 func (h *APIHandler) beginScreenshotVerification(purchaseID, customerID int64) error {
 	h.screenshotMu.Lock()
 	defer h.screenshotMu.Unlock()
@@ -592,20 +651,20 @@ func (h *APIHandler) screenshotVerificationInFlight(purchaseID int64) bool {
 	return exists
 }
 
-func validateScreenshotUploadAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
+func validateScreenshotUploadAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, string, bool) {
 	if purchase == nil {
-		return http.StatusNotFound, "Purchase not found", false
+		return http.StatusNotFound, "Purchase not found", uploadRejectPurchaseNotFound, false
 	}
 	if customer == nil || customer.TelegramID != telegramID || purchase.CustomerID != customer.ID {
-		return http.StatusNotFound, "Purchase not found", false
+		return http.StatusNotFound, "Purchase not found", uploadRejectPurchaseOwnerMismatch, false
 	}
 	if purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
-		return http.StatusConflict, "Purchase is not awaiting verification", false
+		return http.StatusConflict, "Purchase is not awaiting verification", uploadRejectPurchaseNotAwaiting, false
 	}
 	if !payment.SupportsScreenshotVerification(purchase.InvoiceType) {
-		return http.StatusConflict, "This purchase does not accept screenshot verification", false
+		return http.StatusConflict, "This purchase does not accept screenshot verification", uploadRejectUnsupportedInvoiceType, false
 	}
-	return 0, "", true
+	return 0, "", "", true
 }
 
 func validatePendingPurchaseCancellationAccess(purchase *database.Purchase, customer *database.Customer, telegramID int64) (int, string, bool) {
@@ -1503,48 +1562,101 @@ func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMethodNotAllowed, http.StatusMethodNotAllowed, nil)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingTelegramAuth, http.StatusUnauthorized, nil)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	purchaseIDStr := r.URL.Query().Get("id")
 	if purchaseIDStr == "" {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingPurchaseID, http.StatusBadRequest, nil,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+		)
 		http.Error(w, "Missing purchase id", http.StatusBadRequest)
 		return
 	}
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
 	if err != nil {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectInvalidPurchaseID, http.StatusBadRequest, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+		)
 		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
 		return
 	}
+	purchaseID64 := int64(purchaseID)
 
 	// === OWNERSHIP CHECK BEFORE READING FILE BODY ===
 	// Do this first to avoid loading up to 10MB into RAM for unauthorized requests.
-	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
-	if err != nil || purchase == nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
-		return
-	}
-	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
+	purchase, err := h.purchaseByID(r.Context(), purchaseID64)
 	if err != nil {
+		logUploadScreenshotReject(slog.LevelError, r, uploadRejectPurchaseLookupFailed, http.StatusNotFound, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"purchase_id", utils.MaskHalfInt64(purchaseID64),
+		)
 		http.Error(w, "Purchase not found", http.StatusNotFound)
 		return
 	}
-	if status, message, ok := validateScreenshotUploadAccess(purchase, customer, telegramID); !ok {
+	if purchase == nil {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectPurchaseNotFound, http.StatusNotFound, nil,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"purchase_id", utils.MaskHalfInt64(purchaseID64),
+		)
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		logUploadScreenshotReject(slog.LevelError, r, uploadRejectCustomerLookupFailed, http.StatusNotFound, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_customer_id", utils.MaskHalfInt64(purchase.CustomerID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
+		http.Error(w, "Purchase not found", http.StatusNotFound)
+		return
+	}
+	if status, message, reason, ok := validateScreenshotUploadAccess(purchase, customer, telegramID); !ok {
+		attrs := []any{
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_customer_id", utils.MaskHalfInt64(purchase.CustomerID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		}
+		if customer != nil {
+			attrs = append(attrs, "customer_id", utils.MaskHalfInt64(customer.ID))
+		}
+		logUploadScreenshotReject(slog.LevelWarn, r, reason, status, nil, attrs...)
 		http.Error(w, message, status)
 		return
 	}
 	if err := h.beginScreenshotVerification(purchase.ID, customer.ID); err != nil {
 		if errors.Is(err, errScreenshotVerificationRateLimited) {
+			logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectVerificationRateLimited, http.StatusTooManyRequests, err,
+				"telegram_id", utils.MaskHalfInt64(telegramID),
+				"customer_id", utils.MaskHalfInt64(customer.ID),
+				"purchase_id", utils.MaskHalfInt64(purchase.ID),
+				"purchase_status", purchase.Status,
+				"invoice_type", purchase.InvoiceType,
+			)
 			http.Error(w, "Too many verification attempts. Please wait a few minutes and try again.", http.StatusTooManyRequests)
 			return
 		}
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectVerificationInProgress, http.StatusTooManyRequests, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
 		http.Error(w, "Verification is temporarily unavailable for this purchase", http.StatusTooManyRequests)
 		return
 	}
@@ -1553,12 +1665,26 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	// Now safe to read the file. Limit body to 10 MB.
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectInvalidMultipartForm, http.StatusBadRequest, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
 		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingFileField, http.StatusBadRequest, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
 		http.Error(w, "Invalid file", http.StatusBadRequest)
 		return
 	}
@@ -1566,6 +1692,13 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	fileBytes, err := io.ReadAll(file)
 	if err != nil {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectFileReadFailed, http.StatusBadRequest, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
 		http.Error(w, "Error reading file", http.StatusBadRequest)
 		return
 	}
@@ -1577,6 +1710,15 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
 	if err != nil {
+		logUploadScreenshotReject(slog.LevelError, r, uploadRejectVerificationServiceFailed, http.StatusInternalServerError, err,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+			"mime_type", mimeType,
+			"file_size", len(fileBytes),
+		)
 		writeSanitizedError(w, http.StatusInternalServerError, "Verification is temporarily unavailable right now. Please try again.", err)
 		return
 	}

@@ -1,7 +1,11 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -198,6 +202,130 @@ func TestWriteSanitizedErrorHidesWrappedDetails(t *testing.T) {
 	}
 }
 
+func captureSlogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(previous)
+	})
+	return &buf
+}
+
+func TestUploadScreenshotLogsMissingTelegramAuthReject(t *testing.T) {
+	logs := captureSlogOutput(t)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=55", nil)
+	rec := httptest.NewRecorder()
+
+	handler.UploadScreenshot(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("UploadScreenshot() status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	assertUploadRejectLog(t, logs.String(), uploadRejectMissingTelegramAuth)
+}
+
+func TestUploadScreenshotLogsInvalidPurchaseIDReject(t *testing.T) {
+	logs := captureSlogOutput(t)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=bad", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(123456789)))
+	rec := httptest.NewRecorder()
+
+	handler.UploadScreenshot(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("UploadScreenshot() status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	assertUploadRejectLog(t, logs.String(), uploadRejectInvalidPurchaseID)
+}
+
+func TestUploadScreenshotLogsPurchaseOwnerMismatchReject(t *testing.T) {
+	logs := captureSlogOutput(t)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.getPurchaseByID = func(context.Context, int64) (*database.Purchase, error) {
+		return &database.Purchase{
+			ID:          55,
+			CustomerID:  99,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, nil
+	}
+	handler.findCustomerByTelegramID = func(context.Context, int64) (*database.Customer, error) {
+		return &database.Customer{
+			ID:         42,
+			TelegramID: 123456789,
+		}, nil
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=55", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(123456789)))
+	rec := httptest.NewRecorder()
+
+	handler.UploadScreenshot(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("UploadScreenshot() status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	assertUploadRejectLog(t, logs.String(), uploadRejectPurchaseOwnerMismatch)
+	if strings.Contains(logs.String(), "123456789") {
+		t.Fatalf("UploadScreenshot() log leaked full telegram id: %s", logs.String())
+	}
+}
+
+func TestUploadScreenshotLogsMissingFileFieldReject(t *testing.T) {
+	logs := captureSlogOutput(t)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.getPurchaseByID = func(context.Context, int64) (*database.Purchase, error) {
+		return &database.Purchase{
+			ID:          55,
+			CustomerID:  42,
+			Status:      database.PurchaseStatusPending,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		}, nil
+	}
+	handler.findCustomerByTelegramID = func(context.Context, int64) (*database.Customer, error) {
+		return &database.Customer{
+			ID:         42,
+			TelegramID: 123456789,
+		}, nil
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("not_file", "receipt"); err != nil {
+		t.Fatalf("WriteField() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=55", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(123456789)))
+	rec := httptest.NewRecorder()
+
+	handler.UploadScreenshot(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("UploadScreenshot() status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	assertUploadRejectLog(t, logs.String(), uploadRejectMissingFileField)
+}
+
+func assertUploadRejectLog(t *testing.T, logOutput string, reason string) {
+	t.Helper()
+	for _, want := range []string{
+		"event=upload_screenshot_rejected",
+		"reason=" + reason,
+	} {
+		if !strings.Contains(logOutput, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logOutput)
+		}
+	}
+}
+
 func TestPromoValidationStatus(t *testing.T) {
 	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
 
@@ -253,13 +381,16 @@ func TestValidateScreenshotUploadAccessRejectsCryptoPurchase(t *testing.T) {
 		TelegramID: 42,
 	}
 
-	status, message, ok := validateScreenshotUploadAccess(purchase, customer, 42)
+	status, message, reason, ok := validateScreenshotUploadAccess(purchase, customer, 42)
 
 	if ok {
 		t.Fatal("validateScreenshotUploadAccess() ok = true, want false for crypto purchase")
 	}
 	if status != http.StatusConflict {
 		t.Fatalf("validateScreenshotUploadAccess() status = %d, want %d", status, http.StatusConflict)
+	}
+	if reason != uploadRejectUnsupportedInvoiceType {
+		t.Fatalf("validateScreenshotUploadAccess() reason = %q, want %q", reason, uploadRejectUnsupportedInvoiceType)
 	}
 	if !strings.Contains(strings.ToLower(message), "does not accept screenshot") {
 		t.Fatalf("validateScreenshotUploadAccess() message = %q, want screenshot rejection", message)
