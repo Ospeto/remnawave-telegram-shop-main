@@ -240,7 +240,7 @@ func main() {
 		)
 	}
 
-	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3))
+	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3), bot.WithSkipGetMe())
 	if err != nil {
 		fatalStartup("telegram bot", err)
 	}
@@ -386,53 +386,60 @@ func main() {
 	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)
+	telegramAPIReady := err == nil
 	if err != nil {
-		fatalStartup("telegram getMe", err)
+		slog.Error("Telegram API unavailable during startup; continuing with HTTP server", "component", "telegram getMe", "error", err)
 	}
 
 	miniAppURL := strings.TrimSpace(config.GetMiniAppURL())
-	if miniAppURL != "" {
-		menuButtonURL := versionedMiniAppURL(miniAppURL)
-		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
-			MenuButton: &models.MenuButtonWebApp{
-				Type: models.MenuButtonTypeWebApp,
-				Text: "ဒီမှာဝယ်ပါ",
-				WebApp: models.WebAppInfo{
-					URL: menuButtonURL,
+	if telegramAPIReady {
+		if miniAppURL != "" {
+			menuButtonURL := versionedMiniAppURL(miniAppURL)
+			_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
+				MenuButton: &models.MenuButtonWebApp{
+					Type: models.MenuButtonTypeWebApp,
+					Text: "ဒီမှာဝယ်ပါ",
+					WebApp: models.WebAppInfo{
+						URL: menuButtonURL,
+					},
 				},
-			},
-		})
-		slog.Info("Configured Mini App menu button", "url", menuButtonURL)
+			})
+			slog.Info("Configured Mini App menu button", "url", menuButtonURL)
+		} else {
+			_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
+				MenuButton: &models.MenuButtonCommands{
+					Type: models.MenuButtonTypeCommands,
+				},
+			})
+		}
+		if err != nil {
+			slog.Warn("Failed to set chat menu button (non-fatal)", "error", err)
+		}
 	} else {
-		_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
-			MenuButton: &models.MenuButtonCommands{
-				Type: models.MenuButtonTypeCommands,
-			},
+		slog.Warn("Skipped Telegram menu/command setup because Telegram API is unavailable")
+	}
+
+	if telegramAPIReady {
+		// Set default bot commands (English fallback for all other locales).
+		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+			Commands: handler.PublicBotCommands("en"),
 		})
-	}
-	if err != nil {
-		slog.Warn("Failed to set chat menu button (non-fatal)", "error", err)
-	}
+		if err != nil {
+			slog.Warn("Failed to set default bot commands (non-fatal)", "error", err)
+		}
 
-	// Set default bot commands (English fallback for all other locales).
-	_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-		Commands: handler.PublicBotCommands("en"),
-	})
-	if err != nil {
-		slog.Warn("Failed to set default bot commands (non-fatal)", "error", err)
-	}
-
-	// Set public bot commands for Russian.
-	_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-		Commands:     handler.PublicBotCommands("ru"),
-		LanguageCode: "ru",
-	})
-	if err != nil {
-		slog.Warn("Failed to set Russian bot commands (non-fatal)", "error", err)
+		// Set public bot commands for Russian.
+		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
+			Commands:     handler.PublicBotCommands("ru"),
+			LanguageCode: "ru",
+		})
+		if err != nil {
+			slog.Warn("Failed to set Russian bot commands (non-fatal)", "error", err)
+		}
 	}
 
 	adminID := config.GetAdminTelegramId()
-	if adminID != 0 {
+	if telegramAPIReady && adminID != 0 {
 		adminScope := &models.BotCommandScopeChat{
 			ChatID: adminID,
 		}
@@ -455,7 +462,9 @@ func main() {
 		}
 	}
 
-	config.SetBotURL(fmt.Sprintf("https://t.me/%s", me.Username))
+	if me != nil && me.Username != "" {
+		config.SetBotURL(fmt.Sprintf("https://t.me/%s", me.Username))
+	}
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypePrefix, h.StartCommandHandler, h.SuspiciousUserFilterMiddleware)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/connect", bot.MatchTypeExact, h.ConnectCommandHandler, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
