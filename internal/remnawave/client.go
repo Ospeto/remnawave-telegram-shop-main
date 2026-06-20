@@ -332,6 +332,9 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 			slog.Warn("Remnawave decode failure on UpdateUser, attempting user lookup fallback", "user_uuid", existingUser.UUID.String(), "error", err)
 			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, existingUser.UUID)
 			if fallbackErr == nil && fallbackUser != nil {
+				if err := validateUpdatedUserState(fallbackUser, newExpire, trafficLimit); err != nil {
+					return nil, fmt.Errorf("update user fallback did not confirm requested state: %w", err)
+				}
 				tgid, _ := fallbackUser.TelegramId.Get()
 				slog.Info("updated user (fallback)", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(fallbackUser.Username), "days", days)
 				return fallbackUser, nil
@@ -346,9 +349,14 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 		return nil, errors.New("error while updating user. message: " + value.GetMessage().Value + ". code: " + value.GetErrorCode().Value)
 	}
 
+	updatedUser := &updateUser.(*remapi.UserResponse).Response
+	if err := validateUpdatedUserState(updatedUser, newExpire, trafficLimit); err != nil {
+		return nil, err
+	}
+
 	tgid, _ := existingUser.TelegramId.Get()
 	slog.Info("updated user", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(existingUser.Username), "days", days)
-	return &updateUser.(*remapi.UserResponse).Response, nil
+	return updatedUser, nil
 }
 
 func (r *Client) createUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool, keyIndex int, txnID string) (*remapi.User, error) {
@@ -449,6 +457,25 @@ func isDecodeResponseError(err error) bool {
 		return true
 	}
 	return false
+}
+
+const updateStateConfirmationSkew = 2 * time.Second
+
+func validateUpdatedUserState(user *remapi.User, requestedExpire time.Time, requestedTrafficLimit int) error {
+	if user == nil {
+		return errors.New("updated user is nil")
+	}
+
+	minExpectedExpire := requestedExpire.Add(-updateStateConfirmationSkew)
+	if user.ExpireAt.Before(minExpectedExpire) {
+		return fmt.Errorf("updated user expiry %s is before requested expiry %s", user.ExpireAt.Format(time.RFC3339), requestedExpire.Format(time.RFC3339))
+	}
+
+	if user.TrafficLimitBytes.IsSet() && user.TrafficLimitBytes.Value != requestedTrafficLimit {
+		return fmt.Errorf("updated user traffic limit %d does not match requested %d", user.TrafficLimitBytes.Value, requestedTrafficLimit)
+	}
+
+	return nil
 }
 
 func (r *Client) doRawJSONRequest(ctx context.Context, method, path string, body any) ([]byte, int, error) {

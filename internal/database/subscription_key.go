@@ -185,8 +185,14 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, sql, args...)
-	return err
+	tag, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("subscription_key %d not found", id)
+	}
+	return nil
 }
 
 func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, status string) error {
@@ -236,8 +242,14 @@ func (r *SubscriptionKeyRepository) UpdateSubscriptionURL(ctx context.Context, i
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, sql, args...)
-	return err
+	tag, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("subscription_key %d not found", id)
+	}
+	return nil
 }
 
 func (r *SubscriptionKeyRepository) UpdateTrafficLimit(ctx context.Context, id int64, trafficLimitGB int) error {
@@ -250,8 +262,14 @@ func (r *SubscriptionKeyRepository) UpdateTrafficLimit(ctx context.Context, id i
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, sql, args...)
-	return err
+	tag, err := r.pool.Exec(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("subscription_key %d not found", id)
+	}
+	return nil
 }
 
 func (r *SubscriptionKeyRepository) CountByCustomerID(ctx context.Context, customerID int64) (int, error) {
@@ -442,7 +460,7 @@ func (r *SubscriptionKeyRepository) MarkKeyAutoRenewNotified(ctx context.Context
 }
 
 func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, planTrafficGB int) error {
-	_, err := r.pool.Exec(ctx,
+	tag, err := r.pool.Exec(ctx,
 		`UPDATE subscription_key
 		 SET auto_renew_plan_days = $1,
 		     auto_renew_plan_traffic_gb = $2
@@ -450,6 +468,9 @@ func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, key
 		days, planTrafficGB, keyID)
 	if err != nil {
 		return fmt.Errorf("failed to update auto-renew plan: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("subscription_key %d not found", keyID)
 	}
 	return nil
 }

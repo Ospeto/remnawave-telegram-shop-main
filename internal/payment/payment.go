@@ -778,6 +778,46 @@ func (s *PaymentService) refundWalletCharge(ctx context.Context, customerID int6
 	return nil
 }
 
+type extendedSubscriptionKeyStore interface {
+	UpdateExpiry(ctx context.Context, id int64, expireAt time.Time) error
+	UpdateSubscriptionURL(ctx context.Context, id int64, url string) error
+	UpdateTrafficLimit(ctx context.Context, id int64, trafficLimitGB int) error
+	UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, planTrafficGB int) error
+}
+
+func persistExtendedSubscriptionKey(
+	ctx context.Context,
+	store extendedSubscriptionKeyStore,
+	keyID int64,
+	remnawaveUser *remapi.User,
+	purchaseDays int,
+	purchaseTrafficGB int,
+	newTrafficLimitGB int,
+) error {
+	if store == nil {
+		return fmt.Errorf("subscription key repository is not configured")
+	}
+	if remnawaveUser == nil {
+		return fmt.Errorf("remnawave user is nil")
+	}
+
+	persistCtx := context.WithoutCancel(ctx)
+	if err := store.UpdateExpiry(persistCtx, keyID, remnawaveUser.ExpireAt); err != nil {
+		return fmt.Errorf("failed to persist extended key expiry: %w", err)
+	}
+	if err := store.UpdateSubscriptionURL(persistCtx, keyID, remnawaveUser.SubscriptionUrl); err != nil {
+		return fmt.Errorf("failed to persist extended key subscription url: %w", err)
+	}
+	if err := store.UpdateTrafficLimit(persistCtx, keyID, newTrafficLimitGB); err != nil {
+		return fmt.Errorf("failed to persist extended key traffic limit: %w", err)
+	}
+	if err := store.UpdateAutoRenewPlan(persistCtx, keyID, purchaseDays, purchaseTrafficGB); err != nil {
+		return fmt.Errorf("failed to persist extended key renewal plan: %w", err)
+	}
+
+	return nil
+}
+
 func applyDiscountPercent(amount float64, percent int) float64 {
 	discount := float64(percent) / 100.0
 	discounted := amount * (1 - discount)
@@ -1006,20 +1046,12 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 			return err
 		}
 		newTrafficLimitGB := accumulatedTrafficLimitGB(*existingKey, remnawaveUser, purchase.TrafficLimitGB)
-		// Update the subscription_key expiry
-		if s.subKeyRepo != nil {
-			if err := s.subKeyRepo.UpdateExpiry(ctx, existingKey.ID, remnawaveUser.ExpireAt); err != nil {
-				slog.Error("Failed to update key expiry (non-fatal)", "key_id", existingKey.ID, "error", err)
-			}
-			if err := s.subKeyRepo.UpdateSubscriptionURL(ctx, existingKey.ID, remnawaveUser.SubscriptionUrl); err != nil {
-				slog.Error("Failed to update subscription URL (non-fatal)", "key_id", existingKey.ID, "error", err)
-			}
-			if err := s.subKeyRepo.UpdateTrafficLimit(ctx, existingKey.ID, newTrafficLimitGB); err != nil {
-				slog.Error("Failed to update key traffic limit (non-fatal)", "key_id", existingKey.ID, "error", err)
-			}
-			if err := s.subKeyRepo.UpdateAutoRenewPlan(ctx, existingKey.ID, purchase.Days, purchase.TrafficLimitGB); err != nil {
-				slog.Error("Failed to update key renewal plan (non-fatal)", "key_id", existingKey.ID, "error", err)
-			}
+		if err := persistExtendedSubscriptionKey(ctx, s.subKeyRepo, existingKey.ID, remnawaveUser, purchase.Days, purchase.TrafficLimitGB, newTrafficLimitGB); err != nil {
+			// Do not restore the purchase to its original state here. Remnawave
+			// has already been mutated, and retrying fulfillment would extend
+			// the key again.
+			slog.Error("CRITICAL: key extended on Remnawave but local key persistence failed", "key_id", existingKey.ID, "purchase_id", purchase.ID, "error", err)
+			return ErrPurchaseFinalizationPending
 		}
 
 		if err := s.syncCustomerCanonicalSubscriptionState(ctx, customer.ID, remnawaveUser.SubscriptionUrl, remnawaveUser.ExpireAt); err != nil {

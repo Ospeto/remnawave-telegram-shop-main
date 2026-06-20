@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/google/uuid"
 )
 
@@ -53,6 +54,42 @@ func TestParseUserLooseSupportsMinimalPayload(t *testing.T) {
 	}
 	if user.UserTraffic.UsedTrafficBytes != 2048 {
 		t.Fatalf("user.UserTraffic.UsedTrafficBytes = %v, want 2048", user.UserTraffic.UsedTrafficBytes)
+	}
+}
+
+func TestValidateUpdatedUserStateRejectsStaleExpiry(t *testing.T) {
+	requestedExpire := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+
+	err := validateUpdatedUserState(&remapi.User{
+		ExpireAt:          requestedExpire.Add(-1 * time.Minute),
+		TrafficLimitBytes: remapi.NewOptInt(1000),
+	}, requestedExpire, 1000)
+	if err == nil {
+		t.Fatal("validateUpdatedUserState() error = nil, want stale expiry rejection")
+	}
+}
+
+func TestValidateUpdatedUserStateAllowsSmallExpirySkew(t *testing.T) {
+	requestedExpire := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+
+	err := validateUpdatedUserState(&remapi.User{
+		ExpireAt:          requestedExpire.Add(-1 * time.Second),
+		TrafficLimitBytes: remapi.NewOptInt(1000),
+	}, requestedExpire, 1000)
+	if err != nil {
+		t.Fatalf("validateUpdatedUserState() error = %v, want nil", err)
+	}
+}
+
+func TestValidateUpdatedUserStateRejectsTrafficMismatch(t *testing.T) {
+	requestedExpire := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+
+	err := validateUpdatedUserState(&remapi.User{
+		ExpireAt:          requestedExpire,
+		TrafficLimitBytes: remapi.NewOptInt(500),
+	}, requestedExpire, 1000)
+	if err == nil {
+		t.Fatal("validateUpdatedUserState() error = nil, want traffic mismatch rejection")
 	}
 }
 

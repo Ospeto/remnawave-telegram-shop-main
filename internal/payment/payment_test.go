@@ -78,6 +78,98 @@ func TestCustomerForPostPurchaseNotificationsFallsBackToOriginal(t *testing.T) {
 	}
 }
 
+type fakeExtendedSubscriptionKeyStore struct {
+	calls              []string
+	expiryErr          error
+	canceledCtxSeen    bool
+	keyID              int64
+	expireAt           time.Time
+	subscriptionURL    string
+	trafficLimitGB     int
+	renewalPlanDays    int
+	renewalPlanTraffic int
+}
+
+func (f *fakeExtendedSubscriptionKeyStore) recordCall(ctx context.Context, name string) {
+	f.calls = append(f.calls, name)
+	if ctx.Err() != nil {
+		f.canceledCtxSeen = true
+	}
+}
+
+func (f *fakeExtendedSubscriptionKeyStore) UpdateExpiry(ctx context.Context, id int64, expireAt time.Time) error {
+	f.recordCall(ctx, "expiry")
+	f.keyID = id
+	f.expireAt = expireAt
+	return f.expiryErr
+}
+
+func (f *fakeExtendedSubscriptionKeyStore) UpdateSubscriptionURL(ctx context.Context, id int64, url string) error {
+	f.recordCall(ctx, "url")
+	f.keyID = id
+	f.subscriptionURL = url
+	return nil
+}
+
+func (f *fakeExtendedSubscriptionKeyStore) UpdateTrafficLimit(ctx context.Context, id int64, trafficLimitGB int) error {
+	f.recordCall(ctx, "traffic")
+	f.keyID = id
+	f.trafficLimitGB = trafficLimitGB
+	return nil
+}
+
+func (f *fakeExtendedSubscriptionKeyStore) UpdateAutoRenewPlan(ctx context.Context, keyID int64, days int, planTrafficGB int) error {
+	f.recordCall(ctx, "renewal_plan")
+	f.keyID = keyID
+	f.renewalPlanDays = days
+	f.renewalPlanTraffic = planTrafficGB
+	return nil
+}
+
+func TestPersistExtendedSubscriptionKeyRequiresExpiryWrite(t *testing.T) {
+	expireAt := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+	store := &fakeExtendedSubscriptionKeyStore{expiryErr: errors.New("database unavailable")}
+
+	err := persistExtendedSubscriptionKey(context.Background(), store, 77, &remapi.User{
+		ExpireAt:          expireAt,
+		SubscriptionUrl:   "https://sub.example.com/key",
+		TrafficLimitBytes: remapi.NewOptInt(1000),
+	}, 30, 50, 100)
+	if err == nil || !strings.Contains(err.Error(), "expiry") {
+		t.Fatalf("persistExtendedSubscriptionKey() error = %v, want expiry persistence error", err)
+	}
+	if got := strings.Join(store.calls, ","); got != "expiry" {
+		t.Fatalf("persistExtendedSubscriptionKey() calls = %q, want expiry only", got)
+	}
+}
+
+func TestPersistExtendedSubscriptionKeyUsesContextWithoutCancel(t *testing.T) {
+	expireAt := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+	store := &fakeExtendedSubscriptionKeyStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := persistExtendedSubscriptionKey(ctx, store, 77, &remapi.User{
+		ExpireAt:        expireAt,
+		SubscriptionUrl: "https://sub.example.com/key",
+	}, 30, 50, 100)
+	if err != nil {
+		t.Fatalf("persistExtendedSubscriptionKey() error = %v, want nil", err)
+	}
+	if store.canceledCtxSeen {
+		t.Fatal("persistExtendedSubscriptionKey() used a canceled context for local persistence")
+	}
+	if got := strings.Join(store.calls, ","); got != "expiry,url,traffic,renewal_plan" {
+		t.Fatalf("persistExtendedSubscriptionKey() calls = %q, want all persistence calls", got)
+	}
+	if store.keyID != 77 || !store.expireAt.Equal(expireAt) || store.subscriptionURL != "https://sub.example.com/key" || store.trafficLimitGB != 100 {
+		t.Fatalf("persistExtendedSubscriptionKey() persisted wrong values: %+v", store)
+	}
+	if store.renewalPlanDays != 30 || store.renewalPlanTraffic != 50 {
+		t.Fatalf("persistExtendedSubscriptionKey() renewal plan = %d/%d, want 30/50", store.renewalPlanDays, store.renewalPlanTraffic)
+	}
+}
+
 func TestValidatePromoForPurchase(t *testing.T) {
 	now := time.Date(2026, 4, 17, 12, 0, 0, 0, time.UTC)
 
