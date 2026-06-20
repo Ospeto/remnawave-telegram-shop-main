@@ -369,6 +369,64 @@ func TestUpdateAutoRenewReturnsGone(t *testing.T) {
 	}
 }
 
+func TestUpdateAutoRenewRejectsWrongMethod(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/wallet/autorenew", nil)
+	rec := httptest.NewRecorder()
+
+	handler.UpdateAutoRenew(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("UpdateAutoRenew() GET status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestTrustedPaymentScreenshotMIME(t *testing.T) {
+	tests := []struct {
+		name      string
+		fileBytes []byte
+		wantMIME  string
+		wantOK    bool
+	}{
+		{
+			name:      "png",
+			fileBytes: []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"),
+			wantMIME:  "image/png",
+			wantOK:    true,
+		},
+		{
+			name:      "jpeg",
+			fileBytes: []byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00"),
+			wantMIME:  "image/jpeg",
+			wantOK:    true,
+		},
+		{
+			name:      "plain text",
+			fileBytes: []byte("not a screenshot"),
+			wantMIME:  "text/plain; charset=utf-8",
+			wantOK:    false,
+		},
+		{
+			name:      "empty",
+			fileBytes: nil,
+			wantMIME:  "text/plain; charset=utf-8",
+			wantOK:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMIME, gotOK := trustedPaymentScreenshotMIME(tt.fileBytes)
+			if gotMIME != tt.wantMIME {
+				t.Fatalf("trustedPaymentScreenshotMIME() mime = %q, want %q", gotMIME, tt.wantMIME)
+			}
+			if gotOK != tt.wantOK {
+				t.Fatalf("trustedPaymentScreenshotMIME() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestValidateScreenshotUploadAccessRejectsCryptoPurchase(t *testing.T) {
 	purchase := &database.Purchase{
 		ID:          10,

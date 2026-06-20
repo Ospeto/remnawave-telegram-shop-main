@@ -251,6 +251,28 @@ func TestSupportsScreenshotVerification(t *testing.T) {
 	}
 }
 
+func TestTriggersReferralConversion(t *testing.T) {
+	tests := []struct {
+		name        string
+		invoiceType database.InvoiceType
+		want        bool
+	}{
+		{name: "crypto service purchase", invoiceType: database.InvoiceTypeCrypto, want: true},
+		{name: "mobile banking service purchase", invoiceType: database.InvoiceTypeMobileBanking, want: true},
+		{name: "wallet service purchase", invoiceType: database.InvoiceTypeWalletPayment, want: true},
+		{name: "wallet topup", invoiceType: database.InvoiceTypeWalletTopUp, want: false},
+		{name: "unknown", invoiceType: database.InvoiceType("bogus"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := triggersReferralConversion(tt.invoiceType); got != tt.want {
+				t.Fatalf("triggersReferralConversion(%q) = %v, want %v", tt.invoiceType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestAwaitingReceiptVerificationErrorCarriesPendingPurchase(t *testing.T) {
 	pending := &database.Purchase{
 		ID:          42,

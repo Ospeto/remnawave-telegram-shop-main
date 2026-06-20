@@ -13,6 +13,11 @@ import (
 )
 
 const (
+	securityCSPDefault  = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+	securityCSPRedirect = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+)
+
+const (
 	// cleanupInterval is how often the cleanup goroutine runs.
 	cleanupInterval = 10 * time.Minute
 	// idleTimeout is how long an IP must be idle before its entry is evicted.
@@ -88,6 +93,24 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func SecurityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w, r)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	if r.URL.Path == "/redirect" {
+		w.Header().Set("Content-Security-Policy", securityCSPRedirect)
+		return
+	}
+	w.Header().Set("Content-Security-Policy", securityCSPDefault)
 }
 
 func getIP(r *http.Request) string {

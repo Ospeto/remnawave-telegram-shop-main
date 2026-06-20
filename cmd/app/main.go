@@ -539,7 +539,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.GetHealthCheckPort()),
-		Handler:           limiter.Middleware(mux),
+		Handler:           api.SecurityHeadersMiddleware(limiter.Middleware(mux)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

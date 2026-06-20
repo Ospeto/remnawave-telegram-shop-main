@@ -27,6 +27,36 @@ func TestValidationResponseJSONIncludesIsAdmin(t *testing.T) {
 	}
 }
 
+func TestValidationResponseJSONUsesMinimalUserDTO(t *testing.T) {
+	body, err := json.Marshal(ValidationResponse{
+		User: &UserResponse{ID: 1, TelegramID: 42},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal(ValidationResponse) error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(ValidationResponse) error = %v", err)
+	}
+	user, ok := payload["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("ValidationResponse user = %#v, want object", payload["user"])
+	}
+	if user["id"] != float64(1) {
+		t.Fatalf("ValidationResponse user.id = %#v, want 1", user["id"])
+	}
+	if user["telegram_id"] != float64(42) {
+		t.Fatalf("ValidationResponse user.telegram_id = %#v, want 42", user["telegram_id"])
+	}
+
+	for _, field := range []string{"subscription_link", "balance", "auto_renew", "language", "created_at"} {
+		if _, exists := user[field]; exists {
+			t.Fatalf("ValidationResponse user includes internal field %q: %s", field, string(body))
+		}
+	}
+}
+
 func TestRegisterHandlersProtectsAdminPromoRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil)

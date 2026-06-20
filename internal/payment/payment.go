@@ -1146,7 +1146,9 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	}
 
 	// Referral bonus — completely non-fatal
-	s.processReferralBonus(ctx, notifyCustomer)
+	if triggersReferralConversion(purchase.InvoiceType) {
+		s.processReferralBonus(ctx, notifyCustomer)
+	}
 
 	return nil
 }
@@ -1160,6 +1162,15 @@ const (
 	referrerReferralBonusDescription = "Referral bonus — friend made their first purchase"
 	refereeReferralBonusDescription  = "Welcome bonus — joined via referral link"
 )
+
+func triggersReferralConversion(invoiceType database.InvoiceType) bool {
+	switch invoiceType {
+	case database.InvoiceTypeCrypto, database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletPayment:
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *PaymentService) ReferralEarnedTotal(ctx context.Context, customerID int64) (float64, error) {
 	if s.walletTxRepo == nil {

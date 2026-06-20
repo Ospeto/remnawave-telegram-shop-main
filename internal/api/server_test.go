@@ -35,6 +35,46 @@ func TestRenderRedirectPageEscapesInjectedTarget(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersMiddlewareSetsDefaultHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler := SecurityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Fatalf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'self'", "object-src 'none'", "frame-ancestors"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("default CSP = %q, want to contain %q", csp, want)
+		}
+	}
+}
+
+func TestSecurityHeadersMiddlewareSetsRedirectCSP(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/redirect", nil)
+	rec := httptest.NewRecorder()
+	handler := SecurityHeadersMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	handler.ServeHTTP(rec, req)
+
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "script-src 'unsafe-inline'", "object-src 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("redirect CSP = %q, want to contain %q", csp, want)
+		}
+	}
+}
+
 func TestGetIPIgnoresForwardedFor(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://example.com/", nil)
 	req.RemoteAddr = "203.0.113.7:12345"

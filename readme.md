@@ -432,7 +432,7 @@ The Go app serves the Mini App and these API routes:
 | `/api/trial` | Activate a trial |
 | `/api/wallet` | Wallet summary |
 | `/api/wallet/history` | Wallet transaction history |
-| `/api/wallet/autorenew` | Wallet-based auto-renew settings |
+| `/api/wallet/autorenew` | Legacy endpoint; returns `410 Gone`. Use `/api/keys/autorenew`. |
 | `/api/referrals` | Referral information |
 | `/api/keys/autorenew` | Per-key auto-renew settings |
 | `/api/revenue` | Admin revenue summary. Supports `period=day|week|month`; use `days` for daily history and `periods` for weekly/monthly history. |

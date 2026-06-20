@@ -43,21 +43,36 @@ type KeyResponse struct {
 	AutoRenew       bool       `json:"auto_renew"`
 }
 
+type UserResponse struct {
+	ID         int64 `json:"id"`
+	TelegramID int64 `json:"telegram_id"`
+}
+
 type ValidationResponse struct {
-	User                     *database.Customer `json:"user"`
-	Keys                     []KeyResponse      `json:"keys"`
-	IsActive                 bool               `json:"is_active"`
-	IsAdmin                  bool               `json:"is_admin"`
-	ExpireAt                 *time.Time         `json:"expire_at"`
-	DaysRemaining            int                `json:"days_remaining"`
-	TrialEligible            bool               `json:"trial_eligible"`
-	TrialDays                int                `json:"trial_days"`
-	ReferralCount            *int               `json:"referral_count,omitempty"`
-	ReferralEarned           *float64           `json:"referral_earned,omitempty"`
-	ReferralStatsUnavailable bool               `json:"referral_stats_unavailable,omitempty"`
-	ReferralBonusAmount      float64            `json:"referral_bonus_amount"`
-	BotURL                   string             `json:"bot_url"`
-	SupportURL               string             `json:"support_url,omitempty"`
+	User                     *UserResponse `json:"user"`
+	Keys                     []KeyResponse `json:"keys"`
+	IsActive                 bool          `json:"is_active"`
+	IsAdmin                  bool          `json:"is_admin"`
+	ExpireAt                 *time.Time    `json:"expire_at"`
+	DaysRemaining            int           `json:"days_remaining"`
+	TrialEligible            bool          `json:"trial_eligible"`
+	TrialDays                int           `json:"trial_days"`
+	ReferralCount            *int          `json:"referral_count,omitempty"`
+	ReferralEarned           *float64      `json:"referral_earned,omitempty"`
+	ReferralStatsUnavailable bool          `json:"referral_stats_unavailable,omitempty"`
+	ReferralBonusAmount      float64       `json:"referral_bonus_amount"`
+	BotURL                   string        `json:"bot_url"`
+	SupportURL               string        `json:"support_url,omitempty"`
+}
+
+func userResponse(customer *database.Customer) *UserResponse {
+	if customer == nil {
+		return nil
+	}
+	return &UserResponse{
+		ID:         customer.ID,
+		TelegramID: customer.TelegramID,
+	}
 }
 
 type PlanResponse struct {
@@ -578,6 +593,7 @@ const (
 	uploadRejectInvalidMultipartForm      = "invalid_multipart_form"
 	uploadRejectMissingFileField          = "missing_file_field"
 	uploadRejectFileReadFailed            = "file_read_failed"
+	uploadRejectUnsupportedFileType       = "unsupported_file_type"
 	uploadRejectVerificationServiceFailed = "verification_service_failed"
 )
 
@@ -607,6 +623,16 @@ func logUploadScreenshotReject(level slog.Level, r *http.Request, reason string,
 		return
 	}
 	slog.Warn("Upload screenshot rejected", logAttrs...)
+}
+
+func trustedPaymentScreenshotMIME(fileBytes []byte) (string, bool) {
+	detected := http.DetectContentType(fileBytes)
+	switch detected {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return detected, true
+	default:
+		return detected, false
+	}
 }
 
 func (h *APIHandler) beginScreenshotVerification(purchaseID, customerID int64) error {
@@ -1181,7 +1207,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
 	resp := ValidationResponse{
-		User:                     customer,
+		User:                     userResponse(customer),
 		Keys:                     keys,
 		IsActive:                 isActive,
 		IsAdmin:                  h.isAdminUser(telegramID),
@@ -1676,7 +1702,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	file, header, err := r.FormFile("file")
+	file, _, err := r.FormFile("file")
 	if err != nil {
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingFileField, http.StatusBadRequest, err,
 			"telegram_id", utils.MaskHalfInt64(telegramID),
@@ -1703,9 +1729,19 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mimeType := header.Header.Get("Content-Type")
-	if mimeType == "" {
-		mimeType = http.DetectContentType(fileBytes)
+	mimeType, ok := trustedPaymentScreenshotMIME(fileBytes)
+	if !ok {
+		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectUnsupportedFileType, http.StatusBadRequest, nil,
+			"telegram_id", utils.MaskHalfInt64(telegramID),
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"purchase_id", utils.MaskHalfInt64(purchase.ID),
+			"purchase_status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+			"mime_type", mimeType,
+			"file_size", len(fileBytes),
+		)
+		http.Error(w, "Unsupported file type", http.StatusBadRequest)
+		return
 	}
 
 	result, err := h.paymentService.VerifyMobilePayment(r.Context(), int64(purchaseID), fileBytes, mimeType)
