@@ -51,7 +51,7 @@ func TestSecurityHeadersMiddlewareSetsDefaultHeaders(t *testing.T) {
 		t.Fatalf("Referrer-Policy = %q, want no-referrer", got)
 	}
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'self'", "object-src 'none'", "frame-ancestors"} {
+	for _, want := range []string{"default-src 'self'", "script-src 'self' 'unsafe-inline' https://telegram.org", "object-src 'none'", "frame-ancestors"} {
 		if !strings.Contains(csp, want) {
 			t.Fatalf("default CSP = %q, want to contain %q", csp, want)
 		}
