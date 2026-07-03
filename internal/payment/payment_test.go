@@ -257,7 +257,6 @@ func TestTriggersReferralConversion(t *testing.T) {
 		invoiceType database.InvoiceType
 		want        bool
 	}{
-		{name: "crypto service purchase", invoiceType: database.InvoiceTypeCrypto, want: true},
 		{name: "mobile banking service purchase", invoiceType: database.InvoiceTypeMobileBanking, want: true},
 		{name: "wallet service purchase", invoiceType: database.InvoiceTypeWalletPayment, want: true},
 		{name: "wallet topup", invoiceType: database.InvoiceTypeWalletTopUp, want: false},
@@ -377,15 +376,6 @@ func TestSyncedTrafficLimit(t *testing.T) {
 			t.Fatal("syncedTrafficLimit() persist = false, want true")
 		}
 	})
-}
-
-func TestCreatePurchaseRejectsCryptoPay(t *testing.T) {
-	service := &PaymentService{}
-
-	_, _, err := service.CreatePurchase(context.Background(), 10000, 30, 0, &database.Customer{ID: 1}, database.InvoiceTypeCrypto, "")
-	if !errors.Is(err, ErrCryptoPayDisabled) {
-		t.Fatalf("CreatePurchase() error = %v, want %v", err, ErrCryptoPayDisabled)
-	}
 }
 
 func TestOpenRouterAuthFailure(t *testing.T) {

@@ -564,19 +564,19 @@ wizard() {
     declare -A CFG
 
     # ── 1. Telegram ─────────────────────────────────────────
-    print_section "1/10  Telegram Bot"
+    print_section "1/11  Telegram Bot"
     ask_required "Bot Token" "" "TELEGRAM_TOKEN"
     ask_required "Admin Telegram ID" "" "ADMIN_TELEGRAM_ID"
 
     # ── 2. Remnawave ────────────────────────────────────────
-    print_section "2/10  Remnawave Panel"
+    print_section "2/11  Remnawave Panel"
     ask_required "Panel URL" "https://example.com" "REMNAWAVE_URL"
     ask_required "API Token" "" "REMNAWAVE_TOKEN"
     ask "Mode (remote/local)" "remote" "REMNAWAVE_MODE"
     ask "Remnawave Tag" "TEST_PUPA" "REMNAWAVE_TAG"
 
     # ── 3. Pricing ──────────────────────────────────────────
-    print_section "3/10  Subscription Plans"
+    print_section "3/11  Subscription Plans"
     print_info "Add plans one by one. Format: Label, Days, Price, Traffic (GB, 0=unlimited)."
     ask "Currency code" "MMK" "CURRENCY"
     echo ""
@@ -618,20 +618,8 @@ wizard() {
     done
     CFG[PLANS]="$PLANS_LIST"
 
-    # ── 4. CryptoPay ───────────────────────────────────────
-    print_section "4/11  Payment — CryptoPay"
-    ask_bool "Enable CryptoPay?" "true" "CRYPTO_PAY_ENABLED"
-    if [[ "${CFG[CRYPTO_PAY_ENABLED]}" == "true" ]]; then
-        ask_required "CryptoPay Token" "" "CRYPTO_PAY_TOKEN"
-        ask "CryptoPay API URL" "https://pay.crypt.bot" "CRYPTO_PAY_URL"
-    else
-        CFG[CRYPTO_PAY_TOKEN]="token"
-        CFG[CRYPTO_PAY_URL]="https://pay.crypt.bot"
-        print_info "CryptoPay disabled — skipping."
-    fi
-
-    # ── 5. Mobile Banking ──────────────────────────────────
-    print_section "5/11  Payment — Mobile Banking (KPay/WavePay/AyaPay)"
+    # ── 4. Mobile Banking ──────────────────────────────────
+    print_section "4/11  Payment — Mobile Banking (KPay/WavePay/AyaPay)"
     ask_bool "Enable Mobile Banking?" "false" "MOBILE_BANKING_ENABLED"
     if [[ "${CFG[MOBILE_BANKING_ENABLED]}" == "true" ]]; then
         ask "Default Receiving Phone Number (legacy fallback)" "" "MOBILE_BANKING_PHONE"
@@ -685,8 +673,8 @@ wizard() {
         print_info "Mobile Banking disabled — skipping."
     fi
 
-    # ── 6. Trial ────────────────────────────────────────────
-    print_section "6/11  Trial Subscriptions"
+    # ── 5. Trial ────────────────────────────────────────────
+    print_section "5/11  Trial Subscriptions"
     ask_number "Trial days (0 = disabled)" "0" "TRIAL_DAYS"
     if [[ "${CFG[TRIAL_DAYS]}" -gt 0 ]]; then
         ask_number "Trial traffic limit (GB)" "20" "TRIAL_TRAFFIC_LIMIT"
@@ -703,19 +691,19 @@ wizard() {
         print_info "Trials disabled — skipping."
     fi
 
-    # ── 7. Traffic & Referral ──────────────────────────────
-    print_section "7/11  Traffic & Referral"
+    # ── 6. Traffic & Referral ──────────────────────────────
+    print_section "6/11  Traffic & Referral"
     ask_reset_strategy "Traffic reset strategy" "MONTH" "TRAFFIC_LIMIT_RESET_STRATEGY"
     ask_number "Referral bonus days (0 = disabled)" "7" "REFERRAL_DAYS"
 
-    # ── 8. Squads ──────────────────────────────────────────
-    print_section "8/11  Squad Assignment"
+    # ── 7. Squads ──────────────────────────────────────────
+    print_section "7/11  Squad Assignment"
     print_info "Leave empty to assign all available squads."
     ask "Squad UUIDs (comma-separated)" "" "SQUAD_UUIDS"
     ask "External Squad UUID" "" "EXTERNAL_SQUAD_UUID"
 
-    # ── 9. URLs ────────────────────────────────────────────
-    print_section "9/11  Optional URLs"
+    # ── 8. URLs ────────────────────────────────────────────
+    print_section "8/11  Optional URLs"
     print_info "Leave empty to hide the corresponding button."
     ask "Server Status URL" "" "SERVER_STATUS_URL"
     ask "Support URL" "" "SUPPORT_URL"
@@ -723,18 +711,18 @@ wizard() {
     ask "Channel URL" "" "CHANNEL_URL"
     ask "Terms of Service URL" "" "TOS_URL"
 
-    # ── 10. Blocked / Whitelisted IDs ───────────────────────
-    print_section "10/12  Access Control"
+    # ── 9. Blocked / Whitelisted IDs ───────────────────────
+    print_section "9/11  Access Control"
     ask "Blocked Telegram IDs (comma-separated)" "" "BLOCKED_TELEGRAM_IDS"
     ask "Whitelisted Telegram IDs (comma-separated)" "" "WHITELISTED_TELEGRAM_IDS"
 
-    # ── 11. Caddy / SSL ─────────────────────────────────────
-    print_section "11/12  Domain & SSL (Caddy)"
+    # ── 10. Caddy / SSL ────────────────────────────────────
+    print_section "10/11  Domain & SSL (Caddy)"
     ask_required "Domain Name (e.g., shop.example.com)" "" "DOMAIN_NAME"
     ask_required "SSL Email (for Let's Encrypt)" "" "ACME_EMAIL"
 
-    # ── 12. Database & Advanced ─────────────────────────────
-    print_section "12/12  Database & Advanced"
+    # ── 11. Database & Advanced ────────────────────────────
+    print_section "11/11  Database & Advanced"
     ask "PostgreSQL User" "postgres" "POSTGRES_USER"
     ask "PostgreSQL Password" "postgres" "POSTGRES_PASSWORD"
     ask "PostgreSQL Database" "postgres" "POSTGRES_DB"
@@ -778,11 +766,6 @@ REMNAWAVE_TAG=$(echo "${CFG[REMNAWAVE_TAG]}" | tr '[:lower:]' '[:upper:]')
 # ── Subscription Plans ──────────────────────────────────────
 CURRENCY=${CFG[CURRENCY]}
 PLANS=${CFG[PLANS]}
-
-# ── Payment — CryptoPay ─────────────────────────────────────
-CRYPTO_PAY_ENABLED=${CFG[CRYPTO_PAY_ENABLED]}
-CRYPTO_PAY_TOKEN=${CFG[CRYPTO_PAY_TOKEN]}
-CRYPTO_PAY_URL=${CFG[CRYPTO_PAY_URL]}
 
 # ── Payment — Mobile Banking ────────────────────────────────
 MOBILE_BANKING_ENABLED=${CFG[MOBILE_BANKING_ENABLED]}

@@ -9,7 +9,7 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v4/pgxpool"
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v4/stdlib"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -35,7 +35,7 @@ func RunMigrations(ctx context.Context, migrationConfig *MigrationConfig, pool *
 		return fmt.Errorf("migrations directory does not exist: %s", absPath)
 	}
 
-	db, err := sql.Open("postgres", config.DatabaseUrl())
+	db, err := sql.Open("pgx", config.DatabaseUrl())
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
@@ -117,7 +117,7 @@ func RunMigrations(ctx context.Context, migrationConfig *MigrationConfig, pool *
 	return nil
 }
 func GetMigrationVersion(migrationsPath string) (uint, bool, error) {
-	db, err := sql.Open("postgres", config.DatabaseUrl())
+	db, err := sql.Open("pgx", config.DatabaseUrl())
 	if err != nil {
 		return 0, false, fmt.Errorf("failed to connect to database: %w", err)
 	}

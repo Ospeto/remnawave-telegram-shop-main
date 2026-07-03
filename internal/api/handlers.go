@@ -156,15 +156,6 @@ type AdminPlanRequest struct {
 
 type syncKeyStats = payment.KeyStats
 
-// WalletServiceInterface defines the interface for wallet operations
-type WalletServiceInterface interface {
-	GetBalance(ctx context.Context, customerID int64) (float64, error)
-	GetTransactionHistory(ctx context.Context, customerID int64, limit int) ([]database.WalletTransaction, error)
-	HasSufficientBalance(ctx context.Context, customerID int64, amount float64) (bool, error)
-	DeductBalance(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error
-	SetKeyAutoRenew(ctx context.Context, keyID int64, customerID int64, enabled bool) error
-}
-
 type UploadScreenshotResponse struct {
 	Status       string `json:"status"`
 	Message      string `json:"message"`
@@ -398,7 +389,7 @@ type APIHandler struct {
 	subKeyRepo                 *database.SubscriptionKeyRepository
 	promoCodeRepository        *database.PromoCodeRepository
 	appConfigRepo              *database.AppConfigRepository
-	walletService              WalletServiceInterface
+	walletService              *walletsvc.WalletService
 	referralRepo               *database.ReferralRepository
 	screenshotMu               sync.Mutex
 	screenshotAttempts         map[int64]time.Time
@@ -426,7 +417,7 @@ func NewAPIHandler(
 	tm *translation.Manager,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
-	walletService WalletServiceInterface,
+	walletService *walletsvc.WalletService,
 	referralRepo *database.ReferralRepository,
 	appConfigRepo *database.AppConfigRepository,
 ) *APIHandler {

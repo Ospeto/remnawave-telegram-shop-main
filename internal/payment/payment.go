@@ -9,7 +9,6 @@ import (
 	"math"
 	"remnawave-tg-shop-bot/internal/cache"
 	"remnawave-tg-shop-bot/internal/config"
-	"remnawave-tg-shop-bot/internal/cryptopay"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/gemini"
 	"remnawave-tg-shop-bot/internal/remnawave"
@@ -51,8 +50,6 @@ var (
 	ErrAwaitingReceiptVerification = errors.New("customer already has a pending receipt verification")
 	// ErrInvalidPromoCode means the supplied promo code cannot be honored for a new purchase.
 	ErrInvalidPromoCode = errors.New("invalid or expired promo code")
-	// ErrCryptoPayDisabled means the crypto checkout rail is intentionally unavailable.
-	ErrCryptoPayDisabled = errors.New("crypto payments are disabled")
 	// ErrTrialUnavailable means free trials are disabled in config.
 	ErrTrialUnavailable = errors.New("trial is unavailable")
 	// ErrTrialAlreadyUsed means the customer has already consumed a trial or has prior subscription history.
@@ -213,7 +210,6 @@ type PaymentService struct {
 	customerRepository  *database.CustomerRepository
 	telegramBot         *bot.Bot
 	translation         *translation.Manager
-	cryptoPayClient     *cryptopay.Client
 	referralRepository  *database.ReferralRepository
 	cache               *cache.Cache
 	paymentAnalyzer     gemini.Analyzer
@@ -236,7 +232,6 @@ func NewPaymentService(
 	remnawaveClient *remnawave.Client,
 	customerRepository *database.CustomerRepository,
 	telegramBot *bot.Bot,
-	cryptoPayClient *cryptopay.Client,
 	referralRepository *database.ReferralRepository,
 	cache *cache.Cache,
 	paymentAnalyzer gemini.Analyzer,
@@ -251,7 +246,6 @@ func NewPaymentService(
 		customerRepository:  customerRepository,
 		telegramBot:         telegramBot,
 		translation:         translation,
-		cryptoPayClient:     cryptoPayClient,
 		referralRepository:  referralRepository,
 		cache:               cache,
 		paymentAnalyzer:     paymentAnalyzer,
@@ -928,13 +922,7 @@ func (s *PaymentService) resumeExistingPurchase(ctx context.Context, existing *d
 
 	switch existing.InvoiceType {
 	case database.InvoiceTypeCrypto:
-		if existing.Status == database.PurchaseStatusCancel {
-			return "", existing.ID, fmt.Errorf("purchase already cancelled")
-		}
-		if existing.CryptoInvoiceLink != nil {
-			return *existing.CryptoInvoiceLink, existing.ID, nil
-		}
-		return "", existing.ID, ErrPurchaseInFlight
+		return "", existing.ID, fmt.Errorf("legacy crypto purchases are no longer supported")
 	case database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletTopUp:
 		if existing.Status == database.PurchaseStatusCancel {
 			return "", existing.ID, fmt.Errorf("purchase already cancelled")
@@ -1165,7 +1153,7 @@ const (
 
 func triggersReferralConversion(invoiceType database.InvoiceType) bool {
 	switch invoiceType {
-	case database.InvoiceTypeCrypto, database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletPayment:
+	case database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletPayment:
 		return true
 	default:
 		return false
@@ -1436,8 +1424,6 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 	}
 
 	switch invoiceType {
-	case database.InvoiceTypeCrypto:
-		return "", 0, ErrCryptoPayDisabled
 	case database.InvoiceTypeMobileBanking:
 		return s.createMobileBankingPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID, extendKeyID)
 	case database.InvoiceTypeWalletTopUp:
@@ -1491,72 +1477,6 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 
 	slog.Info("Free purchase processed successfully", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
 	return "", purchaseId, nil
-}
-
-func (s *PaymentService) createCryptoInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
-	if s.cryptoPayClient == nil {
-		return "", 0, ErrCryptoPayDisabled
-	}
-
-	purchaseId, existing, err := s.createPurchaseRecordWithOptionalPromo(ctx, &database.Purchase{
-		InvoiceType:    database.InvoiceTypeCrypto,
-		Status:         database.PurchaseStatusNew,
-		Amount:         amount,
-		Currency:       config.Currency(),
-		CustomerID:     customer.ID,
-		Month:          0,
-		Days:           days,
-		TrafficLimitGB: trafficLimitGB,
-		ExtendKeyID:    extendKeyID,
-	}, promoCode)
-	if err != nil {
-		slog.Error("Error creating purchase", "error", err)
-		return "", 0, err
-	}
-	if existing != nil {
-		if existing.Status == database.PurchaseStatusCancel {
-			return "", purchaseId, fmt.Errorf("purchase already cancelled")
-		}
-		if existing.CryptoInvoiceLink != nil {
-			return *existing.CryptoInvoiceLink, purchaseId, nil
-		}
-		return "", purchaseId, ErrPurchaseInFlight
-	}
-
-	invoice, err := s.cryptoPayClient.CreateInvoice(ctx, &cryptopay.InvoiceRequest{
-		CurrencyType:   "fiat",
-		Fiat:           config.Currency(),
-		Amount:         fmt.Sprintf("%d", int(amount)),
-		AcceptedAssets: "USDT",
-		Payload:        fmt.Sprintf("purchaseId=%d&username=%s", purchaseId, ctx.Value(UsernameCtxKey)),
-		Description:    fmt.Sprintf("Subscription for %d days", days),
-		PaidBtnName:    "callback",
-		PaidBtnUrl:     config.BotURL(),
-	})
-	if err != nil {
-		slog.Error("Error creating invoice", "error", err)
-		_ = s.purchaseRepository.UpdateFields(context.WithoutCancel(ctx), purchaseId, map[string]interface{}{
-			"status": database.PurchaseStatusCancel,
-		})
-		return "", 0, err
-	}
-
-	updates := map[string]interface{}{
-		"crypto_invoice_url": invoice.BotInvoiceUrl,
-		"crypto_invoice_id":  invoice.InvoiceID,
-		"status":             database.PurchaseStatusPending,
-	}
-
-	err = s.purchaseRepository.UpdateFields(ctx, purchaseId, updates)
-	if err != nil {
-		slog.Error("Error updating purchase", "error", err)
-		_ = s.purchaseRepository.UpdateFields(context.WithoutCancel(ctx), purchaseId, map[string]interface{}{
-			"status": database.PurchaseStatusCancel,
-		})
-		return "", 0, err
-	}
-
-	return invoice.BotInvoiceUrl, purchaseId, nil
 }
 
 func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (string, error) {

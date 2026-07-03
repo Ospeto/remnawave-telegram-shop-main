@@ -38,7 +38,6 @@ func setBaseConfigEnv(t *testing.T) {
 		"PRICE_3",
 		"PRICE_6",
 		"PRICE_12",
-		"CRYPTO_PAY_ENABLED",
 		"MOBILE_BANKING_ENABLED",
 		"SQUAD_UUIDS",
 		"BLOCKED_TELEGRAM_IDS",

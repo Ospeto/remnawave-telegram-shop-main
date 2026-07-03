@@ -272,32 +272,6 @@ func mobilePaySuccessTranslationKey(invoiceType database.InvoiceType) string {
 	return "mobile_pay_success"
 }
 
-func (h Handler) handleCryptoPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
-	paymentURL, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeCrypto, "")
-	if err != nil {
-		slog.Error("Error creating payment", "error", err)
-		return
-	}
-
-	message, err := b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{
-		ChatID:    callback.Chat.ID,
-		MessageID: callback.ID,
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: [][]models.InlineKeyboardButton{
-				{
-					{Text: h.translation.GetText(langCode, "pay_button"), URL: paymentURL},
-					{Text: h.translation.GetText(langCode, "back_button"), CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, planIdx)},
-				},
-			},
-		},
-	})
-	if err != nil {
-		slog.Error("Error updating sell message", "error", err)
-		return
-	}
-	h.cache.Set(purchaseId, message.ID)
-}
-
 func parseCallbackData(data string) map[string]string {
 	result := make(map[string]string)
 

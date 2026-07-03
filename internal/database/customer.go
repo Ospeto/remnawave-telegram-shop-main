@@ -511,18 +511,6 @@ func (cr *CustomerRepository) AddBalanceTx(ctx context.Context, tx pgx.Tx, id in
 	return nil
 }
 
-func (cr *CustomerRepository) DeductBalance(ctx context.Context, id int64, amount float64) error {
-	query := `UPDATE customer SET balance = balance - $1 WHERE id = $2 AND balance >= $1`
-	tag, err := cr.pool.Exec(ctx, query, amount, id)
-	if err != nil {
-		return fmt.Errorf("failed to deduct balance: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("insufficient balance or customer not found")
-	}
-	return nil
-}
-
 // DeductBalanceTx decrements a customer's balance inside an existing transaction.
 // Use this whenever the balance update must be atomic with a wallet_transaction insert.
 func (cr *CustomerRepository) DeductBalanceTx(ctx context.Context, tx pgx.Tx, id int64, amount float64) error {
@@ -541,15 +529,6 @@ func (cr *CustomerRepository) DeductBalanceTx(ctx context.Context, tx pgx.Tx, id
 // Use this to wrap multi-step financial operations (e.g. balance + wallet_transaction log).
 func (cr *CustomerRepository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return cr.pool.Begin(ctx)
-}
-
-func (cr *CustomerRepository) SetAutoRenew(ctx context.Context, id int64, enabled bool, duration int) error {
-	query := `UPDATE customer SET auto_renew = $1, auto_renew_duration = $2 WHERE id = $3`
-	_, err := cr.pool.Exec(ctx, query, enabled, duration, id)
-	if err != nil {
-		return fmt.Errorf("failed to set auto renew: %w", err)
-	}
-	return nil
 }
 
 // FindByAutoRenewExpiring finds customers with auto_renew=true and expire_at between now and 'before'.

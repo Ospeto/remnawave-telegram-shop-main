@@ -2,7 +2,6 @@ package handler
 
 import (
 	"remnawave-tg-shop-bot/internal/cache"
-	"remnawave-tg-shop-bot/internal/cryptopay"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
@@ -18,7 +17,6 @@ import (
 type Handler struct {
 	customerRepository  *database.CustomerRepository
 	purchaseRepository  *database.PurchaseRepository
-	cryptoPayClient     *cryptopay.Client
 	translation         *translation.Manager
 	paymentService      *payment.PaymentService
 	syncService         *appSync.SyncService
@@ -45,7 +43,6 @@ func NewHandler(
 	translation *translation.Manager,
 	customerRepository *database.CustomerRepository,
 	purchaseRepository *database.PurchaseRepository,
-	cryptoPayClient *cryptopay.Client,
 	subscriptionService *notification.SubscriptionService,
 	subKeyRepo *database.SubscriptionKeyRepository,
 	referralRepository *database.ReferralRepository,
@@ -60,7 +57,6 @@ func NewHandler(
 		paymentService:      paymentService,
 		customerRepository:  customerRepository,
 		purchaseRepository:  purchaseRepository,
-		cryptoPayClient:     cryptoPayClient,
 		translation:         translation,
 		subscriptionService: subscriptionService,
 		subKeyRepo:          subKeyRepo,

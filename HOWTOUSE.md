@@ -65,10 +65,6 @@ After editing plans, you must restart the bot:
 
 ## Payment Methods
 
-### CryptoPay
--   Crypto checkout is currently disabled in this runtime.
--   Leave `CRYPTO_PAY_ENABLED=false` unless you deliberately restore that payment rail later.
-
 ### Mobile Banking (Manual / AI)
 -   **Setup**: Enable in `setup.sh`, set `MOBILE_BANKING_PHONE` and `OPENROUTER_API_KEY`. For a Gemini fallback, also set `GEMINI_API_KEY` and choose `VISION_PROVIDER_FALLBACK=gemini`. If you prefer a second OpenRouter model instead, set `OPENROUTER_FALLBACK_MODEL` and choose `VISION_PROVIDER_FALLBACK=openrouter`.
 -   **Usage**:

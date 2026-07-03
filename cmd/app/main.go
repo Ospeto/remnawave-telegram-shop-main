@@ -246,10 +246,10 @@ func main() {
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, nil, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
 
 	// Initialize WalletService second (depends on PaymentService)
-	walletService := wallet.NewWalletService(paymentService, customerRepository, purchaseRepository, remnawaveClient, b, tm, subKeyRepo, walletTxRepo)
+	walletService := wallet.NewWalletService(paymentService, customerRepository, subKeyRepo, walletTxRepo)
 
 	subService := notification.NewSubscriptionService(subKeyRepo, customerRepository, b, tm)
 
@@ -382,7 +382,7 @@ func main() {
 		CanaryDays:          1,
 		CanaryTrafficGB:     1,
 	})
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, nil, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, botHealthcheck, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, botHealthcheck, messageCache, mobilePayCache)
 	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)

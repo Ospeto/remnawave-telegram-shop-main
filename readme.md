@@ -86,7 +86,6 @@ Most older slash commands still exist as hidden emergency fallbacks, but they ar
 │   ├── api/                  # HTTP API and Mini App auth
 │   ├── cache/                # Runtime caches
 │   ├── config/               # Environment loading and validation
-│   ├── cryptopay/            # Crypto Pay client logic
 │   ├── database/             # Repositories and DB helpers
 │   ├── gemini/               # Screenshot-analysis providers and analyzer
 │   ├── handler/              # Telegram command, dashboard, and callback handlers
@@ -277,14 +276,6 @@ The full template lives in [.env.sample](.env.sample).
 | `EXTERNAL_SQUAD_UUID` | Optional external squad UUID |
 
 ### Payments
-
-#### Crypto Pay
-
-| Variable | Purpose |
-| --- | --- |
-| `CRYPTO_PAY_ENABLED` | Legacy flag. Keep `false` unless you are reintroducing crypto checkout intentionally |
-| `CRYPTO_PAY_TOKEN` | Legacy Crypto Pay API token |
-| `CRYPTO_PAY_URL` | Legacy Crypto Pay API base URL |
 
 #### Mobile Banking
 

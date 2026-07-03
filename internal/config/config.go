@@ -30,7 +30,6 @@ type config struct {
 	remnawaveUrl, remnawaveToken, remnawaveMode, remnawaveTag string
 	defaultLanguage                                           string
 	databaseURL                                               string
-	cryptoPayURL, cryptoPayToken                              string
 	botURL                                                    string
 	trialTrafficLimit                                         int
 	feedbackURL                                               string
@@ -38,7 +37,6 @@ type config struct {
 	serverStatusURL                                           string
 	supportURL                                                string
 	tosURL                                                    string
-	isCryptoEnabled                                           bool
 	adminTelegramId                                           int64
 	trialDays                                                 int
 	trialRemnawaveTag                                         string
@@ -224,12 +222,6 @@ func RemnawaveToken() string {
 func RemnawaveMode() string {
 	return conf.remnawaveMode
 }
-func CryptoPayUrl() string {
-	return conf.cryptoPayURL
-}
-func CryptoPayToken() string {
-	return conf.cryptoPayToken
-}
 func BotURL() string {
 	conf.botURLMu.RLock()
 	defer conf.botURLMu.RUnlock()
@@ -342,10 +334,6 @@ func BackupJobTimeoutSeconds() int {
 
 func BackupRestoreTimeoutSeconds() int {
 	return conf.backupRestoreTimeoutSeconds
-}
-
-func IsCryptoPayEnabled() bool {
-	return conf.isCryptoEnabled
 }
 
 func GetAdminTelegramId() int64 {
@@ -635,18 +623,6 @@ func InitConfig() (err error) {
 	conf.databaseURL, err = requiredEnv("DATABASE_URL")
 	if err != nil {
 		return err
-	}
-
-	conf.isCryptoEnabled = envBool("CRYPTO_PAY_ENABLED")
-	if conf.isCryptoEnabled {
-		conf.cryptoPayURL, err = requiredEnv("CRYPTO_PAY_URL")
-		if err != nil {
-			return err
-		}
-		conf.cryptoPayToken, err = requiredEnv("CRYPTO_PAY_TOKEN")
-		if err != nil {
-			return err
-		}
 	}
 
 	conf.referralDays, err = requiredEnvInt("REFERRAL_DAYS")
