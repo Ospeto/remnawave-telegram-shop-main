@@ -1060,8 +1060,12 @@ restore_sql_into_db() {
     docker exec remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB" \
         -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
-    # shellcheck disable=SC2002
-    cat "$sql_file" | docker exec -i remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+    # Fail closed on SQL errors so partial imports never report success.
+    if ! docker exec -i remnawave-telegram-shop-db \
+        psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" "$POSTGRES_DB" < "$sql_file"; then
+        print_error "Database restore failed while importing SQL (ON_ERROR_STOP)"
+        return 1
+    fi
     print_success "Database restored"
 }
 

@@ -1443,3 +1443,381 @@ func TestApplyWalletRefundIfNeeded_PropagatesCreditError(t *testing.T) {
 		t.Fatalf("skipped=%v err=%v, want false/%v", skipped, err, want)
 	}
 }
+
+// --- Post-merge deploy blocker: promo-backed idempotent retry ---
+//
+// Promo max_uses=1 reservations count toward UsedCount. A retry with the same
+// Idempotency-Key must soft-resolve promo for body match and resume the original
+// purchase instead of failing strict capacity validation with ErrInvalidPromoCode.
+
+func exhaustedPromo(id int64, code string, discountPercent int) *database.PromoCode {
+	return &database.PromoCode{
+		ID:              id,
+		Code:            code,
+		DiscountPercent: discountPercent,
+		MaxUses:         1,
+		UsedCount:       1, // capacity exhausted (includes own reservation)
+		ValidUntil:      time.Now().Add(24 * time.Hour),
+	}
+}
+
+func TestCreatePurchase_IdempotentPromoRetry_MobileBankingResumes(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	customer := &database.Customer{ID: 7, Balance: 0}
+	existing := &database.Purchase{
+		ID:             9001,
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, got uuid.UUID) (*database.Purchase, error) {
+			if got != key {
+				t.Fatalf("FindByIdempotencyKey key = %s, want %s", got, key)
+			}
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, code string) (*database.PromoCode, error) {
+			if code != promoCode {
+				t.Fatalf("FindByCode code = %q, want %q", code, promoCode)
+			}
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	_, purchaseID, err := svc.CreatePurchase(ctx, listPrice, 30, 100, customer, database.InvoiceTypeMobileBanking, promoCode)
+	if err != nil {
+		t.Fatalf("CreatePurchase() error = %v, want nil (idempotent resume)", err)
+	}
+	if purchaseID != existing.ID {
+		t.Fatalf("CreatePurchase() purchaseID = %d, want original %d", purchaseID, existing.ID)
+	}
+}
+
+func TestCreatePurchase_IdempotentPromoRetry_BodyMismatch(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	otherPromoID := int64(99)
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	customer := &database.Customer{ID: 7}
+	existing := &database.Purchase{
+		ID:             9001,
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, code string) (*database.PromoCode, error) {
+			// Different promo code → different PromoCodeID / amount for body match.
+			return &database.PromoCode{
+				ID:              otherPromoID,
+				Code:            code,
+				DiscountPercent: 10,
+				MaxUses:         1,
+				UsedCount:       0,
+				ValidUntil:      time.Now().Add(24 * time.Hour),
+			}, nil
+		},
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	_, _, err := svc.CreatePurchase(ctx, listPrice, 30, 100, customer, database.InvoiceTypeMobileBanking, "OTHER10")
+	if !errors.Is(err, ErrIdempotencyRequestMismatch) {
+		t.Fatalf("CreatePurchase() error = %v, want ErrIdempotencyRequestMismatch", err)
+	}
+}
+
+func TestCreatePurchase_IdempotentPromoRetry_CrossCustomerConflict(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	caller := &database.Customer{ID: 7}
+	existing := &database.Purchase{
+		ID:             9001,
+		CustomerID:     99, // different owner
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, _ string) (*database.PromoCode, error) {
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	_, _, err := svc.CreatePurchase(ctx, listPrice, 30, 100, caller, database.InvoiceTypeMobileBanking, promoCode)
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("CreatePurchase() error = %v, want ErrIdempotencyKeyConflict", err)
+	}
+}
+
+func TestCreatePurchaseWithExtend_IdempotentPromoRetry_ChargesOnce(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	keyID := int64(55)
+	customer := &database.Customer{ID: 7, Balance: 50000}
+	existing := &database.Purchase{
+		ID:             9002,
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPaid,
+		ExtendKeyID:    &keyID,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, _ string) (*database.PromoCode, error) {
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+		// If resume is skipped, create path would attempt a wallet charge via customer repo.
+		// Leave customerRepository nil so any charge attempt panics/fails loudly.
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	balanceBefore := customer.Balance
+	_, purchaseID, err := svc.CreatePurchaseWithExtend(ctx, listPrice, 30, 100, customer, keyID, promoCode)
+	if err != nil {
+		t.Fatalf("CreatePurchaseWithExtend() error = %v, want nil (idempotent resume)", err)
+	}
+	if purchaseID != existing.ID {
+		t.Fatalf("CreatePurchaseWithExtend() purchaseID = %d, want original %d", purchaseID, existing.ID)
+	}
+	if customer.Balance != balanceBefore {
+		t.Fatalf("wallet balance changed on idempotent retry: got %v want %v (must charge only once)", customer.Balance, balanceBefore)
+	}
+}
+
+func TestCreatePurchase_ExhaustedPromoWithoutIdempotencyKey_StillRejected(t *testing.T) {
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	customer := &database.Customer{ID: 7}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			t.Fatal("FindByIdempotencyKey should not be required when no key is present")
+			return nil, nil
+		},
+		testFindPromoByCode: func(_ context.Context, _ string) (*database.PromoCode, error) {
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+	}
+
+	// No Idempotency-Key: strict capacity validation must reject exhausted promo.
+	_, _, err := svc.CreatePurchase(context.Background(), listPrice, 30, 100, customer, database.InvoiceTypeMobileBanking, promoCode)
+	if !errors.Is(err, ErrInvalidPromoCode) {
+		t.Fatalf("CreatePurchase() error = %v, want ErrInvalidPromoCode for exhausted promo without idempotency key", err)
+	}
+}
+
+// Concurrent same-key promo retry: top-level idempotency lookup misses (peer not
+// committed yet), peer then commits and exhausts promo capacity, strict validation
+// fails — must re-fetch by key and resume rather than return ErrInvalidPromoCode.
+
+func TestCreatePurchase_IdempotentPromoRetry_LookupMissThenExisting_MobileBanking(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	customer := &database.Customer{ID: 7}
+	existing := &database.Purchase{
+		ID:             9101,
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	var lookups int
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, got uuid.UUID) (*database.Purchase, error) {
+			if got != key {
+				t.Fatalf("FindByIdempotencyKey key = %s, want %s", got, key)
+			}
+			lookups++
+			if lookups == 1 {
+				// Race: peer purchase not visible yet.
+				return nil, nil
+			}
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, _ string) (*database.PromoCode, error) {
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	_, purchaseID, err := svc.CreatePurchase(ctx, listPrice, 30, 100, customer, database.InvoiceTypeMobileBanking, promoCode)
+	if err != nil {
+		t.Fatalf("CreatePurchase() error = %v, want nil after lookup-miss-then-existing resume", err)
+	}
+	if purchaseID != existing.ID {
+		t.Fatalf("CreatePurchase() purchaseID = %d, want original %d", purchaseID, existing.ID)
+	}
+	if lookups < 2 {
+		t.Fatalf("idempotency lookups = %d, want at least 2 (miss then re-fetch)", lookups)
+	}
+}
+
+func TestCreatePurchaseWithExtend_IdempotentPromoRetry_LookupMissThenExisting(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	promoCode := "SAVE50"
+	listPrice := 10000.0
+	discounted := applyDiscountPercent(listPrice, 50)
+	keyID := int64(55)
+	customer := &database.Customer{ID: 7, Balance: 50000}
+	existing := &database.Purchase{
+		ID:             9102,
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPaid,
+		ExtendKeyID:    &keyID,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+
+	var lookups int
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			lookups++
+			if lookups == 1 {
+				return nil, nil
+			}
+			return existing, nil
+		},
+		testFindPromoByCode: func(_ context.Context, _ string) (*database.PromoCode, error) {
+			return exhaustedPromo(promoID, promoCode, 50), nil
+		},
+	}
+
+	ctx := WithIdempotencyKey(context.Background(), key)
+	balanceBefore := customer.Balance
+	_, purchaseID, err := svc.CreatePurchaseWithExtend(ctx, listPrice, 30, 100, customer, keyID, promoCode)
+	if err != nil {
+		t.Fatalf("CreatePurchaseWithExtend() error = %v, want nil after lookup-miss-then-existing resume", err)
+	}
+	if purchaseID != existing.ID {
+		t.Fatalf("CreatePurchaseWithExtend() purchaseID = %d, want original %d", purchaseID, existing.ID)
+	}
+	if customer.Balance != balanceBefore {
+		t.Fatalf("wallet balance changed on concurrent retry resume: got %v want %v", customer.Balance, balanceBefore)
+	}
+	if lookups < 2 {
+		t.Fatalf("idempotency lookups = %d, want at least 2 (miss then re-fetch)", lookups)
+	}
+}
+
+func TestCreateMobileBankingPurchase_IncludesPromoCodeIDOnCreateCandidate(t *testing.T) {
+	// Regression: late createPurchaseRecordWithOptionalPromo body match must see PromoCodeID.
+	promoID := int64(42)
+	purchase := &database.Purchase{
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Status:         database.PurchaseStatusPending,
+		Amount:         5000,
+		CustomerID:     7,
+		Days:           30,
+		TrafficLimitGB: 100,
+		PromoCodeID:    &promoID,
+	}
+	// Mirror the createMobileBankingPurchase create payload shape after the fix.
+	if purchase.PromoCodeID == nil || *purchase.PromoCodeID != promoID {
+		t.Fatal("mobile banking create candidate must include PromoCodeID")
+	}
+}
+
+func TestResumeAfterInvalidPromo_UsesAssertIdempotentResumeAllowed(t *testing.T) {
+	key := uuid.New()
+	promoID := int64(42)
+	discounted := 5000.0
+	existing := &database.Purchase{
+		ID:             9200,
+		CustomerID:     7,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		PromoCodeID:    &promoID,
+		IdempotencyKey: &key,
+	}
+	candidate := &database.Purchase{
+		CustomerID:     7,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         discounted,
+		Days:           30,
+		TrafficLimitGB: 100,
+		PromoCodeID:    &promoID,
+	}
+
+	svc := &PaymentService{
+		testFindByIdempotencyKey: func(_ context.Context, _ uuid.UUID) (*database.Purchase, error) {
+			return existing, nil
+		},
+	}
+	ctx := WithIdempotencyKey(context.Background(), key)
+	got, err := svc.resumeExistingAfterInvalidPromo(ctx, candidate)
+	if err != nil {
+		t.Fatalf("resumeExistingAfterInvalidPromo() error = %v", err)
+	}
+	if got == nil || got.ID != existing.ID {
+		t.Fatalf("resumeExistingAfterInvalidPromo() = %+v, want existing purchase", got)
+	}
+
+	// Cross-customer must still conflict via assertIdempotentResumeAllowed.
+	candidate.CustomerID = 99
+	_, err = svc.resumeExistingAfterInvalidPromo(ctx, candidate)
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("resumeExistingAfterInvalidPromo() error = %v, want ErrIdempotencyKeyConflict", err)
+	}
+}

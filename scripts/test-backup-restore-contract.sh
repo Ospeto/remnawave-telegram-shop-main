@@ -154,6 +154,72 @@ else
   fail=1
 fi
 
+# --- restore_sql_into_db fail-closed import contract ---
+# Offline restore must stop on SQL errors (ON_ERROR_STOP) and not report success
+# after a partial import. Both full-bundle and bot-db paths share this importer.
+RESTORE_SQL_FN="$(mktemp)"
+trap 'rm -rf "$tmpdir"; rm -f "$HELPERS" "$RESTORE_SQL_FN"' EXIT
+
+awk '
+  /^restore_sql_into_db\(\)/ { capture=1 }
+  capture { print }
+  /^}$/ && capture {
+    if ($0 == "}") { capture=0 }
+  }
+' "$SETUP" > "$RESTORE_SQL_FN"
+
+if [[ ! -s "$RESTORE_SQL_FN" ]]; then
+  echo "FAIL: could not extract restore_sql_into_db() from setup.sh"
+  fail=1
+else
+  if grep -q 'ON_ERROR_STOP=1' "$RESTORE_SQL_FN"; then
+    echo "OK: restore_sql_into_db uses ON_ERROR_STOP=1"
+  else
+    echo "FAIL: restore_sql_into_db missing ON_ERROR_STOP=1"
+    fail=1
+  fi
+
+  # Import may be split across lines (docker exec ... \n psql ...); flatten for match.
+  restore_flat="$(tr '\n' ' ' < "$RESTORE_SQL_FN")"
+  if [[ "$restore_flat" == *'if !'*psql* ]] \
+    && grep -q 'return 1' "$RESTORE_SQL_FN" \
+    && grep -q 'print_error' "$RESTORE_SQL_FN"; then
+    echo "OK: restore_sql_into_db guards import failure with return 1"
+  else
+    echo "FAIL: restore_sql_into_db missing if ! ...; then ... return 1; fi import guard"
+    fail=1
+  fi
+
+  # Success message must appear after the guarded import block.
+  if awk '
+    /if !/ { guarded=1 }
+    guarded && /return 1/ { saw_return=1 }
+    saw_return && /print_success "Database restored"/ { found=1 }
+    END { exit found ? 0 : 1 }
+  ' "$RESTORE_SQL_FN"; then
+    echo "OK: print_success Database restored appears after guarded import"
+  else
+    echo "FAIL: print_success Database restored not after guarded import failure path"
+    fail=1
+  fi
+
+  if grep -qE 'cat "\$sql_file" \| docker exec' "$RESTORE_SQL_FN"; then
+    echo "FAIL: restore_sql_into_db still uses cat|docker exec psql pipeline"
+    fail=1
+  else
+    echo "OK: old cat|docker exec psql pipeline absent from restore_sql_into_db"
+  fi
+fi
+
+if grep -q 'restore_sql_into_db' "$SETUP" \
+  && awk '/^restore_full_backup_bundle\(\)/,/^}$/' "$SETUP" | grep -q 'restore_sql_into_db' \
+  && awk '/^restore_bot_db_backup\(\)/,/^}$/' "$SETUP" | grep -q 'restore_sql_into_db'; then
+  echo "OK: full bundle and bot db restore paths call restore_sql_into_db"
+else
+  echo "FAIL: restore_full_backup_bundle / restore_bot_db_backup must call restore_sql_into_db"
+  fail=1
+fi
+
 if [[ "$fail" -ne 0 ]]; then
   echo ""
   echo "backup-restore-contract: FAILED"

@@ -230,6 +230,11 @@ type PaymentService struct {
 	visionAlertMu       sync.Mutex
 	visionAlertLastSent map[string]time.Time
 	now                 func() time.Time
+
+	// Optional test seams (nil in production). Used by unit tests to exercise
+	// idempotent promo retry without a live database.
+	testFindByIdempotencyKey func(ctx context.Context, key uuid.UUID) (*database.Purchase, error)
+	testFindPromoByCode      func(ctx context.Context, code string) (*database.PromoCode, error)
 }
 
 func NewPaymentService(
@@ -348,6 +353,9 @@ func (s *PaymentService) findPurchaseByIdempotencyKey(ctx context.Context) (*dat
 	key := idempotencyKeyFromContext(ctx)
 	if key == nil {
 		return nil, nil
+	}
+	if s.testFindByIdempotencyKey != nil {
+		return s.testFindByIdempotencyKey(ctx, *key)
 	}
 
 	return s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
@@ -923,15 +931,22 @@ func validatePromoForPurchase(promo *database.PromoCode, now time.Time) error {
 	return nil
 }
 
+func (s *PaymentService) findPromoByCode(ctx context.Context, promoCode string) (*database.PromoCode, error) {
+	if s.testFindPromoByCode != nil {
+		return s.testFindPromoByCode(ctx, promoCode)
+	}
+	if s.promoCodeRepository == nil {
+		return nil, fmt.Errorf("promo code repository is not configured")
+	}
+	return s.promoCodeRepository.FindByCode(ctx, promoCode)
+}
+
 func (s *PaymentService) resolvePromoDiscount(ctx context.Context, amount float64, promoCode string) (float64, *int64, error) {
 	if promoCode == "" {
 		return amount, nil, nil
 	}
-	if s.promoCodeRepository == nil {
-		return 0, nil, fmt.Errorf("promo code repository is not configured")
-	}
 
-	promo, err := s.promoCodeRepository.FindByCode(ctx, promoCode)
+	promo, err := s.findPromoByCode(ctx, promoCode)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to look up promo code: %w", err)
 	}
@@ -942,9 +957,51 @@ func (s *PaymentService) resolvePromoDiscount(ctx context.Context, amount float6
 	return applyDiscountPercent(amount, promo.DiscountPercent), &promo.ID, nil
 }
 
+// resolvePromoDiscountForIdempotentMatch soft-resolves promo identity and
+// discounted amount for body matching on idempotent resume. It skips capacity
+// and expiry checks so a retry can match the original purchase that already
+// reserved the promo. New purchases must still use resolvePromoDiscount.
+func (s *PaymentService) resolvePromoDiscountForIdempotentMatch(ctx context.Context, amount float64, promoCode string) (float64, *int64, error) {
+	if promoCode == "" {
+		return amount, nil, nil
+	}
+
+	promo, err := s.findPromoByCode(ctx, promoCode)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to look up promo code: %w", err)
+	}
+	if promo == nil {
+		return 0, nil, ErrInvalidPromoCode
+	}
+
+	return applyDiscountPercent(amount, promo.DiscountPercent), &promo.ID, nil
+}
+
+// resumeExistingAfterInvalidPromo re-fetches by Idempotency-Key after a strict
+// promo capacity failure. Concurrent same-key retries can miss the peer on the
+// first lookup, then see an exhausted promo once the peer commits. If a matching
+// purchase now exists, resume it via assertIdempotentResumeAllowed; otherwise
+// return ErrInvalidPromoCode.
+func (s *PaymentService) resumeExistingAfterInvalidPromo(ctx context.Context, candidate *database.Purchase) (*database.Purchase, error) {
+	if idempotencyKeyFromContext(ctx) == nil {
+		return nil, ErrInvalidPromoCode
+	}
+	existing, err := s.findPurchaseByIdempotencyKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, ErrInvalidPromoCode
+	}
+	if err := assertIdempotentResumeAllowed(existing, candidate); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func (s *PaymentService) createPurchaseRecordWithOptionalPromo(ctx context.Context, purchase *database.Purchase, promoCode string) (int64, *database.Purchase, error) {
 	if key := idempotencyKeyFromContext(ctx); key != nil {
-		existing, err := s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
+		existing, err := s.findPurchaseByIdempotencyKey(ctx)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -962,7 +1019,7 @@ func (s *PaymentService) createPurchaseRecordWithOptionalPromo(ctx context.Conte
 	if s.customerRepository == nil {
 		return 0, nil, fmt.Errorf("customer repository is not configured")
 	}
-	if s.promoCodeRepository == nil {
+	if s.promoCodeRepository == nil && s.testFindPromoByCode == nil {
 		return 0, nil, fmt.Errorf("promo code repository is not configured")
 	}
 
@@ -975,6 +1032,13 @@ func (s *PaymentService) createPurchaseRecordWithOptionalPromo(ctx context.Conte
 	}()
 
 	if err := s.lockPromoForPurchaseTx(ctx, tx, purchase, promoCode); err != nil {
+		if errors.Is(err, ErrInvalidPromoCode) {
+			if existing, resumeErr := s.resumeExistingAfterInvalidPromo(ctx, purchase); resumeErr != nil {
+				return 0, nil, resumeErr
+			} else if existing != nil {
+				return existing.ID, existing, nil
+			}
+		}
 		return 0, nil, err
 	}
 
@@ -1632,31 +1696,68 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	var promoID *int64
 	if invoiceType != database.InvoiceTypeWalletTopUp {
-		// Resolve promo first so idempotent body match uses the same amount/promo
-		// reservation that would be stored on create.
-		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
-		if err != nil {
-			return "", 0, err
-		}
-		candidate := &database.Purchase{
-			CustomerID:     customer.ID,
-			InvoiceType:    invoiceType,
-			Amount:         amount,
-			Days:           days,
-			TrafficLimitGB: trafficLimitGB,
-			ExtendKeyID:    extendKeyID,
-			PromoCodeID:    promoID,
-		}
-		if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
-			return "", 0, lookupErr
-		} else if existing != nil {
-			return s.resumeExistingPurchase(ctx, existing)
-		}
-		if invoiceType == database.InvoiceTypeMobileBanking {
-			if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+		// When an Idempotency-Key is present, soft-resolve promo for body match
+		// first so retries can resume the original purchase even if the promo
+		// reservation already counts toward capacity. Strict capacity checks
+		// still apply for new purchases below.
+		if idempotencyKeyFromContext(ctx) != nil {
+			softAmount, softPromoID, softErr := s.resolvePromoDiscountForIdempotentMatch(ctx, amount, promoCode)
+			if softErr != nil {
+				return "", 0, softErr
+			}
+			candidate := &database.Purchase{
+				CustomerID:     customer.ID,
+				InvoiceType:    invoiceType,
+				Amount:         softAmount,
+				Days:           days,
+				TrafficLimitGB: trafficLimitGB,
+				ExtendKeyID:    extendKeyID,
+				PromoCodeID:    softPromoID,
+			}
+			if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
 				return "", 0, lookupErr
 			} else if existing != nil {
-				return "", 0, awaitingReceiptVerificationError(existing)
+				return s.resumeExistingPurchase(ctx, existing)
+			}
+		}
+
+		// Strict promo validation for new purchase creation.
+		listAmount := amount
+		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
+		if err != nil {
+			if errors.Is(err, ErrInvalidPromoCode) && idempotencyKeyFromContext(ctx) != nil {
+				// Race: first lookup missed peer; peer may now own the key and promo.
+				// Use listAmount — resolvePromoDiscount returns 0 on failure.
+				softAmount, softPromoID, softErr := s.resolvePromoDiscountForIdempotentMatch(ctx, listAmount, promoCode)
+				if softErr != nil {
+					return "", 0, err
+				}
+				candidate := &database.Purchase{
+					CustomerID:     customer.ID,
+					InvoiceType:    invoiceType,
+					Amount:         softAmount,
+					Days:           days,
+					TrafficLimitGB: trafficLimitGB,
+					ExtendKeyID:    extendKeyID,
+					PromoCodeID:    softPromoID,
+				}
+				if existing, resumeErr := s.resumeExistingAfterInvalidPromo(ctx, candidate); resumeErr != nil {
+					return "", 0, resumeErr
+				} else if existing != nil {
+					return s.resumeExistingPurchase(ctx, existing)
+				}
+			}
+			return "", 0, err
+		}
+		// Late resume candidates (e.g. unique-violation fallback) need PromoCodeID
+		// for consistent body matching.
+		if invoiceType == database.InvoiceTypeMobileBanking {
+			if s.purchaseRepository != nil {
+				if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
+					return "", 0, lookupErr
+				} else if existing != nil {
+					return "", 0, awaitingReceiptVerificationError(existing)
+				}
 			}
 		}
 	}
@@ -1671,7 +1772,7 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 	case database.InvoiceTypeWalletTopUp:
 		return s.createWalletTopUpInvoice(ctx, amount, customer)
 	case database.InvoiceTypeWalletPayment:
-		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode)
+		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
@@ -1809,6 +1910,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
+		PromoCodeID:    promoID,
 	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating mobile banking purchase", "error", err)
@@ -1833,6 +1935,13 @@ func (s *PaymentService) createAndChargeWalletPurchase(ctx context.Context, purc
 	}()
 
 	if err := s.lockPromoForPurchaseTx(ctx, dbTx, purchase, promoCode); err != nil {
+		if errors.Is(err, ErrInvalidPromoCode) {
+			if existing, resumeErr := s.resumeExistingAfterInvalidPromo(ctx, purchase); resumeErr != nil {
+				return 0, false, resumeErr
+			} else if existing != nil {
+				return existing.ID, false, nil
+			}
+		}
 		return 0, false, err
 	}
 
@@ -1876,7 +1985,7 @@ func (s *PaymentService) cancelPurchase(ctx context.Context, purchaseID int64) {
 	}
 }
 
-func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string) (url string, purchaseId int64, err error) {
+func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, promoID *int64) (url string, purchaseId int64, err error) {
 	// Check if customer has sufficient balance logic is handled by DeductBalance (atomic)
 	// But we check first to fail fast before creating purchase
 	if customer.Balance < amount {
@@ -1893,6 +2002,7 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 		Month:          0,
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
+		PromoCodeID:    promoID,
 	}, customer.ID, amount, fmt.Sprintf("Purchase plan %d days", days), promoCode)
 	if err != nil {
 		slog.Error("Error creating wallet purchase", "error", err)
@@ -1942,24 +2052,54 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 // ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
 // rather than creating a brand-new user. Used by the per-key auto-renew cron.
 func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64, promoCode string) (url string, purchaseId int64, err error) {
+	extendKeyID := keyID
+	// Soft-resolve promo for idempotent resume before strict capacity validation.
+	if idempotencyKeyFromContext(ctx) != nil {
+		softAmount, softPromoID, softErr := s.resolvePromoDiscountForIdempotentMatch(ctx, amount, promoCode)
+		if softErr != nil {
+			return "", 0, softErr
+		}
+		candidate := &database.Purchase{
+			CustomerID:     customer.ID,
+			InvoiceType:    database.InvoiceTypeWalletPayment,
+			Amount:         softAmount,
+			Days:           days,
+			TrafficLimitGB: trafficLimitGB,
+			ExtendKeyID:    &extendKeyID,
+			PromoCodeID:    softPromoID,
+		}
+		if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
+			return "", 0, lookupErr
+		} else if existing != nil {
+			return s.resumeExistingPurchase(ctx, existing)
+		}
+	}
+
+	listAmount := amount
 	amount, promoID, err := s.resolvePromoDiscount(ctx, amount, promoCode)
 	if err != nil {
+		if errors.Is(err, ErrInvalidPromoCode) && idempotencyKeyFromContext(ctx) != nil {
+			// Use listAmount — resolvePromoDiscount returns 0 on failure.
+			softAmount, softPromoID, softErr := s.resolvePromoDiscountForIdempotentMatch(ctx, listAmount, promoCode)
+			if softErr != nil {
+				return "", 0, err
+			}
+			candidate := &database.Purchase{
+				CustomerID:     customer.ID,
+				InvoiceType:    database.InvoiceTypeWalletPayment,
+				Amount:         softAmount,
+				Days:           days,
+				TrafficLimitGB: trafficLimitGB,
+				ExtendKeyID:    &extendKeyID,
+				PromoCodeID:    softPromoID,
+			}
+			if existing, resumeErr := s.resumeExistingAfterInvalidPromo(ctx, candidate); resumeErr != nil {
+				return "", 0, resumeErr
+			} else if existing != nil {
+				return s.resumeExistingPurchase(ctx, existing)
+			}
+		}
 		return "", 0, err
-	}
-	extendKeyID := keyID
-	candidate := &database.Purchase{
-		CustomerID:     customer.ID,
-		InvoiceType:    database.InvoiceTypeWalletPayment,
-		Amount:         amount,
-		Days:           days,
-		TrafficLimitGB: trafficLimitGB,
-		ExtendKeyID:    &extendKeyID,
-		PromoCodeID:    promoID,
-	}
-	if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
-		return "", 0, lookupErr
-	} else if existing != nil {
-		return s.resumeExistingPurchase(ctx, existing)
 	}
 
 	if customer.Balance < amount {
@@ -1976,6 +2116,7 @@ func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount fl
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    &keyID,
+		PromoCodeID:    promoID,
 	}, customer.ID, amount, fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days), promoCode)
 	if err != nil {
 		slog.Error("Error creating extend-key wallet purchase", "error", err)
