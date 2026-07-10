@@ -223,6 +223,29 @@ func writeSanitizedError(w http.ResponseWriter, status int, publicMessage string
 	http.Error(w, publicMessage, status)
 }
 
+// mapCreatePurchaseIdempotencyError maps payment-layer idempotency isolation errors
+// to HTTP status/message. Cross-user key reuse must not disclose purchase details.
+func mapCreatePurchaseIdempotencyError(err error) (status int, message string, ok bool) {
+	switch {
+	case errors.Is(err, payment.ErrIdempotencyKeyConflict):
+		return http.StatusForbidden, "Idempotency key conflict", true
+	case errors.Is(err, payment.ErrIdempotencyRequestMismatch):
+		return http.StatusConflict, "Idempotency key already used with a different request", true
+	default:
+		return 0, "", false
+	}
+}
+
+// shouldUpdatePurchaseFieldsAfterCreate gates plan_label/payment_phone writes.
+// Only stamp when the purchase has not been labeled yet so idempotent resumes
+// (and body-matched retries) do not rewrite the original row.
+func shouldUpdatePurchaseFieldsAfterCreate(purchase *database.Purchase) bool {
+	if purchase == nil {
+		return false
+	}
+	return purchase.PlanLabel == ""
+}
+
 func adminPromoResponse(code database.PromoCode, now time.Time) AdminPromoResponse {
 	return AdminPromoResponse{
 		Code:            code.Code,
@@ -993,6 +1016,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
+		if status, message, ok := mapCreatePurchaseIdempotencyError(err); ok {
+			http.Error(w, message, status)
+			return
+		}
 		if errors.Is(err, payment.ErrInvalidPromoCode) {
 			http.Error(w, "Invalid or expired promo code", http.StatusBadRequest)
 			return
@@ -1020,12 +1047,17 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updateFields := map[string]interface{}{
-		"plan_label":    label,
-		"payment_phone": payment.GetFirstPaymentPhone(),
-	}
-	if err := h.paymentService.UpdatePurchaseFields(ctx, purchaseID, updateFields); err != nil {
-		slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
+	// Only stamp plan_label/payment_phone when unset. Idempotent resumes must not
+	// rewrite the original purchase (especially after a body-mismatched attempt is
+	// rejected at the payment layer; same-body retries keep original fields).
+	if shouldUpdatePurchaseFieldsAfterCreate(purchase) {
+		updateFields := map[string]interface{}{
+			"plan_label":    label,
+			"payment_phone": payment.GetFirstPaymentPhone(),
+		}
+		if err := h.paymentService.UpdatePurchaseFields(ctx, purchaseID, updateFields); err != nil {
+			slog.Warn("Failed to update purchase fields", "purchase_id", purchaseID, "error", err)
+		}
 	}
 
 	var instructions string

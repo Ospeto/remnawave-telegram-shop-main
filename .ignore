@@ -1,0 +1,3 @@
+# Slim deepwork allowlist (search/index tools)
+!.slim/deepwork/
+!.slim/deepwork/**

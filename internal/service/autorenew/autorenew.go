@@ -2,13 +2,23 @@
 //
 // Design: Auto-renew is per subscription key, NOT per customer.
 // Each key has its own auto_renew flag. When the cron fires, it finds
-// every key where auto_renew=true AND expire_at is within 3 days, then
-// EXTENDS that specific key (not creates a new one) using the customer's
-// wallet balance.
+// every key where auto_renew=true AND expire_at is within the catch-up
+// lookback window (past) through the 3-day forward window, then EXTENDS
+// that specific key (not creates a new one) using the customer's wallet
+// balance.
 //
 // Safety guarantees:
-//   - Idempotency: last_auto_renewed_at is stamped only after a successful
-//     renewal; transient claims are tracked separately.
+//   - Idempotency: last_auto_renewed_at is stamped as a durable cycle lock
+//     before wallet/Remnawave side effects; full finalization clears the
+//     claim after success. Transient claims use a TTL lease for pre-side-effect
+//     reclaim only; post-side-effect ambiguity prefers hold/manual recovery
+//     over a second charge.
+//   - Intentional money-safe stuck residual: if the process dies after the
+//     pre-extend cycle lock is written but before ExtendKeyWithBalance
+//     starts/completes, later runs skip the key (alreadyRenewedThisCycle).
+//     That is preferred over risking a double charge; ops may clear
+//     last_auto_renewed_at for manual recovery. No automatic recharge of
+//     that ambiguous state.
 //   - 24h notification throttle: low-balance warnings are sent at most once
 //     per day via auto_renew_notified_at on the key.
 //   - Ownership: balance and key both belong to the same customer.
@@ -36,6 +46,17 @@ type keyRepository interface {
 	TryClaimAutoRenew(ctx context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error)
 	ReleaseAutoRenewClaim(ctx context.Context, keyID int64, claimedAt time.Time) error
 	MarkKeyAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error
+	// StampKeyLastAutoRenewed records a durable cycle lock (last_auto_renewed_at)
+	// while keeping the claim held. Called before side effects so mark/stamp
+	// failures after extend cannot open a second charge path after TTL reclaim.
+	// Crash after this stamp and before extend is an intentional money-safe
+	// stuck residual (skip until manual recovery), not a double-charge path.
+	StampKeyLastAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error
+	// ClearKeyLastAutoRenewed clears the optimistic pre-extend cycle lock
+	// (sets last_auto_renewed_at = NULL) while the worker still owns the claim.
+	// It does not restore any prior last_auto_renewed_at history — only undoes
+	// the optimistic lock so the same cycle may be retried after extend fails.
+	ClearKeyLastAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error
 	MarkKeyAutoRenewNotified(ctx context.Context, keyID int64) error
 }
 
@@ -71,7 +92,33 @@ var (
 	errAutoRenewPlanUnavailable = errors.New("auto-renew plan is no longer available")
 )
 
-const autoRenewLookbackWindow = 2 * time.Hour
+// autoRenewLookbackWindow is how far past "now" we still select expired keys
+// for catch-up after outages. Must cover multi-hour downtime without relying
+// solely on the hourly cron window.
+const autoRenewLookbackWindow = 48 * time.Hour
+
+// autoRenewClaimTTL aliases the DB lease duration so service + SQL stay aligned.
+const autoRenewClaimTTL = database.AutoRenewClaimTTL
+
+// autoRenewCycleGuardWindow is how far before expire_at a last_auto_renewed_at
+// stamp still counts as "already renewed this cycle".
+const autoRenewCycleGuardWindow = 4 * 24 * time.Hour
+
+// isAutoRenewClaimExpired reports whether a claim lease is older than ttl.
+// Stale pre-side-effect claims may be reclaimed; post-side-effect safety relies
+// on a durable last_auto_renewed_at cycle lock (not on infinite claim hold alone).
+func isAutoRenewClaimExpired(claimedAt, now time.Time, ttl time.Duration) bool {
+	return !claimedAt.After(now.Add(-ttl))
+}
+
+// alreadyRenewedThisCycle reports whether last_auto_renewed_at falls inside
+// the current expiry cycle (within autoRenewCycleGuardWindow before expire_at).
+func alreadyRenewedThisCycle(last, expireAt *time.Time) bool {
+	if last == nil || expireAt == nil {
+		return false
+	}
+	return last.After(expireAt.Add(-autoRenewCycleGuardWindow))
+}
 
 // New creates a new AutoRenew Job.
 func New(
@@ -128,12 +175,12 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 
 	// ── Idempotency guard ─────────────────────────────────────────────────────
 	// If this key was already renewed in the current expiry cycle, skip it.
-	if key.LastAutoRenewedAt != nil && key.ExpireAt != nil {
-		if key.LastAutoRenewedAt.After(key.ExpireAt.Add(-4 * 24 * time.Hour)) {
-			log.Info("Auto-renew: skipping — already renewed in this cycle",
-				"last_renewed", key.LastAutoRenewedAt, "expire_at", key.ExpireAt)
-			return
-		}
+	// Also covers post-side-effect mark failures that stamped last_auto_renewed_at
+	// without clearing the claim (M1 / D2 post-side-effect guard).
+	if alreadyRenewedThisCycle(key.LastAutoRenewedAt, key.ExpireAt) {
+		log.Info("Auto-renew: skipping — already renewed in this cycle",
+			"last_renewed", key.LastAutoRenewedAt, "expire_at", key.ExpireAt)
+		return
 	}
 
 	// ── Cross-replica claim guard ─────────────────────────────────────────────
@@ -183,16 +230,40 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 		"plan_label", plan.Label, "plan_days", plan.Days,
 		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB)
 
+	// Durable cycle lock BEFORE wallet/Remnawave side effects. If mark/stamp
+	// both fail after a successful extend, last_auto_renewed_at still blocks
+	// a second charge after TTL reclaim (M1 money-safety).
+	if err := j.subKeyRepo.StampKeyLastAutoRenewed(ctx, key.ID, *claimedAt); err != nil {
+		log.Error("Auto-renew: failed to stamp cycle lock before extend; aborting without charge",
+			"error", err)
+		return
+	}
+
 	// ── Extend the specific key ───────────────────────────────────────────────
 	err = j.walletService.ExtendKeyWithBalance(ctx, key.ID, customer.ID, float64(plan.Price), plan.Days, plan.TrafficLimitGB)
 	if err != nil {
 		log.Error("Auto-renew: key extension failed", "error", err)
+		// Undo optimistic cycle lock so a later run may retry this cycle.
+		if clearErr := j.subKeyRepo.ClearKeyLastAutoRenewed(ctx, key.ID, *claimedAt); clearErr != nil {
+			log.Error("Auto-renew: failed to clear cycle lock after extend failure",
+				"error", clearErr)
+		}
 		j.sendMessage(ctx, customer.TelegramID, customer.Language,
 			j.tm.GetText(customer.Language, "auto_renew_failed"))
 		return
 	}
+
+	// Side effect succeeded. Never release the claim on finalization failure —
+	// cycle lock is already durable; hold claim as belt-and-suspenders.
 	if err := j.subKeyRepo.MarkKeyAutoRenewed(ctx, key.ID, *claimedAt); err != nil {
-		log.Error("Auto-renew: failed to mark renewal success", "error", err)
+		log.Error("Auto-renew: failed to mark renewal success after extend; holding claim (cycle lock already set)",
+			"error", err)
+		// Best-effort refresh of last_auto_renewed_at (already stamped pre-extend).
+		if stampErr := j.subKeyRepo.StampKeyLastAutoRenewed(ctx, key.ID, *claimedAt); stampErr != nil {
+			log.Error("Auto-renew: failed to refresh cycle lock after mark failure; relying on pre-extend stamp",
+				"error", stampErr)
+		}
+		claimFinalized = true
 		return
 	}
 	claimFinalized = true

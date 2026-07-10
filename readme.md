@@ -469,15 +469,21 @@ Important restore note:
 
 - live runtime restore is intentionally disabled for safety
 - use `/restore list` to identify the backup you want
-- stop the app and perform the restore offline/manual
+- restore offline with `./setup.sh` option **11** (see below)
 
 ## Backups and Restore
 
-There are two backup paths in this repository.
+There are two backup paths in this repository. Both are restorable offline via `setup.sh` option **11** when the file is present under host `./backups/`.
+
+| Path | Artifact | Contents | Offline restore |
+|------|----------|----------|-----------------|
+| Bot-managed | `db_*.sql.gz` on volume `bot_backups` (`/backups` in container) | PostgreSQL only | Copy into host `./backups/`, then `setup.sh` → Restore (**bot DB-only**) |
+| Full system | `backup_*.tar.gz` in host `./backups/` | DB + `.env` + translations + Caddy (when present) | `setup.sh` → Restore (**full bundle**) |
 
 For VPS-to-VPS migration and rollback sequencing, follow:
 
 - [docs/PRODUCTION_MIGRATION_RUNBOOK.md](docs/PRODUCTION_MIGRATION_RUNBOOK.md)
+- [BACKUP-RUNBOOK.md](BACKUP-RUNBOOK.md)
 
 ### 1. Bot-Managed DB Backups
 
@@ -487,18 +493,20 @@ The compose stack mounts:
 
 - `bot_backups:/backups`
 
-Use admin commands to trigger or inspect these backups.
+Filenames look like `db_YYYYMMDD_HHMMSS.sql.gz`. Use admin commands to trigger or inspect these backups. They are **not** the same as `setup.sh` tar bundles.
+
+To restore a bot dump: copy it to the host `./backups/` directory, ensure `.env` exists, then run `./setup.sh` → option **11** and select the `db_*.sql.gz` entry. That path restores the database only.
 
 ### 2. Full-System Backup via `setup.sh`
 
 The setup wizard can create and restore a broader archive that includes:
 
-- database dump
+- database dump (`db_dump.sql` inside the tar)
 - `.env`
 - `translations`
 - Caddy data
 
-Use the menu options in `setup.sh` for this workflow when doing environment migration or disaster recovery.
+Use option **10 (Backup)** / **11 (Restore)** in `setup.sh` for environment migration or full disaster recovery.
 
 ### Restore Policy
 
@@ -506,11 +514,10 @@ For safety, live runtime restore through the bot process is disabled.
 
 Recommended restore workflow:
 
-1. stop the app
-2. run `/restore list` to identify the backup you want
-3. perform the restore offline/manual
-4. restart the app
-5. verify health endpoints and bot behavior
+1. identify the artifact (`/restore list` for bot dumps, or host `./backups/` for full bundles)
+2. for bot dumps, copy `db_*.sql.gz` from `bot_backups` into host `./backups/`
+3. run `./setup.sh` → option **11 (Restore)** and confirm with `yes`
+4. verify health endpoints and bot behavior
 
 ## Health Checks and Operations
 

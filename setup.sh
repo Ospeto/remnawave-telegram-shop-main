@@ -968,6 +968,103 @@ do_uninstall() {
     fi
 }
 
+# ──── Backup artifact classification (testable pure helpers) ─
+# Full setup.sh bundles: backup_*.tar.gz containing db_dump.sql (+ optional .env/certs).
+# Bot-managed DB-only dumps: db_*.sql.gz from the bot /backups volume (no tar wrapper).
+
+is_bot_db_backup_file() {
+    local name
+    name="$(basename "$1")"
+    [[ "$name" == db_*.sql.gz ]]
+}
+
+is_full_backup_bundle_file() {
+    local name
+    name="$(basename "$1")"
+    # Accept setup.sh backup_*.tar.gz and any other host-side *.tar.gz restore bundle.
+    # Exclude nested caddy archive names if dropped alone into ./backups.
+    [[ "$name" == *.tar.gz ]] && [[ "$name" != caddy_data.tar.gz ]]
+}
+
+# Collect restorable artifacts from host ./backups (full bundles then bot DB dumps).
+# Usage: collect_restorable_backups "/path/to/backups" → prints paths one per line.
+collect_restorable_backups() {
+    local backup_dir="$1"
+    local f base
+    local -a full=()
+    local -a other=()
+    local -a bot=()
+
+    shopt -s nullglob
+    for f in "$backup_dir"/backup_*.tar.gz; do
+        full+=("$f")
+    done
+    for f in "$backup_dir"/*.tar.gz; do
+        base="$(basename "$f")"
+        if [[ "$base" != backup_*.tar.gz ]] && [[ "$base" != caddy_data.tar.gz ]]; then
+            other+=("$f")
+        fi
+    done
+    for f in "$backup_dir"/db_*.sql.gz; do
+        bot+=("$f")
+    done
+    shopt -u nullglob
+
+    for f in "${full[@]}" "${other[@]}" "${bot[@]}"; do
+        printf '%s\n' "$f"
+    done
+}
+
+backup_artifact_label() {
+    local path="$1"
+    if is_bot_db_backup_file "$path"; then
+        echo "bot DB-only"
+    elif is_full_backup_bundle_file "$path"; then
+        echo "full bundle"
+    else
+        echo "unknown"
+    fi
+}
+
+# Wait for Postgres container readiness (shared by full + bot DB restore paths).
+wait_for_db_ready() {
+    local POSTGRES_USER="$1"
+    local retries=0
+    print_info "Waiting for database to be ready..."
+    while ! docker exec remnawave-telegram-shop-db pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; do
+        sleep 2
+        ((retries++))
+        if [[ $retries -gt 30 ]]; then
+            print_error "Database failed to start."
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Import plain SQL file into a clean public schema (destructive).
+restore_sql_into_db() {
+    local sql_file="$1"
+    local POSTGRES_USER POSTGRES_DB
+    POSTGRES_USER="$(env_get "POSTGRES_USER" "postgres")"
+    POSTGRES_DB="$(env_get "POSTGRES_DB" "postgres")"
+
+    if [[ ! -f "$sql_file" ]]; then
+        print_error "SQL dump not found: $sql_file"
+        return 1
+    fi
+
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d db)
+    wait_for_db_ready "$POSTGRES_USER" || return 1
+
+    docker exec remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB" \
+        -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+
+    # shellcheck disable=SC2002
+    cat "$sql_file" | docker exec -i remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
+    print_success "Database restored"
+}
+
 # ──── Backup ────────────────────────────────────────────────
 do_backup() {
     print_arrow "Creating backup..."
@@ -1035,56 +1132,17 @@ do_backup() {
     echo ""
 }
 
-# ──── Restore ───────────────────────────────────────────────
-do_restore() {
-    print_arrow "Restoring from backup..."
-    echo ""
-
+# Restore a full setup.sh bundle (backup_*.tar.gz with db_dump.sql + optional .env/certs).
+restore_full_backup_bundle() {
+    local selected_backup="$1"
     local backup_dir="${SCRIPT_DIR}/backups"
-    if [[ ! -d "$backup_dir" ]]; then
-        print_error "No backups directory found."
-        return
-    fi
+    local temp_restore_dir="${backup_dir}/restore_temp"
 
-    # List backups
-    echo "Available backups:"
-    local backups=("$backup_dir"/*.tar.gz)
-    if [[ ${#backups[@]} -eq 0 ]] || [[ ! -e "${backups[0]}" ]]; then
-        print_info "No backup files found in ./backups"
-        return
-    fi
-
-    local i=1
-    for b in "${backups[@]}"; do
-        echo "  [$i] $(basename "$b")"
-        ((i++))
-    done
-    echo ""
-    echo -ne "  ${ARROW}  Select backup to restore (number): "
-    local choice
-    read -r choice
-
-    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#backups[@]} ]]; then
-        print_error "Invalid selection."
-        return
-    fi
-
-    local selected_backup="${backups[$((choice-1))]}"
-    print_info "Selected: $selected_backup"
-    echo ""
-    echo -ne "  ${ARROW}  ${RED}WARNING: This will overwite current data. Continue? ${DIM}(yes/no)${NC}: "
-    local confirm
-    read -r confirm
-    if [[ "$confirm" != "yes" ]]; then
-        print_info "Restore cancelled."
-        return
-    fi
-
-    # Stop services
+    print_info "Restoring full setup.sh bundle (DB + optional .env/translations/certs)..."
     print_info "Stopping services..."
     (cd "$SCRIPT_DIR" && $COMPOSE_CMD down)
 
-    local temp_restore_dir="${backup_dir}/restore_temp"
+    rm -rf "$temp_restore_dir"
     mkdir -p "$temp_restore_dir"
     tar -xzf "$selected_backup" -C "$temp_restore_dir"
 
@@ -1116,46 +1174,140 @@ do_restore() {
     # Restore Database
     if [[ -f "${temp_restore_dir}/db_dump.sql" ]]; then
         print_info "Restoring Database (this may take a moment)..."
-
-        local POSTGRES_USER POSTGRES_DB
-        POSTGRES_USER="$(env_get "POSTGRES_USER" "postgres")"
-        POSTGRES_DB="$(env_get "POSTGRES_DB" "postgres")"
-
-        # Start DB only
-        $COMPOSE_CMD up -d db
-        
-        # Wait for DB
-        print_info "Waiting for database to be ready..."
-        local retries=0
-        while ! docker exec remnawave-telegram-shop-db pg_isready -U "$POSTGRES_USER" >/dev/null 2>&1; do
-            sleep 2
-            ((retries++))
-            if [[ $retries -gt 30 ]]; then
-                print_error "Database failed to start."
-                return
-            fi
-        done
-
-        # Drop schema/data? pg_dump usually includes drop if requested, but standard > dump.sql might not.
-        # Safest is to drop and recreate DB or schema public.
-        # But for portability, let's just run psql. If dump has IF NOT EXISTS, it might skip.
-        # Usually full restore requires clean DB.
-        
-        # Force clean public schema
-        docker exec remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-
-        # Import
-        cat "${temp_restore_dir}/db_dump.sql" | docker exec -i remnawave-telegram-shop-db psql -U "$POSTGRES_USER" "$POSTGRES_DB"
-        print_success "Database restored"
+        if ! restore_sql_into_db "${temp_restore_dir}/db_dump.sql"; then
+            rm -rf "$temp_restore_dir"
+            return 1
+        fi
+    else
+        print_info "No db_dump.sql in bundle; database left unchanged."
     fi
 
     rm -rf "$temp_restore_dir"
 
     echo ""
     print_info "Starting all services..."
-    $COMPOSE_CMD up -d --build bot db
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build bot db)
     print_success "Restore complete!"
     print_optional_caddy_hint
+}
+
+# Restore a bot-managed DB-only gzip dump (db_*.sql.gz). Does not touch .env/certs/translations.
+restore_bot_db_backup() {
+    local selected_backup="$1"
+    local backup_dir="${SCRIPT_DIR}/backups"
+    local temp_sql="${backup_dir}/restore_temp_bot_db.sql"
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        print_error ".env not found. Bot DB-only dumps do not include config."
+        print_info "Create/restore .env first (or use a full backup_*.tar.gz bundle)."
+        return 1
+    fi
+
+    if ! command -v gzip >/dev/null 2>&1; then
+        print_error "gzip is required to decompress bot db_*.sql.gz backups."
+        return 1
+    fi
+
+    print_info "Restoring bot DB-only backup (database only; .env/certs/translations unchanged)..."
+    print_info "Stopping services..."
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD down)
+
+    print_info "Decompressing $(basename "$selected_backup")..."
+    mkdir -p "$backup_dir"
+    # Decompress to a temp SQL file first so compose/docker never share the gzip stdin stream.
+    if ! gzip -dc "$selected_backup" > "$temp_sql"; then
+        print_error "Failed to decompress bot backup (corrupt gzip?)."
+        rm -f "$temp_sql"
+        return 1
+    fi
+
+    print_info "Restoring Database (this may take a moment)..."
+    if ! restore_sql_into_db "$temp_sql"; then
+        print_error "Bot DB restore failed."
+        rm -f "$temp_sql"
+        return 1
+    fi
+    rm -f "$temp_sql"
+
+    echo ""
+    print_info "Starting all services..."
+    (cd "$SCRIPT_DIR" && $COMPOSE_CMD up -d --build bot db)
+    print_success "Bot DB restore complete!"
+    print_optional_caddy_hint
+}
+
+# ──── Restore ───────────────────────────────────────────────
+do_restore() {
+    print_arrow "Restoring from backup..."
+    echo ""
+
+    local backup_dir="${SCRIPT_DIR}/backups"
+    if [[ ! -d "$backup_dir" ]]; then
+        print_error "No backups directory found at ./backups"
+        print_info "Create ./backups and place either:"
+        print_info "  - full bundle: backup_*.tar.gz (from setup.sh option 10)"
+        print_info "  - bot DB dump: db_*.sql.gz (copy from bot_backups volume / /backups)"
+        return
+    fi
+
+    # List full bundles + bot DB-only dumps (not only *.tar.gz).
+    local backups=()
+    local line
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && backups+=("$line")
+    done < <(collect_restorable_backups "$backup_dir")
+
+    if [[ ${#backups[@]} -eq 0 ]]; then
+        print_info "No restorable backups in ./backups"
+        print_info "Expected: backup_*.tar.gz (full) and/or db_*.sql.gz (bot DB-only)"
+        print_info "Copy bot dumps from the volume, e.g.:"
+        print_info "  docker run --rm -v bot_backups:/from -v \"\${PWD}/backups:/to\" alpine:3.22 sh -c 'cp -v /from/db_*.sql.gz /to/ 2>/dev/null || true'"
+        return
+    fi
+
+    echo "Available backups:"
+    local i=1
+    local b label
+    for b in "${backups[@]}"; do
+        label="$(backup_artifact_label "$b")"
+        echo "  [$i] $(basename "$b")  ${DIM}(${label})${NC}"
+        ((i++))
+    done
+    echo ""
+    echo -ne "  ${ARROW}  Select backup to restore (number): "
+    local choice
+    read -r choice
+
+    if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#backups[@]} ]]; then
+        print_error "Invalid selection."
+        return
+    fi
+
+    local selected_backup="${backups[$((choice-1))]}"
+    print_info "Selected: $selected_backup ($(backup_artifact_label "$selected_backup"))"
+    echo ""
+    if is_bot_db_backup_file "$selected_backup"; then
+        echo -e "  ${INFO}  Bot DB-only restore replaces PostgreSQL data only."
+        echo -e "  ${INFO}  Existing .env, translations, and Caddy certs are left as-is."
+    else
+        echo -e "  ${INFO}  Full bundle restore may overwrite .env, translations, certs, and DB."
+    fi
+    echo -ne "  ${ARROW}  ${RED}WARNING: This will overwrite current data. Continue? ${DIM}(yes/no)${NC}: "
+    local confirm
+    read -r confirm
+    if [[ "$confirm" != "yes" ]]; then
+        print_info "Restore cancelled."
+        return
+    fi
+
+    if is_bot_db_backup_file "$selected_backup"; then
+        restore_bot_db_backup "$selected_backup"
+    elif is_full_backup_bundle_file "$selected_backup"; then
+        restore_full_backup_bundle "$selected_backup"
+    else
+        print_error "Unsupported backup artifact: $(basename "$selected_backup")"
+        return
+    fi
 }
 
 # ──── Edit Pricing Only ─────────────────────────────────────

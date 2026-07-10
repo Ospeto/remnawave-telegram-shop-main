@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,6 +42,35 @@ type WalletTransactionRepository struct {
 
 func NewWalletTransactionRepository(pool *pgxpool.Pool) *WalletTransactionRepository {
 	return &WalletTransactionRepository{pool: pool}
+}
+
+// ExistsByPurchaseIDAndType reports whether a wallet_transaction row already
+// exists for the given purchase and type (best-effort duplicate refund check;
+// not a concurrent-safe idempotency guarantee without atomic DB uniqueness).
+func (r *WalletTransactionRepository) ExistsByPurchaseIDAndType(ctx context.Context, purchaseID int64, txType WalletTransactionType) (bool, error) {
+	buildSelect := sq.Select("1").
+		From("wallet_transaction").
+		Where(sq.Eq{
+			"purchase_id": purchaseID,
+			"type":        txType,
+		}).
+		Limit(1).
+		PlaceholderFormat(sq.Dollar)
+
+	sqlStr, args, err := buildSelect.ToSql()
+	if err != nil {
+		return false, fmt.Errorf("failed to build exists query: %w", err)
+	}
+
+	var dummy int
+	err = r.pool.QueryRow(ctx, sqlStr, args...).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check wallet transaction existence: %w", err)
+	}
+	return true, nil
 }
 
 func (r *WalletTransactionRepository) Create(ctx context.Context, tx *WalletTransaction) (int64, error) {

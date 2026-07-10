@@ -22,12 +22,12 @@ This runbook is for moving the bot + mini app to a new VPS with minimal user imp
    - Telegram admin: `/backup status`, `/backup list`
    - DB check:
      - `select key, value from app_config where key like 'backup_%' order by key;`
-3. Create fresh manual backup artifact.
-   - Telegram admin: `/backup now`
-4. Validate backup integrity on server.
+3. Create fresh manual backup artifacts (prefer both):
+   - Bot DB-only: Telegram admin `/backup now` → `db_*.sql.gz` on volume `bot_backups` (`/backups` in container).
+   - Full system: `./setup.sh` → option **10 (Backup)** → host `./backups/backup_*.tar.gz` (DB + `.env` + certs when present).
+4. Validate bot dump integrity on server.
    - `docker run --rm -v <bot_backups_volume>:/backups alpine:3.22 sh -lc "apk add --no-cache gzip >/dev/null; for f in /backups/db_*.sql.gz; do gzip -t \"$f\" || exit 1; done; echo OK"`
-5. Create full-system backup bundle.
-   - `./setup.sh` -> `Backup`
+5. Prefer the **full** `backup_*.tar.gz` bundle for cutover (includes config/certs). Keep a recent `db_*.sql.gz` as a DB-only fallback.
 6. Freeze operational changes during cutover window.
    - avoid price/provider changes, avoid manual DB edits, avoid deploys
 
@@ -35,8 +35,9 @@ This runbook is for moving the bot + mini app to a new VPS with minimal user imp
 
 1. Prepare new VPS.
    - clone repo
-   - copy backup bundle from old VPS
-   - restore via `./setup.sh` -> `Restore`
+   - copy the **full** `backup_*.tar.gz` from old VPS into `./backups/` (preferred)
+   - restore via `./setup.sh` → option **11 (Restore)** and select the full bundle
+   - **Fallback (DB only):** copy `db_*.sql.gz` from old `bot_backups` into host `./backups/`, ensure `.env` is already correct, then `./setup.sh` → option **11** and select the bot DB-only file (does not restore certs/config)
 2. Start new stack and validate before traffic switch.
    - `docker compose up -d --build`
    - `docker compose ps`
