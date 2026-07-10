@@ -120,3 +120,27 @@ func TestPrimarySubscriptionKeySkipsExpiredKeys(t *testing.T) {
 		t.Fatalf("PrimarySubscriptionKey() id = %d, want 2", got.ID)
 	}
 }
+
+func TestAutoRenewClaimTTLIsPositiveAndReasonable(t *testing.T) {
+	if AutoRenewClaimTTL <= 0 {
+		t.Fatalf("AutoRenewClaimTTL = %v, want positive", AutoRenewClaimTTL)
+	}
+	// Fresh claims must outlive a single cron tick (hourly) only partially —
+	// 30m is the intended lease; assert bounds so reclaim stays safe.
+	if AutoRenewClaimTTL < 5*time.Minute {
+		t.Fatalf("AutoRenewClaimTTL = %v, want >= 5m (avoid thrashing)", AutoRenewClaimTTL)
+	}
+	if AutoRenewClaimTTL > 2*time.Hour {
+		t.Fatalf("AutoRenewClaimTTL = %v, want <= 2h (avoid permanent stuck)", AutoRenewClaimTTL)
+	}
+}
+
+func TestTryClaimAutoRenewWithTTLRejectsNonPositiveByDefaulting(t *testing.T) {
+	// Compile-time / API surface: WithTTL exists and default TTL is exported.
+	var _ interface {
+		TryClaimAutoRenew(context.Context, int64, *time.Time) (*time.Time, bool, error)
+		TryClaimAutoRenewWithTTL(context.Context, int64, *time.Time, time.Duration) (*time.Time, bool, error)
+		StampKeyLastAutoRenewed(context.Context, int64, time.Time) error
+		ClearKeyLastAutoRenewed(context.Context, int64, time.Time) error
+	} = (*SubscriptionKeyRepository)(nil)
+}

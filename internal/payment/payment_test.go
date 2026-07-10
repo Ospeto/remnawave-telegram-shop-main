@@ -255,18 +255,25 @@ func TestTriggersReferralConversion(t *testing.T) {
 	tests := []struct {
 		name        string
 		invoiceType database.InvoiceType
+		amount      float64
 		want        bool
 	}{
-		{name: "mobile banking service purchase", invoiceType: database.InvoiceTypeMobileBanking, want: true},
-		{name: "wallet service purchase", invoiceType: database.InvoiceTypeWalletPayment, want: true},
-		{name: "wallet topup", invoiceType: database.InvoiceTypeWalletTopUp, want: false},
-		{name: "unknown", invoiceType: database.InvoiceType("bogus"), want: false},
+		// A5: zero/free must not mint referral bonuses even for wallet_payment / mobile types.
+		{name: "free zero wallet payment", invoiceType: database.InvoiceTypeWalletPayment, amount: 0, want: false},
+		{name: "free zero mobile banking", invoiceType: database.InvoiceTypeMobileBanking, amount: 0, want: false},
+		{name: "negative amount wallet payment", invoiceType: database.InvoiceTypeWalletPayment, amount: -1, want: false},
+		// Paid paths still convert.
+		{name: "paid mobile banking service purchase", invoiceType: database.InvoiceTypeMobileBanking, amount: 12000, want: true},
+		{name: "paid wallet service purchase", invoiceType: database.InvoiceTypeWalletPayment, amount: 5000, want: true},
+		// Top-up never converts (cash in, not service purchase).
+		{name: "wallet topup", invoiceType: database.InvoiceTypeWalletTopUp, amount: 30000, want: false},
+		{name: "unknown", invoiceType: database.InvoiceType("bogus"), amount: 1000, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := triggersReferralConversion(tt.invoiceType); got != tt.want {
-				t.Fatalf("triggersReferralConversion(%q) = %v, want %v", tt.invoiceType, got, tt.want)
+			if got := triggersReferralConversion(tt.invoiceType, tt.amount); got != tt.want {
+				t.Fatalf("triggersReferralConversion(%q, %v) = %v, want %v", tt.invoiceType, tt.amount, got, tt.want)
 			}
 		})
 	}
@@ -835,6 +842,109 @@ func TestIdempotencyKeyFromContextReturnsNilWhenMissing(t *testing.T) {
 	}
 }
 
+// --- F3 / B1: Idempotency-Key scoped to customer + request body ---
+
+func TestAssertIdempotentResumeAllowed_CrossUserConflict(t *testing.T) {
+	key := uuid.New()
+	existing := &database.Purchase{
+		ID:             100,
+		CustomerID:     1,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		IdempotencyKey: &key,
+	}
+	candidate := &database.Purchase{
+		CustomerID:     2, // different caller
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+	}
+
+	err := assertIdempotentResumeAllowed(existing, candidate)
+	if !errors.Is(err, ErrIdempotencyKeyConflict) {
+		t.Fatalf("assertIdempotentResumeAllowed() error = %v, want ErrIdempotencyKeyConflict", err)
+	}
+}
+
+func TestAssertIdempotentResumeAllowed_SameUserSameBodyOK(t *testing.T) {
+	key := uuid.New()
+	existing := &database.Purchase{
+		ID:             100,
+		CustomerID:     1,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		IdempotencyKey: &key,
+	}
+	candidate := &database.Purchase{
+		CustomerID:     1,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+	}
+
+	if err := assertIdempotentResumeAllowed(existing, candidate); err != nil {
+		t.Fatalf("assertIdempotentResumeAllowed() error = %v, want nil for same-user same body", err)
+	}
+}
+
+func TestAssertIdempotentResumeAllowed_SameUserBodyMismatch(t *testing.T) {
+	key := uuid.New()
+	existing := &database.Purchase{
+		ID:             100,
+		CustomerID:     1,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         12000,
+		Days:           30,
+		TrafficLimitGB: 100,
+		Status:         database.PurchaseStatusPending,
+		IdempotencyKey: &key,
+	}
+	candidate := &database.Purchase{
+		CustomerID:     1,
+		InvoiceType:    database.InvoiceTypeMobileBanking,
+		Amount:         18000, // different plan/amount
+		Days:           30,
+		TrafficLimitGB: 100,
+	}
+
+	err := assertIdempotentResumeAllowed(existing, candidate)
+	if !errors.Is(err, ErrIdempotencyRequestMismatch) {
+		t.Fatalf("assertIdempotentResumeAllowed() error = %v, want ErrIdempotencyRequestMismatch", err)
+	}
+}
+
+func TestIdempotentPurchaseMatchesRequest_RejectsDifferentInvoiceType(t *testing.T) {
+	if idempotentPurchaseMatchesRequest(
+		&database.Purchase{InvoiceType: database.InvoiceTypeMobileBanking, Amount: 1000},
+		&database.Purchase{InvoiceType: database.InvoiceTypeWalletTopUp, Amount: 1000},
+	) {
+		t.Fatal("idempotentPurchaseMatchesRequest() = true for different invoice types, want false")
+	}
+}
+
+func TestIdempotentPurchaseMatchesRequest_WalletTopUpAmountOnly(t *testing.T) {
+	if !idempotentPurchaseMatchesRequest(
+		&database.Purchase{InvoiceType: database.InvoiceTypeWalletTopUp, Amount: 5000},
+		&database.Purchase{InvoiceType: database.InvoiceTypeWalletTopUp, Amount: 5000},
+	) {
+		t.Fatal("idempotentPurchaseMatchesRequest() = false for matching top-up, want true")
+	}
+	if idempotentPurchaseMatchesRequest(
+		&database.Purchase{InvoiceType: database.InvoiceTypeWalletTopUp, Amount: 5000},
+		&database.Purchase{InvoiceType: database.InvoiceTypeWalletTopUp, Amount: 9000},
+	) {
+		t.Fatal("idempotentPurchaseMatchesRequest() = true for different top-up amount, want false")
+	}
+}
+
 func TestIsUniqueViolation(t *testing.T) {
 	if !isUniqueViolation(&pgconn.PgError{Code: "23505"}) {
 		t.Fatal("expected unique violation to be detected")
@@ -1024,5 +1134,312 @@ func TestCanReuseAwaitingVerificationPurchaseRejectsDifferentPromoReservation(t 
 		PromoCodeID:    &candidatePromoID,
 	}) {
 		t.Fatal("canReuseAwaitingVerificationPurchase() different promo reservation = true, want false")
+	}
+}
+
+// --- F1 / A2: mobile receipt txn uniqueness after ProcessPurchaseById errors ---
+//
+// applyMobileTxnCleanupAfterProcessError is the VerifyMobilePayment cleanup seam:
+// it either calls DeleteByTransactionID (via deleteFn) or retains the row.
+
+func TestApplyMobileTxnCleanupAfterProcessError_HardFailureDeletes(t *testing.T) {
+	var deleteCalls int
+	err := applyMobileTxnCleanupAfterProcessError(
+		errors.New("remnawave unavailable before mutation"),
+		func() error {
+			deleteCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("applyMobileTxnCleanupAfterProcessError() error = %v", err)
+	}
+	if deleteCalls != 1 {
+		t.Fatalf("DeleteByTransactionID calls = %d, want 1 for safe hard failure", deleteCalls)
+	}
+}
+
+func TestApplyMobileTxnCleanupAfterProcessError_FinalizationPendingRetains(t *testing.T) {
+	var deleteCalls int
+	err := applyMobileTxnCleanupAfterProcessError(
+		ErrPurchaseFinalizationPending,
+		func() error {
+			deleteCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("applyMobileTxnCleanupAfterProcessError() error = %v", err)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("DeleteByTransactionID calls = %d, want 0 for finalization-pending", deleteCalls)
+	}
+
+	// Wrapped form (as returned through fmt.Errorf %w chains).
+	err = applyMobileTxnCleanupAfterProcessError(
+		fmt.Errorf("wrap: %w", ErrPurchaseFinalizationPending),
+		func() error {
+			deleteCalls++
+			return nil
+		},
+	)
+	if err != nil || deleteCalls != 0 {
+		t.Fatalf("wrapped finalization-pending: err=%v deleteCalls=%d, want nil/0", err, deleteCalls)
+	}
+}
+
+func TestApplyMobileTxnCleanupAfterProcessError_InFlightRetains(t *testing.T) {
+	var deleteCalls int
+	err := applyMobileTxnCleanupAfterProcessError(
+		ErrPurchaseInFlight,
+		func() error {
+			deleteCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("applyMobileTxnCleanupAfterProcessError() error = %v", err)
+	}
+	if deleteCalls != 0 {
+		t.Fatalf("DeleteByTransactionID calls = %d, want 0 for in-flight", deleteCalls)
+	}
+}
+
+func TestApplyMobileTxnCleanupAfterProcessError_TopUpMarkAsPaidFailRetains(t *testing.T) {
+	// A4: settle commits balance/log then MarkAsPaid fails → finalization-pending.
+	// Same receipt must not be freed for a second credit.
+	var deleteCalls int
+	_ = applyMobileTxnCleanupAfterProcessError(ErrPurchaseFinalizationPending, func() error {
+		deleteCalls++
+		return nil
+	})
+	if deleteCalls != 0 {
+		t.Fatalf("top-up MarkAsPaid-fail path must retain txn uniqueness, deleteCalls=%d", deleteCalls)
+	}
+}
+
+func TestApplyMobileTxnCleanupAfterProcessError_PropagatesDeleteError(t *testing.T) {
+	want := errors.New("delete failed")
+	err := applyMobileTxnCleanupAfterProcessError(errors.New("hard fail"), func() error {
+		return want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("applyMobileTxnCleanupAfterProcessError() error = %v, want delete error", err)
+	}
+}
+
+// --- F1 / A1: shared wallet process-error action path (both create paths) ---
+
+func TestApplyWalletProcessErrorActions_InFlightNoRefundCancel(t *testing.T) {
+	// Shared by createWalletPurchase and CreatePurchaseWithExtend.
+	var cleanupCalls int
+	action, treatOK, propErr := applyWalletProcessErrorActions(
+		ErrPurchaseInFlight,
+		true, // created — still must NOT refund/cancel
+		func() error {
+			cleanupCalls++
+			return nil
+		},
+	)
+	if action != walletProcessPropagateOnly {
+		t.Fatalf("action = %v, want propagate-only", action)
+	}
+	if treatOK {
+		t.Fatal("InFlight must not be treated as finalization success")
+	}
+	if !errors.Is(propErr, ErrPurchaseInFlight) {
+		t.Fatalf("propagate err = %v, want ErrPurchaseInFlight", propErr)
+	}
+	if cleanupCalls != 0 {
+		t.Fatalf("refund/cancel calls = %d, want 0 for InFlight", cleanupCalls)
+	}
+
+	// Wrapped claim-lost
+	cleanupCalls = 0
+	action, _, propErr = applyWalletProcessErrorActions(
+		fmt.Errorf("claim lost: %w", ErrPurchaseInFlight),
+		true,
+		func() error {
+			cleanupCalls++
+			return nil
+		},
+	)
+	if action != walletProcessPropagateOnly || !errors.Is(propErr, ErrPurchaseInFlight) || cleanupCalls != 0 {
+		t.Fatalf("wrapped InFlight: action=%v propErr=%v cleanupCalls=%d", action, propErr, cleanupCalls)
+	}
+}
+
+func TestApplyWalletProcessErrorActions_HardFailureRefundCancelWhenCreated(t *testing.T) {
+	hardErr := errors.New("remnawave create failed before mutation")
+	var cleanupCalls int
+	action, treatOK, propErr := applyWalletProcessErrorActions(
+		hardErr,
+		true,
+		func() error {
+			cleanupCalls++
+			return nil
+		},
+	)
+	if action != walletProcessRefundAndCancel {
+		t.Fatalf("action = %v, want refund-and-cancel", action)
+	}
+	if treatOK {
+		t.Fatal("hard failure must not be treated as success")
+	}
+	if !errors.Is(propErr, hardErr) {
+		t.Fatalf("propagate err = %v, want hardErr", propErr)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("refund/cancel calls = %d, want 1 for hard failure when created", cleanupCalls)
+	}
+}
+
+func TestApplyWalletProcessErrorActions_HardFailureNoCleanupWhenNotCreated(t *testing.T) {
+	// Idempotent resume of existing purchase: do not refund on process error.
+	var cleanupCalls int
+	action, _, propErr := applyWalletProcessErrorActions(
+		errors.New("hard"),
+		false,
+		func() error {
+			cleanupCalls++
+			return nil
+		},
+	)
+	if action != walletProcessPropagateOnly || propErr == nil || cleanupCalls != 0 {
+		t.Fatalf("!created hard fail: action=%v propErr=%v cleanupCalls=%d", action, propErr, cleanupCalls)
+	}
+}
+
+func TestApplyWalletProcessErrorActions_FinalizationPendingTreatAsSuccess(t *testing.T) {
+	var cleanupCalls int
+	action, treatOK, propErr := applyWalletProcessErrorActions(
+		ErrPurchaseFinalizationPending,
+		true,
+		func() error {
+			cleanupCalls++
+			return nil
+		},
+	)
+	if action != walletProcessTreatAsSuccess || !treatOK || propErr != nil || cleanupCalls != 0 {
+		t.Fatalf("finalization-pending: action=%v treatOK=%v propErr=%v cleanupCalls=%d",
+			action, treatOK, propErr, cleanupCalls)
+	}
+}
+
+// Cleanup failures wrap the original process error with %w. Callers must not use
+// errors.Is(propErr, processErr) to decide which error to return — that swallows
+// the refund failure (pre-F1 surfaced refund failure; F1 regression).
+func TestWalletPurchaseProcessErrorResult_CleanupFailureSurfacesRefundError(t *testing.T) {
+	processErr := errors.New("remnawave create failed before mutation")
+	refundErr := errors.New("balance update failed")
+	// Same wrapping shape as createWalletPurchase / CreatePurchaseWithExtend cleanupFn.
+	cleanupErr := fmt.Errorf("failed to process wallet purchase: %w (refund failed: %v)", processErr, refundErr)
+
+	action, treatOK, propErr := applyWalletProcessErrorActions(processErr, true, func() error {
+		return cleanupErr
+	})
+	if treatOK || action != walletProcessRefundAndCancel {
+		t.Fatalf("action=%v treatOK=%v, want refund-and-cancel / false", action, treatOK)
+	}
+	if propErr == nil || propErr.Error() != cleanupErr.Error() {
+		t.Fatalf("applyWalletProcessErrorActions propErr = %v, want cleanupErr", propErr)
+	}
+	// Sanity: buggy errors.Is check would treat cleanup as "same as process".
+	if !errors.Is(propErr, processErr) {
+		t.Fatal("expected cleanupErr to wrap processErr (reproduces the swallow bug condition)")
+	}
+
+	id, retErr := walletPurchaseProcessErrorResult(42, processErr, propErr, action, treatOK)
+	if id != 0 {
+		t.Fatalf("purchase id = %d, want 0 after cleanup attempt", id)
+	}
+	if retErr == nil {
+		t.Fatal("expected cleanup/refund failure to be returned")
+	}
+	// Must surface cleanup failure, not bare process error.
+	if retErr == processErr {
+		t.Fatal("cleanup failure was swallowed; returned bare process error")
+	}
+	if !strings.Contains(retErr.Error(), "refund failed") {
+		t.Fatalf("returned error %q must include refund failure detail", retErr.Error())
+	}
+	if !errors.Is(retErr, processErr) {
+		// Still wraps process err for diagnostics, but is the cleanup error value.
+		t.Fatalf("cleanup error should still wrap process err for context: %v", retErr)
+	}
+}
+
+func TestWalletPurchaseProcessErrorResult_CleanupSuccessReturnsProcessError(t *testing.T) {
+	processErr := errors.New("remnawave create failed before mutation")
+	action, treatOK, propErr := applyWalletProcessErrorActions(processErr, true, func() error {
+		return nil
+	})
+	id, retErr := walletPurchaseProcessErrorResult(99, processErr, propErr, action, treatOK)
+	if id != 0 {
+		t.Fatalf("purchase id = %d, want 0 after successful refund/cancel", id)
+	}
+	if !errors.Is(retErr, processErr) {
+		t.Fatalf("retErr = %v, want original process error after successful cleanup", retErr)
+	}
+	if strings.Contains(fmt.Sprint(retErr), "refund failed") {
+		t.Fatalf("successful cleanup must not invent refund failure: %v", retErr)
+	}
+}
+
+func TestWalletPurchaseProcessErrorResult_InFlightPropagatesWithoutClearingID(t *testing.T) {
+	action, treatOK, propErr := applyWalletProcessErrorActions(ErrPurchaseInFlight, true, func() error {
+		t.Fatal("cleanup must not run")
+		return nil
+	})
+	id, retErr := walletPurchaseProcessErrorResult(77, ErrPurchaseInFlight, propErr, action, treatOK)
+	if treatOK || id != 77 || !errors.Is(retErr, ErrPurchaseInFlight) {
+		t.Fatalf("InFlight: id=%d treatOK=%v retErr=%v", id, treatOK, retErr)
+	}
+}
+
+func TestWalletPurchaseProcessErrorResult_FinalizationPendingTreatAsSuccess(t *testing.T) {
+	action, treatOK, propErr := applyWalletProcessErrorActions(ErrPurchaseFinalizationPending, true, nil)
+	id, retErr := walletPurchaseProcessErrorResult(55, ErrPurchaseFinalizationPending, propErr, action, treatOK)
+	if !treatOK || id != 55 || retErr != nil {
+		t.Fatalf("finalization-pending: id=%d treatOK=%v retErr=%v", id, treatOK, retErr)
+	}
+}
+
+// --- F1 / A7: sequential best-effort duplicate refund guard ---
+//
+// Concurrent double-refund is NOT prevented without atomic DB uniqueness on
+// (purchase_id, type=refund). This guard only covers sequential cleanup retries.
+
+func TestApplyWalletRefundIfNeeded_SequentialNoDoubleCredit(t *testing.T) {
+	credits := 0
+	credit := func() error {
+		credits++
+		return nil
+	}
+
+	// First cleanup: no prior refund log → credit once.
+	skipped, err := applyWalletRefundIfNeeded(false, credit)
+	if err != nil || skipped {
+		t.Fatalf("first refund: skipped=%v err=%v, want false/nil", skipped, err)
+	}
+	if credits != 1 {
+		t.Fatalf("credits after first = %d, want 1", credits)
+	}
+
+	// Second cleanup: refund already logged → skip credit.
+	skipped, err = applyWalletRefundIfNeeded(true, credit)
+	if err != nil || !skipped {
+		t.Fatalf("second refund: skipped=%v err=%v, want true/nil", skipped, err)
+	}
+	if credits != 1 {
+		t.Fatalf("credits after second = %d, want 1 (no double credit)", credits)
+	}
+}
+
+func TestApplyWalletRefundIfNeeded_PropagatesCreditError(t *testing.T) {
+	want := errors.New("balance update failed")
+	skipped, err := applyWalletRefundIfNeeded(false, func() error { return want })
+	if skipped || !errors.Is(err, want) {
+		t.Fatalf("skipped=%v err=%v, want false/%v", skipped, err, want)
 	}
 }

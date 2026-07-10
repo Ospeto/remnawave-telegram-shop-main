@@ -202,6 +202,57 @@ func TestWriteSanitizedErrorHidesWrappedDetails(t *testing.T) {
 	}
 }
 
+// --- F3 / B1: CreatePurchase idempotency error mapping + field-update gate ---
+
+func TestMapCreatePurchaseIdempotencyError_CrossUserForbidden(t *testing.T) {
+	status, msg, ok := mapCreatePurchaseIdempotencyError(payment.ErrIdempotencyKeyConflict)
+	if !ok {
+		t.Fatal("mapCreatePurchaseIdempotencyError() ok = false, want true for key conflict")
+	}
+	if status != http.StatusForbidden && status != http.StatusConflict {
+		t.Fatalf("mapCreatePurchaseIdempotencyError() status = %d, want 403 or 409", status)
+	}
+	if strings.Contains(strings.ToLower(msg), "purchase") && strings.Contains(msg, "100") {
+		t.Fatalf("mapCreatePurchaseIdempotencyError() message leaked purchase id: %q", msg)
+	}
+	if msg == "" {
+		t.Fatal("mapCreatePurchaseIdempotencyError() message empty")
+	}
+}
+
+func TestMapCreatePurchaseIdempotencyError_BodyMismatchConflict(t *testing.T) {
+	status, msg, ok := mapCreatePurchaseIdempotencyError(payment.ErrIdempotencyRequestMismatch)
+	if !ok {
+		t.Fatal("mapCreatePurchaseIdempotencyError() ok = false, want true for body mismatch")
+	}
+	if status != http.StatusConflict {
+		t.Fatalf("mapCreatePurchaseIdempotencyError() status = %d, want 409", status)
+	}
+	if msg == "" {
+		t.Fatal("mapCreatePurchaseIdempotencyError() message empty")
+	}
+}
+
+func TestMapCreatePurchaseIdempotencyError_OtherErrorNotMapped(t *testing.T) {
+	_, _, ok := mapCreatePurchaseIdempotencyError(errors.New("db down"))
+	if ok {
+		t.Fatal("mapCreatePurchaseIdempotencyError() ok = true for unrelated error, want false")
+	}
+}
+
+func TestShouldUpdatePurchaseFieldsAfterCreate_SkipsIdempotentResume(t *testing.T) {
+	// On idempotent resume, plan_label/payment_phone must not rewrite the original purchase.
+	if shouldUpdatePurchaseFieldsAfterCreate(&database.Purchase{ID: 1, PlanLabel: "Pro 30d"}) {
+		t.Fatal("shouldUpdatePurchaseFieldsAfterCreate(labeled) = true, want false for resumed purchase")
+	}
+	if !shouldUpdatePurchaseFieldsAfterCreate(&database.Purchase{ID: 2, PlanLabel: ""}) {
+		t.Fatal("shouldUpdatePurchaseFieldsAfterCreate(unlabeled) = false, want true for newly created purchase")
+	}
+	if shouldUpdatePurchaseFieldsAfterCreate(nil) {
+		t.Fatal("shouldUpdatePurchaseFieldsAfterCreate(nil) = true, want false")
+	}
+}
+
 func captureSlogOutput(t *testing.T) *bytes.Buffer {
 	t.Helper()
 

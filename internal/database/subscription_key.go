@@ -343,11 +343,28 @@ func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Contex
 	return keys, rows.Err()
 }
 
+// AutoRenewClaimTTL is the lease duration for auto_renew_claimed_at.
+// Stale pre-side-effect claims older than this may be reclaimed by another
+// worker. Post-side-effect safety relies on last_auto_renewed_at cycle locks
+// (service stamps before extend), not on never reclaiming.
+const AutoRenewClaimTTL = 30 * time.Minute
+
 // TryClaimAutoRenew atomically claims a key for processing by setting
 // auto_renew_claimed_at=NOW() only if it still has the expected successful
-// renewal marker and is not already claimed.
-// Returns (claimedAt, true, nil) when claim succeeds.
+// renewal marker and is either unclaimed or has a stale (TTL-expired) claim.
+// Fresh claims are never stolen. Returns (claimedAt, true, nil) on success.
 func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error) {
+	return r.TryClaimAutoRenewWithTTL(ctx, keyID, expectedLast, AutoRenewClaimTTL)
+}
+
+// TryClaimAutoRenewWithTTL is like TryClaimAutoRenew but accepts an explicit TTL
+// (for tests and shared constants).
+func (r *SubscriptionKeyRepository) TryClaimAutoRenewWithTTL(ctx context.Context, keyID int64, expectedLast *time.Time, claimTTL time.Duration) (*time.Time, bool, error) {
+	if claimTTL <= 0 {
+		claimTTL = AutoRenewClaimTTL
+	}
+	// Pass seconds as float so Postgres can build an interval without driver-specific types.
+	ttlSeconds := claimTTL.Seconds()
 	var claimedAt time.Time
 	err := r.pool.QueryRow(ctx, `
 		UPDATE subscription_key
@@ -356,9 +373,12 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID
 		  AND auto_renew = TRUE
 		  AND status = 'active'
 		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
-		  AND auto_renew_claimed_at IS NULL
+		  AND (
+		        auto_renew_claimed_at IS NULL
+		        OR auto_renew_claimed_at <= NOW() - make_interval(secs => $3::double precision)
+		      )
 		RETURNING auto_renew_claimed_at
-	`, keyID, expectedLast).Scan(&claimedAt)
+	`, keyID, expectedLast, ttlSeconds).Scan(&claimedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil
@@ -443,6 +463,50 @@ func (r *SubscriptionKeyRepository) MarkKeyAutoRenewed(ctx context.Context, keyI
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("key %d auto-renew claim was lost before finalization", keyID)
+	}
+	return nil
+}
+
+// StampKeyLastAutoRenewed sets last_auto_renewed_at while keeping the claim held.
+// Used as a durable cycle lock before side effects (and as a best-effort refresh
+// if MarkKeyAutoRenewed fails after extend) so TTL reclaim cannot double-charge.
+//
+// Residual (intentional, money-safe): if the process dies after this stamp and
+// before ExtendKeyWithBalance completes, later auto-renew runs skip the key via
+// the cycle guard until ops clears last_auto_renewed_at. Prefer stuck/manual
+// recovery over a second charge.
+func (r *SubscriptionKeyRepository) StampKeyLastAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE subscription_key
+		 SET last_auto_renewed_at = NOW()
+		 WHERE id = $1 AND auto_renew_claimed_at = $2`,
+		keyID, claimedAt)
+	if err != nil {
+		return fmt.Errorf("failed to stamp key last auto renewed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("key %d auto-renew claim was lost before cycle stamp", keyID)
+	}
+	return nil
+}
+
+// ClearKeyLastAutoRenewed sets last_auto_renewed_at = NULL while the worker still
+// owns the claim. Used only to undo an optimistic pre-extend cycle lock after
+// extend fails so the same cycle remains retryable.
+//
+// This does not restore any prior last_auto_renewed_at history — it clears the
+// optimistic lock only. Callers must still own auto_renew_claimed_at = claimedAt.
+func (r *SubscriptionKeyRepository) ClearKeyLastAutoRenewed(ctx context.Context, keyID int64, claimedAt time.Time) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE subscription_key
+		 SET last_auto_renewed_at = NULL
+		 WHERE id = $1 AND auto_renew_claimed_at = $2`,
+		keyID, claimedAt)
+	if err != nil {
+		return fmt.Errorf("failed to clear key last auto renewed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("key %d auto-renew claim was lost before cycle clear", keyID)
 	}
 	return nil
 }

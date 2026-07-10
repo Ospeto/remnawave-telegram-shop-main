@@ -153,6 +153,14 @@ func (f *fakeAutoRenewKeyRepo) MarkKeyAutoRenewed(_ context.Context, keyID int64
 	return nil
 }
 
+func (f *fakeAutoRenewKeyRepo) StampKeyLastAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	return nil
+}
+
+func (f *fakeAutoRenewKeyRepo) ClearKeyLastAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	return nil
+}
+
 func (f *fakeAutoRenewKeyRepo) MarkKeyAutoRenewNotified(_ context.Context, keyID int64) error {
 	f.markedNotified = append(f.markedNotified, keyID)
 	return nil
@@ -178,6 +186,7 @@ type walletExtendCall struct {
 
 type fakeAutoRenewWallet struct {
 	calls []walletExtendCall
+	err   error
 }
 
 func (f *fakeAutoRenewWallet) ExtendKeyWithBalance(_ context.Context, keyID int64, customerID int64, planPrice float64, days int, trafficGB int) error {
@@ -188,7 +197,7 @@ func (f *fakeAutoRenewWallet) ExtendKeyWithBalance(_ context.Context, keyID int6
 		days:       days,
 		trafficGB:  trafficGB,
 	})
-	return nil
+	return f.err
 }
 
 type fakeTelegramClient struct {
@@ -396,4 +405,620 @@ func TestJobRunWarnsAndSkipsWhenExactRenewalPlanIsUnknown(t *testing.T) {
 
 func intPtr(v int) *int {
 	return &v
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
+// statefulClaimRepo simulates DB claim lease + TTL reclaim + last_auto_renewed_at.
+type statefulClaimRepo struct {
+	key          database.SubscriptionKey
+	now          time.Time
+	claimTTL     time.Duration
+	findAfter    time.Time
+	findBefore   time.Time
+	findCalls    int
+	claimCalls   int
+	releaseCalls int
+	markCalls    int
+	stampCalls   int
+	markErr      error
+	// stampErr fails StampKeyLastAutoRenewed only when last_auto_renewed_at is
+	// already set (post-extend refresh path). Pre-extend stamp still succeeds.
+	// Set stampFailAlways to fail every stamp (including pre-extend abort path).
+	stampErr         error
+	stampFailAlways  bool
+	// When markFailsNoStamp is true, MarkKeyAutoRenewed returns markErr and does not finalize.
+	markFailsNoStamp bool
+}
+
+func (f *statefulClaimRepo) FindExpiringAutoRenewKeys(_ context.Context, after time.Time, before time.Time) ([]database.SubscriptionKey, error) {
+	f.findCalls++
+	f.findAfter = after
+	f.findBefore = before
+	k := f.key
+	return []database.SubscriptionKey{k}, nil
+}
+
+func (f *statefulClaimRepo) TryClaimAutoRenew(_ context.Context, keyID int64, expectedLast *time.Time) (*time.Time, bool, error) {
+	f.claimCalls++
+	if keyID != f.key.ID {
+		return nil, false, nil
+	}
+	if !autoRenewLastMatches(f.key.LastAutoRenewedAt, expectedLast) {
+		return nil, false, nil
+	}
+	if f.key.AutoRenewClaimedAt != nil {
+		if !isAutoRenewClaimExpired(*f.key.AutoRenewClaimedAt, f.now, f.claimTTL) {
+			return nil, false, nil // fresh claim — not stolen
+		}
+		// stale claim — reclaim
+	}
+	claimedAt := f.now
+	f.key.AutoRenewClaimedAt = &claimedAt
+	return &claimedAt, true, nil
+}
+
+func (f *statefulClaimRepo) ReleaseAutoRenewClaim(_ context.Context, keyID int64, claimedAt time.Time) error {
+	f.releaseCalls++
+	if f.key.AutoRenewClaimedAt != nil && f.key.AutoRenewClaimedAt.Equal(claimedAt) {
+		f.key.AutoRenewClaimedAt = nil
+	}
+	return nil
+}
+
+func (f *statefulClaimRepo) MarkKeyAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	f.markCalls++
+	if f.markFailsNoStamp {
+		return f.markErr
+	}
+	if f.markErr != nil {
+		return f.markErr
+	}
+	if f.key.AutoRenewClaimedAt == nil || !f.key.AutoRenewClaimedAt.Equal(claimedAt) {
+		return errors.New("claim lost before finalization")
+	}
+	stamped := f.now
+	f.key.LastAutoRenewedAt = &stamped
+	f.key.AutoRenewClaimedAt = nil
+	f.key.AutoRenewNotifiedAt = nil
+	return nil
+}
+
+func (f *statefulClaimRepo) StampKeyLastAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	f.stampCalls++
+	if f.key.AutoRenewClaimedAt == nil || !f.key.AutoRenewClaimedAt.Equal(claimedAt) {
+		return errors.New("claim lost before cycle stamp")
+	}
+	if f.stampFailAlways && f.stampErr != nil {
+		return f.stampErr
+	}
+	// Refresh-path failure: last already set (post-extend dual-fail simulation).
+	if f.stampErr != nil && f.key.LastAutoRenewedAt != nil {
+		return f.stampErr
+	}
+	stamped := f.now
+	f.key.LastAutoRenewedAt = &stamped
+	// Keep claim held (post-side-effect guard).
+	return nil
+}
+
+func (f *statefulClaimRepo) ClearKeyLastAutoRenewed(_ context.Context, keyID int64, claimedAt time.Time) error {
+	if f.key.AutoRenewClaimedAt == nil || !f.key.AutoRenewClaimedAt.Equal(claimedAt) {
+		return errors.New("claim lost before cycle clear")
+	}
+	f.key.LastAutoRenewedAt = nil
+	return nil
+}
+
+func (f *statefulClaimRepo) MarkKeyAutoRenewNotified(_ context.Context, keyID int64) error {
+	return nil
+}
+
+func autoRenewLastMatches(have, expected *time.Time) bool {
+	if have == nil && expected == nil {
+		return true
+	}
+	if have == nil || expected == nil {
+		return false
+	}
+	return have.Equal(*expected)
+}
+
+func TestIsAutoRenewClaimExpired(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	ttl := 30 * time.Minute
+
+	fresh := now.Add(-5 * time.Minute)
+	if isAutoRenewClaimExpired(fresh, now, ttl) {
+		t.Fatal("fresh claim must not be expired")
+	}
+	stale := now.Add(-ttl - time.Minute)
+	if !isAutoRenewClaimExpired(stale, now, ttl) {
+		t.Fatal("stale claim must be expired")
+	}
+}
+
+func TestTryClaimSemantics_FreshClaimNotStolen(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	claimedAt := now.Add(-5 * time.Minute)
+	repo := &statefulClaimRepo{
+		now:      now,
+		claimTTL: autoRenewClaimTTL,
+		key: database.SubscriptionKey{
+			ID:                 1,
+			CustomerID:         10,
+			AutoRenewClaimedAt: &claimedAt,
+		},
+	}
+	_, ok, err := repo.TryClaimAutoRenew(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatalf("TryClaimAutoRenew() error = %v", err)
+	}
+	if ok {
+		t.Fatal("fresh claim must not be stolen by second worker")
+	}
+}
+
+func TestTryClaimSemantics_StalePreSideEffectClaimReclaimable(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	staleClaim := now.Add(-autoRenewClaimTTL - time.Minute)
+	repo := &statefulClaimRepo{
+		now:      now,
+		claimTTL: autoRenewClaimTTL,
+		key: database.SubscriptionKey{
+			ID:                 2,
+			CustomerID:         10,
+			AutoRenewClaimedAt: &staleClaim,
+			LastAutoRenewedAt:  nil,
+		},
+	}
+	got, ok, err := repo.TryClaimAutoRenew(context.Background(), 2, nil)
+	if err != nil {
+		t.Fatalf("TryClaimAutoRenew() error = %v", err)
+	}
+	if !ok || got == nil {
+		t.Fatal("stale pre-side-effect claim must be reclaimable")
+	}
+	if !got.Equal(now) {
+		t.Fatalf("reclaimed claimedAt = %v, want %v", got, now)
+	}
+}
+
+func TestJobRun_PostSideEffectMarkFailureDoesNotDuplicateAfterTTLReclaim(t *testing.T) {
+	// D2#3 / M1: extend succeeds, MarkKeyAutoRenewed fails, claim held; after TTL reclaim
+	// the cycle/last guard must prevent a second charge.
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	// Short plan still selectable after extend (expire stays within 3d window).
+	expireAt := now.Add(2 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:              now,
+		claimTTL:         autoRenewClaimTTL,
+		markFailsNoStamp: true,
+		markErr:          errors.New("db mark failed"),
+		key: database.SubscriptionKey{
+			ID:                3,
+			CustomerID:        42,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 9001, Language: "en", Balance: 15000},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	plan := &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}
+
+	job := &Job{
+		subKeyRepo:    repo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn:  func(database.SubscriptionKey) (*config.Plan, error) { return plan, nil },
+	}
+
+	// Run 1: claim + extend + mark fails (must not release claim).
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("first run Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+	if repo.releaseCalls != 0 {
+		t.Fatalf("post-side-effect mark failure must not release claim; releaseCalls=%d", repo.releaseCalls)
+	}
+	if repo.key.AutoRenewClaimedAt == nil {
+		t.Fatal("claim must remain held after post-side-effect mark failure")
+	}
+
+	// Simulate successful extend updating local expiry (short plan still in window).
+	newExpire := now.Add(26 * time.Hour)
+	repo.key.ExpireAt = &newExpire
+
+	// Run 2: still within TTL — fresh claim not stolen, no second charge.
+	repo.now = now.Add(5 * time.Minute)
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("within-TTL re-run Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+
+	// After failed mark, production must have stamped last_auto_renewed_at.
+	if repo.key.LastAutoRenewedAt == nil {
+		t.Fatal("post-side-effect path must stamp last_auto_renewed_at for cycle guard")
+	}
+
+	// Run 3: past TTL — reclaim allowed, but cycle guard must not duplicate charge.
+	repo.now = now.Add(autoRenewClaimTTL + time.Minute)
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("after TTL reclaim Extend calls = %d, want 1 (no duplicate)", len(walletSvc.calls))
+	}
+}
+
+func TestJobRun_PostSideEffectMarkAndStampBothFailDoesNotChargeAfterTTL(t *testing.T) {
+	// Oracle blocker: extend succeeds, Mark fails, post-extend Stamp refresh fails.
+	// Pre-extend durable cycle lock must still prevent a second charge after TTL.
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(2 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:              now,
+		claimTTL:         autoRenewClaimTTL,
+		markFailsNoStamp: true,
+		markErr:          errors.New("db mark failed"),
+		stampErr:         errors.New("db stamp refresh failed"),
+		key: database.SubscriptionKey{
+			ID:                5,
+			CustomerID:        42,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo: repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 9001, Language: "en", Balance: 15000},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	// Run 1: pre-extend stamp + extend + mark fail + post-stamp refresh fail.
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("first run Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+	if repo.releaseCalls != 0 {
+		t.Fatalf("post-side-effect path must not release claim; releaseCalls=%d", repo.releaseCalls)
+	}
+	if repo.key.LastAutoRenewedAt == nil {
+		t.Fatal("pre-extend cycle lock must leave last_auto_renewed_at set even if mark+refresh stamp fail")
+	}
+
+	// Simulate short-plan still selectable after extend.
+	newExpire := now.Add(26 * time.Hour)
+	repo.key.ExpireAt = &newExpire
+
+	// After TTL: cycle lock must block second charge (not claim-hold alone).
+	repo.now = now.Add(autoRenewClaimTTL + time.Minute)
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("after TTL with mark+stamp fail Extend calls = %d, want 1 (no duplicate)", len(walletSvc.calls))
+	}
+}
+
+// TestJobRun_CrashAfterPreExtendStampIsMoneySafeStuck documents the intentional
+// residual: process death after StampKeyLastAutoRenewed succeeds but before
+// ExtendKeyWithBalance starts/completes leaves last_auto_renewed_at set with no
+// charge. Later TTL/catch-up runs skip (alreadyRenewedThisCycle) instead of
+// charging. Money-safe; requires manual recovery (clear last_auto_renewed_at).
+// Not a bug to "fix" with automatic recharge — oracle-approved contract.
+func TestJobRun_CrashAfterPreExtendStampIsMoneySafeStuck(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(2 * time.Hour)
+	// Simulate durable state after crash: cycle lock written, claim may still be
+	// held or TTL-expired; no successful extend occurred (wallet never charged).
+	stampedAt := now
+	staleClaim := now.Add(-autoRenewClaimTTL - time.Minute) // past TTL → reclaimable if lock absent
+	repo := &statefulClaimRepo{
+		now:      now.Add(autoRenewClaimTTL + time.Minute),
+		claimTTL: autoRenewClaimTTL,
+		key: database.SubscriptionKey{
+			ID:                 8,
+			CustomerID:         42,
+			ExpireAt:           &expireAt,
+			TrafficLimitGB:     0,
+			AutoRenewPlanDays:  intPtr(1),
+			LastAutoRenewedAt:  &stampedAt, // pre-extend lock survived crash
+			AutoRenewClaimedAt: &staleClaim,
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo: repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 15000},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	// Catch-up/TTL re-run: key still in selection window, but cycle lock must skip.
+	if !alreadyRenewedThisCycle(repo.key.LastAutoRenewedAt, repo.key.ExpireAt) {
+		t.Fatal("contract: pre-extend stamp without charge must still count as renewed this cycle")
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 0 {
+		t.Fatalf("money-safe stuck residual: Extend calls = %d, want 0 (skip, not recharge)", len(walletSvc.calls))
+	}
+	if repo.claimCalls != 0 {
+		t.Fatalf("cycle guard must skip before claim; claimCalls=%d", repo.claimCalls)
+	}
+	// Manual recovery path remains: clearing last_auto_renewed_at would allow retry
+	// (not exercised here — ops/manual only; automatic recharge is forbidden).
+}
+
+func TestJobRun_PreExtendStampFailureDoesNotCharge(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(2 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:             now,
+		claimTTL:        autoRenewClaimTTL,
+		stampFailAlways: true,
+		stampErr:        errors.New("db stamp failed"),
+		key: database.SubscriptionKey{
+			ID:                6,
+			CustomerID:        42,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo: repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 15000},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 0 {
+		t.Fatalf("Extend calls = %d, want 0 when pre-extend stamp fails", len(walletSvc.calls))
+	}
+	// Pre-side-effect abort should release claim for retry.
+	if repo.releaseCalls != 1 {
+		t.Fatalf("releaseCalls = %d, want 1 after pre-extend stamp abort", repo.releaseCalls)
+	}
+}
+
+func TestJobRun_ExtendFailureClearsCycleLockAndAllowsRetry(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(2 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:      now,
+		claimTTL: autoRenewClaimTTL,
+		key: database.SubscriptionKey{
+			ID:                7,
+			CustomerID:        42,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{err: errors.New("extend failed")}
+	job := &Job{
+		subKeyRepo: repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 15000},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+	if repo.key.LastAutoRenewedAt != nil {
+		t.Fatal("extend failure must clear pre-extend cycle lock for retry")
+	}
+	if repo.releaseCalls != 1 {
+		t.Fatalf("releaseCalls = %d, want 1 after extend failure", repo.releaseCalls)
+	}
+
+	// Retry after claim release should be allowed (pre-side-effect path).
+	walletSvc.err = nil
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 2 {
+		t.Fatalf("retry Extend calls = %d, want 2", len(walletSvc.calls))
+	}
+}
+
+func TestJobRun_ShortPlanFailedMarkDoesNotChargeTwiceAfterReclaim(t *testing.T) {
+	// M1 dedicated: short-plan remains selectable; failed mark must not double-charge.
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(1 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:              now,
+		claimTTL:         autoRenewClaimTTL,
+		markFailsNoStamp: true,
+		markErr:          errors.New("mark failed"),
+		key: database.SubscriptionKey{
+			ID:                4,
+			CustomerID:        55,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo:   repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			55: {ID: 55, TelegramID: 1, Language: "en", Balance: 99999},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 100, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+
+	// After failed mark, production must leave a durable cycle marker and hold claim.
+	if repo.key.LastAutoRenewedAt == nil {
+		t.Fatal("after failed mark, expected last_auto_renewed_at stamped (M1 cycle guard)")
+	}
+	if repo.key.AutoRenewClaimedAt == nil {
+		t.Fatal("after failed mark, expected claim held (no release)")
+	}
+
+	newExpire := now.Add(25 * time.Hour)
+	repo.key.ExpireAt = &newExpire
+	repo.now = now.Add(autoRenewClaimTTL + 2*time.Minute)
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("short-plan after reclaim Extend calls = %d, want 1 (no duplicate charge)", len(walletSvc.calls))
+	}
+}
+
+func TestJobRun_CatchUpLookbackSelectsKeyExpiredThreeHoursAgo(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	expireAt := now.Add(-3 * time.Hour)
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 20, CustomerID: 42, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo:   keyRepo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 99999},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Monthly", Days: 30, Price: 5000, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if keyRepo.findCalls != 1 {
+		t.Fatalf("findCalls = %d, want 1", keyRepo.findCalls)
+	}
+	// Catch-up lookback must reach at least 3h into the past.
+	if !keyRepo.findAfter.Equal(now.Add(-autoRenewLookbackWindow)) {
+		t.Fatalf("findAfter = %v, want %v", keyRepo.findAfter, now.Add(-autoRenewLookbackWindow))
+	}
+	if autoRenewLookbackWindow < 3*time.Hour {
+		t.Fatalf("autoRenewLookbackWindow = %v, want >= 3h for catch-up", autoRenewLookbackWindow)
+	}
+	if keyRepo.findAfter.After(expireAt) {
+		t.Fatalf("lookback start %v is after expire_at %v — key would be missed", keyRepo.findAfter, expireAt)
+	}
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("Extend calls = %d, want 1 for now-3h key", len(walletSvc.calls))
+	}
+}
+
+func TestJobRun_CatchUpDoesNotRenewAlreadyRenewedCycle(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 12, 0, 0, 0, time.UTC)
+	// Expired 3h ago but already renewed this cycle (last stamp near previous expiry window).
+	expireAt := now.Add(-3 * time.Hour)
+	// After a prior successful renew that failed to push expire far enough / catch-up reselects:
+	// last_auto_renewed_at within 4d before expire_at means already renewed this cycle.
+	last := expireAt.Add(-1 * time.Hour) // after expireAt-4d
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{
+				ID:                21,
+				CustomerID:        42,
+				ExpireAt:          &expireAt,
+				LastAutoRenewedAt: &last,
+				TrafficLimitGB:    0,
+				AutoRenewPlanDays: intPtr(30),
+			},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	job := &Job{
+		subKeyRepo:   keyRepo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 99999},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Monthly", Days: 30, Price: 5000, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 0 {
+		t.Fatalf("already-renewed cycle Extend calls = %d, want 0", len(walletSvc.calls))
+	}
+	if keyRepo.claimCalls != 0 {
+		t.Fatalf("already-renewed cycle must skip before claim; claimCalls=%d", keyRepo.claimCalls)
+	}
+}
+
+func TestAlreadyRenewedThisCycle(t *testing.T) {
+	expireAt := time.Date(2026, time.April, 10, 0, 0, 0, 0, time.UTC)
+	lastInCycle := expireAt.Add(-2 * 24 * time.Hour)
+	lastOld := expireAt.Add(-10 * 24 * time.Hour)
+
+	if !alreadyRenewedThisCycle(&lastInCycle, &expireAt) {
+		t.Fatal("last within 4d of expire must count as renewed this cycle")
+	}
+	if alreadyRenewedThisCycle(&lastOld, &expireAt) {
+		t.Fatal("old last must not count as renewed this cycle")
+	}
+	if alreadyRenewedThisCycle(nil, &expireAt) {
+		t.Fatal("nil last must not count as renewed")
+	}
 }

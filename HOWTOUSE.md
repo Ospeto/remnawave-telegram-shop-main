@@ -88,28 +88,51 @@ After editing plans, you must restart the bot:
 
 ## Migration & Backups
 
-You can move your entire shop to a new server without losing data.
+You can move your shop to a new server without losing data. There are **two** backup artifact types — restore both offline with `setup.sh` (live bot restore is disabled).
+
+| Type | Filename | Created by | What it contains | `setup.sh` restore |
+|------|----------|------------|------------------|--------------------|
+| Full bundle | `backup_*.tar.gz` | `setup.sh` option **10** | DB + `.env` + translations + Caddy certs (when present) | Option **11** — full restore |
+| Bot DB-only | `db_*.sql.gz` | `/admin` → Backups or `/backup now` | PostgreSQL dump only (gzip SQL) | Option **11** — DB only (after copy to host `./backups/`) |
+
+Details and volume copy commands: [BACKUP-RUNBOOK.md](BACKUP-RUNBOOK.md). VPS cutover: [docs/PRODUCTION_MIGRATION_RUNBOOK.md](docs/PRODUCTION_MIGRATION_RUNBOOK.md).
 
 ### Runtime Restore Policy
 
 The running bot can help you inspect backups, but it will not perform a live restore.
 
-Use `/admin` -> `Backups` for day-to-day backup work, and use `/restore list` only to identify the file you want before doing the restore offline/manual.
+Use `/admin` -> `Backups` for day-to-day backup work, and use `/restore list` only to identify the file you want before doing the restore offline via `setup.sh`.
 
 ### 1. Create Backup (Old Server)
-1.  Open `/admin` -> `Backups` -> `Run Backup Now`, or run `./setup.sh` and choose **Option 9 (Backup)**.
-2.  Wait for success message.
-3.  Download the file from `remnawave-telegram-shop-main/backups/backup_YYYYMMDD.tar.gz`.
+
+**Preferred for full migration (DB + config + certs):**
+
+1.  Run `./setup.sh` and choose **Option 10 (Backup)**.
+2.  Download `./backups/backup_YYYYMMDD_HHMMSS.tar.gz` from the host.
+
+**Bot-managed DB-only (scheduled / admin backup):**
+
+1.  Open `/admin` -> `Backups` -> `Run Backup Now` (or `/backup now`).
+2.  Wait for success. Artifact is `db_YYYYMMDD_HHMMSS.sql.gz` on the `bot_backups` volume (`/backups` in the container), **not** under host `./backups/` unless you copy it.
+3.  Confirm the name with `/restore list` or:
+
+```bash
+docker run --rm -v bot_backups:/backups alpine:3.22 ls -lah /backups
+```
 
 ### 2. Restore (New Server)
+
 1.  Install Docker & Git on new server.
 2.  Clone this repository.
-3.  Create a `backups` folder and upload your `.tar.gz` file there.
-4.  Use `/restore list` in the old bot if you need to confirm the exact backup filename.
-5.  Run `./setup.sh`.
-6.  Select **Option 10 (Restore)**.
-7.  Choose your backup file.
-8.  The script will stop services, restore DB/Certs, and restart everything.
+3.  Create a host `backups` folder and place the artifact there:
+    - Full bundle: copy `backup_*.tar.gz` into `./backups/`.
+    - Bot DB-only: copy `db_*.sql.gz` from the old `bot_backups` volume into `./backups/` (see BACKUP-RUNBOOK). Ensure a valid `.env` already exists (bot dumps do not include config).
+4.  Run `./setup.sh`.
+5.  Select **Option 11 (Restore)**.
+6.  Choose your backup file (menu labels **full bundle** vs **bot DB-only**).
+7.  Confirm with `yes`. The script stops services, restores via the offline compose path, and restarts bot+db.
+    - Full bundle: may restore DB + `.env` + translations + Caddy data.
+    - Bot DB-only: restores PostgreSQL only (gunzip → `psql`); leaves `.env`/certs/translations unchanged.
 
 ---
 

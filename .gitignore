@@ -348,3 +348,6 @@ fabric.properties
 /bin/
 web-app/dist/
 web-app/node_modules/
+
+# Slim deepwork session state (local agent scratch)
+.slim/deepwork/

@@ -56,6 +56,12 @@ var (
 	ErrTrialAlreadyUsed = errors.New("trial already used")
 	// ErrCustomerNotFound means the customer record does not exist.
 	ErrCustomerNotFound = errors.New("customer not found")
+	// ErrIdempotencyKeyConflict means the Idempotency-Key is already bound to another customer.
+	// Callers must not disclose or mutate the existing purchase.
+	ErrIdempotencyKeyConflict = errors.New("idempotency key belongs to another customer")
+	// ErrIdempotencyRequestMismatch means the same customer reused an Idempotency-Key
+	// with a different request body (amount/plan/invoice type/etc.).
+	ErrIdempotencyRequestMismatch = errors.New("idempotency key request body mismatch")
 )
 
 type AwaitingReceiptVerificationError struct {
@@ -347,6 +353,48 @@ func (s *PaymentService) findPurchaseByIdempotencyKey(ctx context.Context) (*dat
 	return s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
 }
 
+// idempotentPurchaseMatchesRequest reports whether an existing purchase is a safe
+// idempotent resume for the candidate request attributes (body identity).
+func idempotentPurchaseMatchesRequest(existing, candidate *database.Purchase) bool {
+	return canReuseAwaitingVerificationPurchase(existing, candidate)
+}
+
+// assertIdempotentResumeAllowed validates ownership + body match before resuming
+// an existing purchase found by global Idempotency-Key.
+// Returns ErrIdempotencyKeyConflict (cross-user) or ErrIdempotencyRequestMismatch (body).
+func assertIdempotentResumeAllowed(existing, candidate *database.Purchase) error {
+	if existing == nil {
+		return nil
+	}
+	if candidate == nil {
+		return fmt.Errorf("idempotent resume candidate is required")
+	}
+	if existing.CustomerID != candidate.CustomerID {
+		return ErrIdempotencyKeyConflict
+	}
+	if !idempotentPurchaseMatchesRequest(existing, candidate) {
+		return ErrIdempotencyRequestMismatch
+	}
+	return nil
+}
+
+// resolveIdempotentExistingPurchase looks up a purchase by Idempotency-Key and
+// either returns it for resume, or an ownership/body conflict error.
+// When no key is present or no row exists, returns (nil, nil).
+func (s *PaymentService) resolveIdempotentExistingPurchase(ctx context.Context, candidate *database.Purchase) (*database.Purchase, error) {
+	existing, err := s.findPurchaseByIdempotencyKey(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, nil
+	}
+	if err := assertIdempotentResumeAllowed(existing, candidate); err != nil {
+		return nil, err
+	}
+	return existing, nil
+}
+
 func (s *PaymentService) createPurchaseRecord(ctx context.Context, purchase *database.Purchase) (int64, *database.Purchase, error) {
 	if key := idempotencyKeyFromContext(ctx); key != nil {
 		purchase.IdempotencyKey = key
@@ -355,6 +403,9 @@ func (s *PaymentService) createPurchaseRecord(ctx context.Context, purchase *dat
 			return 0, nil, err
 		}
 		if existing != nil {
+			if err := assertIdempotentResumeAllowed(existing, purchase); err != nil {
+				return 0, nil, err
+			}
 			return existing.ID, existing, nil
 		}
 	}
@@ -367,6 +418,9 @@ func (s *PaymentService) createPurchaseRecord(ctx context.Context, purchase *dat
 				return 0, nil, lookupErr
 			}
 			if existing != nil {
+				if assertErr := assertIdempotentResumeAllowed(existing, purchase); assertErr != nil {
+					return 0, nil, assertErr
+				}
 				return existing.ID, existing, nil
 			}
 		}
@@ -384,6 +438,9 @@ func (s *PaymentService) createPurchaseRecordTx(ctx context.Context, tx pgx.Tx, 
 			return 0, nil, err
 		}
 		if existing != nil {
+			if err := assertIdempotentResumeAllowed(existing, purchase); err != nil {
+				return 0, nil, err
+			}
 			return existing.ID, existing, nil
 		}
 	}
@@ -396,6 +453,9 @@ func (s *PaymentService) createPurchaseRecordTx(ctx context.Context, tx pgx.Tx, 
 				return 0, nil, lookupErr
 			}
 			if existing != nil {
+				if assertErr := assertIdempotentResumeAllowed(existing, purchase); assertErr != nil {
+					return 0, nil, assertErr
+				}
 				return existing.ID, existing, nil
 			}
 		}
@@ -738,37 +798,69 @@ func (s *PaymentService) restorePurchaseState(ctx context.Context, purchaseID in
 	}
 }
 
+// applyWalletRefundIfNeeded is the A7 sequential best-effort duplicate-refund
+// guard. When alreadyRefunded is true, creditFn is not called. This is NOT fully
+// concurrent-safe without an atomic DB uniqueness constraint on refund rows.
+func applyWalletRefundIfNeeded(alreadyRefunded bool, creditFn func() error) (skipped bool, err error) {
+	if alreadyRefunded {
+		return true, nil
+	}
+	if err := creditFn(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (s *PaymentService) refundWalletCharge(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error {
 	refundCtx := context.WithoutCancel(ctx)
 
-	dbTx, err := s.customerRepository.BeginTx(refundCtx)
-	if err != nil {
-		return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
-	}
-	defer func() {
-		_ = dbTx.Rollback(refundCtx)
-	}()
-
-	if err := s.customerRepository.AddBalanceTx(refundCtx, dbTx, customerID, amount); err != nil {
-		return fmt.Errorf("failed to refund wallet balance: %w", err)
-	}
-
+	// A7: best-effort sequential guard — skip if a refund was already logged.
+	// Concurrent double-refund is still possible without atomic DB protection.
+	alreadyRefunded := false
 	if s.walletTxRepo != nil {
-		if _, err := s.walletTxRepo.CreateTx(refundCtx, dbTx, &database.WalletTransaction{
-			CustomerID:  customerID,
-			Amount:      amount,
-			Type:        database.WalletTransactionTypeRefund,
-			PurchaseID:  &purchaseID,
-			Description: description,
-		}); err != nil {
-			return fmt.Errorf("failed to log wallet refund: %w", err)
+		already, err := s.walletTxRepo.ExistsByPurchaseIDAndType(refundCtx, purchaseID, database.WalletTransactionTypeRefund)
+		if err != nil {
+			return fmt.Errorf("failed to check existing wallet refund: %w", err)
 		}
+		alreadyRefunded = already
 	}
 
-	if err := dbTx.Commit(refundCtx); err != nil {
-		return fmt.Errorf("failed to commit wallet refund: %w", err)
-	}
+	skipped, err := applyWalletRefundIfNeeded(alreadyRefunded, func() error {
+		dbTx, err := s.customerRepository.BeginTx(refundCtx)
+		if err != nil {
+			return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
+		}
+		defer func() {
+			_ = dbTx.Rollback(refundCtx)
+		}()
 
+		if err := s.customerRepository.AddBalanceTx(refundCtx, dbTx, customerID, amount); err != nil {
+			return fmt.Errorf("failed to refund wallet balance: %w", err)
+		}
+
+		if s.walletTxRepo != nil {
+			if _, err := s.walletTxRepo.CreateTx(refundCtx, dbTx, &database.WalletTransaction{
+				CustomerID:  customerID,
+				Amount:      amount,
+				Type:        database.WalletTransactionTypeRefund,
+				PurchaseID:  &purchaseID,
+				Description: description,
+			}); err != nil {
+				return fmt.Errorf("failed to log wallet refund: %w", err)
+			}
+		}
+
+		if err := dbTx.Commit(refundCtx); err != nil {
+			return fmt.Errorf("failed to commit wallet refund: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if skipped {
+		slog.Info("Skipping wallet refund; already refunded for purchase", "purchase_id", purchaseID, "customer_id", customerID)
+	}
 	return nil
 }
 
@@ -857,6 +949,9 @@ func (s *PaymentService) createPurchaseRecordWithOptionalPromo(ctx context.Conte
 			return 0, nil, err
 		}
 		if existing != nil {
+			if err := assertIdempotentResumeAllowed(existing, purchase); err != nil {
+				return 0, nil, err
+			}
 			return existing.ID, existing, nil
 		}
 	}
@@ -1133,8 +1228,8 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		slog.Error("Failed to send activation message (non-fatal)", "error", err, "purchase_id", purchaseId)
 	}
 
-	// Referral bonus — completely non-fatal
-	if triggersReferralConversion(purchase.InvoiceType) {
+	// Referral bonus — completely non-fatal; only for positive cash-paid service purchases (A5).
+	if triggersReferralConversion(purchase.InvoiceType, purchase.Amount) {
 		s.processReferralBonus(ctx, notifyCustomer)
 	}
 
@@ -1151,12 +1246,149 @@ const (
 	refereeReferralBonusDescription  = "Welcome bonus — joined via referral link"
 )
 
-func triggersReferralConversion(invoiceType database.InvoiceType) bool {
+// triggersReferralConversion is true only for cash-paid service purchases.
+// Free/zero-amount wallet_payment (100% promo / createFreePurchase) must not
+// mint referral wallet bonuses (A5). Wallet top-ups never convert.
+func triggersReferralConversion(invoiceType database.InvoiceType, amount float64) bool {
+	if amount <= 0 {
+		return false
+	}
 	switch invoiceType {
 	case database.InvoiceTypeMobileBanking, database.InvoiceTypeWalletPayment:
 		return true
 	default:
 		return false
+	}
+}
+
+// shouldReleaseMobileTransactionUniqueness reports whether a ProcessPurchaseById
+// error is safe to free the mobile receipt uniqueness row for retry.
+//
+// After side effects (Remnawave mutation, wallet top-up credit) or when another
+// worker owns fulfillment, the row must be retained so the same receipt cannot
+// be reused for a second fulfill/credit (A2 / A4).
+func shouldReleaseMobileTransactionUniqueness(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrPurchaseFinalizationPending) {
+		return false
+	}
+	if errors.Is(err, ErrPurchaseInFlight) {
+		return false
+	}
+	return true
+}
+
+// applyMobileTxnCleanupAfterProcessError is the VerifyMobilePayment cleanup seam:
+// on safe pre-fulfillment hard failures it invokes deleteFn (DeleteByTransactionID);
+// on finalization-pending / in-flight it retains uniqueness and does not delete.
+func applyMobileTxnCleanupAfterProcessError(processErr error, deleteFn func() error) error {
+	if !shouldReleaseMobileTransactionUniqueness(processErr) {
+		return nil
+	}
+	return deleteFn()
+}
+
+// walletProcessErrorAction is the single decision for createWalletPurchase and
+// CreatePurchaseWithExtend after ProcessPurchaseById fails.
+type walletProcessErrorAction int
+
+const (
+	// walletProcessTreatAsSuccess: finalization-pending — return success, no cleanup.
+	walletProcessTreatAsSuccess walletProcessErrorAction = iota
+	// walletProcessPropagateOnly: InFlight / !created — return error, no refund/cancel.
+	walletProcessPropagateOnly
+	// walletProcessRefundAndCancel: hard failure on a newly created charge — cleanup.
+	walletProcessRefundAndCancel
+)
+
+// decideWalletProcessErrorAction is the sole decision helper for wallet process
+// errors (A1). Callers must not re-check ErrPurchaseInFlight separately.
+func decideWalletProcessErrorAction(err error, created bool) walletProcessErrorAction {
+	if err == nil {
+		return walletProcessPropagateOnly
+	}
+	if errors.Is(err, ErrPurchaseFinalizationPending) {
+		return walletProcessTreatAsSuccess
+	}
+	if errors.Is(err, ErrPurchaseInFlight) {
+		return walletProcessPropagateOnly
+	}
+	if !created {
+		return walletProcessPropagateOnly
+	}
+	return walletProcessRefundAndCancel
+}
+
+// applyWalletProcessErrorActions runs the shared wallet process-error path used
+// by both createWalletPurchase and CreatePurchaseWithExtend.
+//
+// Returns action plus:
+//   - treatAsSuccess: caller should return (purchaseID, nil)
+//   - propagateErr: error to return to caller (may be process err or cleanup err)
+//
+// cleanupFn performs refund+cancel; it is invoked only for walletProcessRefundAndCancel.
+// When cleanup fails, propagateErr is the cleanup error (which may wrap processErr).
+// Callers must use walletPurchaseProcessErrorResult — never errors.Is(propErr, processErr)
+// to distinguish cleanup vs process (wrapping makes that check always true).
+func applyWalletProcessErrorActions(
+	processErr error,
+	created bool,
+	cleanupFn func() error,
+) (action walletProcessErrorAction, treatAsSuccess bool, propagateErr error) {
+	action = decideWalletProcessErrorAction(processErr, created)
+	switch action {
+	case walletProcessTreatAsSuccess:
+		return action, true, nil
+	case walletProcessPropagateOnly:
+		return action, false, processErr
+	case walletProcessRefundAndCancel:
+		if cleanupFn != nil {
+			if err := cleanupFn(); err != nil {
+				return action, false, err
+			}
+		}
+		return action, false, processErr
+	default:
+		return action, false, processErr
+	}
+}
+
+// walletPurchaseProcessErrorResult maps applyWalletProcessErrorActions output to
+// the (purchaseID, err) contract of createWalletPurchase / CreatePurchaseWithExtend.
+//
+// Rules:
+//   - treatAsSuccess → (purchaseID, nil)
+//   - refund/cancel cleanup failed → (0, cleanupErr)  // surface refund failure
+//   - refund/cancel cleanup succeeded → (0, processErr)
+//   - propagate-only (InFlight / !created) → (purchaseID, processErr)
+//
+// Do not use errors.Is(propErr, processErr): cleanup errors wrap processErr with %w.
+func walletPurchaseProcessErrorResult(
+	purchaseID int64,
+	processErr error,
+	propErr error,
+	action walletProcessErrorAction,
+	treatAsSuccess bool,
+) (int64, error) {
+	if treatAsSuccess {
+		return purchaseID, nil
+	}
+	switch action {
+	case walletProcessRefundAndCancel:
+		// propErr is cleanupErr when cleanup failed, else processErr when cleanup succeeded.
+		// Compare by identity / exact value from applyWalletProcessErrorActions, not errors.Is.
+		if propErr != nil && propErr != processErr {
+			return 0, propErr
+		}
+		return 0, processErr
+	default:
+		// InFlight / !created: keep purchaseID so caller can resume.
+		if propErr != nil {
+			return purchaseID, propErr
+		}
+		return purchaseID, processErr
 	}
 }
 
@@ -1400,7 +1632,22 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
 	var promoID *int64
 	if invoiceType != database.InvoiceTypeWalletTopUp {
-		if existing, lookupErr := s.findPurchaseByIdempotencyKey(ctx); lookupErr != nil {
+		// Resolve promo first so idempotent body match uses the same amount/promo
+		// reservation that would be stored on create.
+		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
+		if err != nil {
+			return "", 0, err
+		}
+		candidate := &database.Purchase{
+			CustomerID:     customer.ID,
+			InvoiceType:    invoiceType,
+			Amount:         amount,
+			Days:           days,
+			TrafficLimitGB: trafficLimitGB,
+			ExtendKeyID:    extendKeyID,
+			PromoCodeID:    promoID,
+		}
+		if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
 			return "", 0, lookupErr
 		} else if existing != nil {
 			return s.resumeExistingPurchase(ctx, existing)
@@ -1411,11 +1658,6 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 			} else if existing != nil {
 				return "", 0, awaitingReceiptVerificationError(existing)
 			}
-		}
-
-		amount, promoID, err = s.resolvePromoDiscount(ctx, amount, promoCode)
-		if err != nil {
-			return "", 0, err
 		}
 	}
 
@@ -1673,20 +1915,23 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 
 	// Process the purchase immediately (no waiting for payment confirmation)
 	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
-		if errors.Is(err, ErrPurchaseFinalizationPending) {
+		action, treatOK, propErr := applyWalletProcessErrorActions(err, created, func() error {
+			slog.Error("Error processing wallet purchase", "error", err, "purchase_id", purchaseId)
+			if refundErr := s.refundWalletCharge(ctx, customer.ID, amount, purchaseId, fmt.Sprintf("Refund wallet purchase #%d", purchaseId)); refundErr != nil {
+				slog.Error("Failed to refund wallet charge after processing error", "error", refundErr, "purchase_id", purchaseId)
+				return fmt.Errorf("failed to process wallet purchase: %w (refund failed: %v)", err, refundErr)
+			}
+			s.cancelPurchase(ctx, purchaseId)
+			return nil
+		})
+		if treatOK {
 			slog.Warn("Wallet purchase fulfilled but finalization is pending", "purchase_id", purchaseId)
-			return "", purchaseId, nil
 		}
-		if !created {
-			return "", purchaseId, err
+		if action == walletProcessPropagateOnly && errors.Is(err, ErrPurchaseInFlight) {
+			slog.Info("Wallet purchase already in flight; skipping refund/cancel", "purchase_id", purchaseId)
 		}
-		slog.Error("Error processing wallet purchase", "error", err, "purchase_id", purchaseId)
-		if refundErr := s.refundWalletCharge(ctx, customer.ID, amount, purchaseId, fmt.Sprintf("Refund wallet purchase #%d", purchaseId)); refundErr != nil {
-			slog.Error("Failed to refund wallet charge after processing error", "error", refundErr, "purchase_id", purchaseId)
-			return "", 0, fmt.Errorf("failed to process wallet purchase: %w (refund failed: %v)", err, refundErr)
-		}
-		s.cancelPurchase(ctx, purchaseId)
-		return "", 0, err
+		outID, outErr := walletPurchaseProcessErrorResult(purchaseId, err, propErr, action, treatOK)
+		return "", outID, outErr
 	}
 
 	slog.Info("Wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
@@ -1697,15 +1942,24 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 // ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
 // rather than creating a brand-new user. Used by the per-key auto-renew cron.
 func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64, promoCode string) (url string, purchaseId int64, err error) {
-	if existing, lookupErr := s.findPurchaseByIdempotencyKey(ctx); lookupErr != nil {
+	amount, promoID, err := s.resolvePromoDiscount(ctx, amount, promoCode)
+	if err != nil {
+		return "", 0, err
+	}
+	extendKeyID := keyID
+	candidate := &database.Purchase{
+		CustomerID:     customer.ID,
+		InvoiceType:    database.InvoiceTypeWalletPayment,
+		Amount:         amount,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    &extendKeyID,
+		PromoCodeID:    promoID,
+	}
+	if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
 		return "", 0, lookupErr
 	} else if existing != nil {
 		return s.resumeExistingPurchase(ctx, existing)
-	}
-
-	amount, _, err = s.resolvePromoDiscount(ctx, amount, promoCode)
-	if err != nil {
-		return "", 0, err
 	}
 
 	if customer.Balance < amount {
@@ -1744,20 +1998,23 @@ func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount fl
 
 	// Process immediately: follows the ExtendKeyID branch in ProcessPurchaseById.
 	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
-		if errors.Is(err, ErrPurchaseFinalizationPending) {
+		action, treatOK, propErr := applyWalletProcessErrorActions(err, created, func() error {
+			slog.Error("Error processing extend-key wallet purchase", "error", err, "purchase_id", purchaseId)
+			if refundErr := s.refundWalletCharge(ctx, customer.ID, amount, purchaseId, fmt.Sprintf("Refund extend-key purchase #%d", purchaseId)); refundErr != nil {
+				slog.Error("Failed to refund wallet charge after extend-key processing error", "error", refundErr, "purchase_id", purchaseId)
+				return fmt.Errorf("failed to process extend-key wallet purchase: %w (refund failed: %v)", err, refundErr)
+			}
+			s.cancelPurchase(ctx, purchaseId)
+			return nil
+		})
+		if treatOK {
 			slog.Warn("Extend-key wallet purchase fulfilled but finalization is pending", "purchase_id", purchaseId)
-			return "", purchaseId, nil
 		}
-		if !created {
-			return "", purchaseId, err
+		if action == walletProcessPropagateOnly && errors.Is(err, ErrPurchaseInFlight) {
+			slog.Info("Extend-key wallet purchase already in flight; skipping refund/cancel", "purchase_id", purchaseId)
 		}
-		slog.Error("Error processing extend-key wallet purchase", "error", err, "purchase_id", purchaseId)
-		if refundErr := s.refundWalletCharge(ctx, customer.ID, amount, purchaseId, fmt.Sprintf("Refund extend-key purchase #%d", purchaseId)); refundErr != nil {
-			slog.Error("Failed to refund wallet charge after extend-key processing error", "error", refundErr, "purchase_id", purchaseId)
-			return "", 0, fmt.Errorf("failed to process extend-key wallet purchase: %w (refund failed: %v)", err, refundErr)
-		}
-		s.cancelPurchase(ctx, purchaseId)
-		return "", 0, err
+		outID, outErr := walletPurchaseProcessErrorResult(purchaseId, err, propErr, action, treatOK)
+		return "", outID, outErr
 	}
 
 	slog.Info("Extend-key wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "key_id", keyID, "customer_id", utils.MaskHalfInt64(customer.ID))
@@ -2319,8 +2576,18 @@ func (s *PaymentService) VerifyMobilePayment(ctx context.Context, purchaseID int
 	err = s.ProcessPurchaseById(ctx, purchaseID)
 	if err != nil {
 		slog.Error("Error processing verified mobile purchase", "error", err)
-		if delErr := s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), info.TransactionID); delErr != nil {
+		// Only release txn uniqueness on safe pre-fulfillment failures.
+		// After side effects / finalization-pending / in-flight, retain the row
+		// so the same receipt cannot be reused for a second credit/fulfill.
+		if delErr := applyMobileTxnCleanupAfterProcessError(err, func() error {
+			return s.mobilePaymentRepo.DeleteByTransactionID(context.WithoutCancel(ctx), info.TransactionID)
+		}); delErr != nil {
 			slog.Error("Error deleting mobile payment record after failure", "error", delErr)
+		} else if !shouldReleaseMobileTransactionUniqueness(err) {
+			slog.Warn("Retaining mobile payment txn uniqueness after post-side-effect or in-flight error",
+				"purchase_id", purchaseID,
+				"error", err,
+			)
 		}
 		if failure, ok := s.terminalScreenshotVerificationFailure(ctx, purchaseID); ok {
 			return failure, nil
@@ -2442,8 +2709,15 @@ func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount fl
 	}
 
 	candidate := &database.Purchase{
+		CustomerID:  customer.ID,
 		InvoiceType: database.InvoiceTypeWalletTopUp,
 		Amount:      amount,
+	}
+	// Global Idempotency-Key may already bind a purchase for another customer or body.
+	if existing, lookupErr := s.resolveIdempotentExistingPurchase(ctx, candidate); lookupErr != nil {
+		return "", 0, lookupErr
+	} else if existing != nil {
+		return s.resumeExistingPurchase(ctx, existing)
 	}
 	if existing, lookupErr := s.purchaseRepository.FindLatestAwaitingVerificationByCustomer(ctx, customer.ID); lookupErr != nil {
 		return "", 0, lookupErr
