@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"remnawave-tg-shop-bot/internal/config"
+	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
 	appPromo "remnawave-tg-shop-bot/internal/promo"
 	"remnawave-tg-shop-bot/internal/reporting"
@@ -556,8 +557,17 @@ func (h Handler) RevenueCommandHandler(ctx context.Context, b *bot.Bot, update *
 	if !h.adminOnly(ctx, b, update) {
 		return
 	}
-
-	rows, err := h.purchaseRepository.GetRevenueSummary(ctx, 7)
+	if h.financeService == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Finance service unavailable",
+		})
+		return
+	}
+	report, err := h.financeService.GetReport(ctx, reporting.ReportQuery{
+		Period:         database.RevenuePeriodDay,
+		HistoryPeriods: 7,
+	})
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
@@ -565,10 +575,10 @@ func (h Handler) RevenueCommandHandler(ctx context.Context, b *bot.Bot, update *
 		})
 		return
 	}
-
+	today := time.Now().In(reporting.YangonLocation()).Format("2006-01-02")
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      reporting.FormatRevenueCommand(rows, time.Now().In(reporting.YangonLocation()).Format("2006-01-02")),
+		Text:      reporting.FormatRevenueCommandFromReport(report, today),
 		ParseMode: models.ParseModeHTML,
 	})
 }

@@ -139,3 +139,35 @@ func TestSummarizeRevenuePeriod_PeriodZeroWinsOverBreakdownFallback(t *testing.T
 		t.Fatalf("got %v want 0 (period field is authoritative including zero)", totals.ServiceRevenue)
 	}
 }
+
+func TestFormatTelegramFinanceReport_IncludesNetAndRefunds(t *testing.T) {
+	report := FinanceReport{
+		Period: "day", Currency: "MMK", RangeStart: "2026-07-11", RangeEnd: "2026-07-11",
+		Current: FinanceMetrics{
+			GrossServiceRevenue: 1000,
+			Refunds:             100,
+			NetServiceRevenue:   900,
+			CashCollected:       800,
+			SuccessfulOrders:    2,
+			UniqueCustomers:     2,
+		},
+	}
+	text := FormatTelegramFinanceReport("Daily Revenue Report", report)
+	for _, want := range []string{"Net Income", "900", "Gross", "1,000", "Refunds", "100", "Cash"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+}
+
+func TestFormatTelegramFinanceReport_InProgressLabel(t *testing.T) {
+	report := FinanceReport{
+		Period: "day", Currency: "MMK", RangeStart: "2026-07-12", RangeEnd: "2026-07-12",
+		InProgress: true,
+		Current:    FinanceMetrics{NetServiceRevenue: 0},
+	}
+	text := FormatTelegramFinanceReport("Daily Revenue Report", report)
+	if !strings.Contains(text, "In progress") {
+		t.Fatalf("missing In progress: %s", text)
+	}
+}

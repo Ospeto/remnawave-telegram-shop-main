@@ -5,6 +5,7 @@ import (
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/reporting"
 	"remnawave-tg-shop-bot/internal/service/healthcheck"
 	appSync "remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
@@ -28,6 +29,7 @@ type Handler struct {
 	healthcheckService  *healthcheck.Service
 	cache               *cache.Cache
 	mobilePayCache      *cache.Cache // telegramID → purchaseID for pending mobile screenshots
+	financeService      *reporting.FinanceService
 
 	// Rate Limiting
 	limitersMu *sync.Mutex
@@ -51,6 +53,7 @@ func NewHandler(
 	healthcheckService *healthcheck.Service,
 	cache *cache.Cache,
 	mobilePayCache *cache.Cache,
+	financeService *reporting.FinanceService,
 ) *Handler {
 	h := &Handler{
 		syncService:         syncService,
@@ -66,6 +69,7 @@ func NewHandler(
 		healthcheckService:  healthcheckService,
 		cache:               cache,
 		mobilePayCache:      mobilePayCache,
+		financeService:      financeService,
 		limiters:            make(map[int64]*rate.Limiter),
 		limitersMu:          &sync.Mutex{},
 		adminFlows:          make(map[int64]adminFlowState),

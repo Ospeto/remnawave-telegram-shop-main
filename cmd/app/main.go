@@ -86,14 +86,25 @@ func versionedMiniAppURL(rawURL string) string {
 	return u.String()
 }
 
-func sendRevenueReport(ctx context.Context, b *bot.Bot, purchaseRepository *database.PurchaseRepository, jobName, title string, period database.RevenueSummaryPeriod, start, end time.Time) {
-	rows, err := purchaseRepository.GetRevenueSummaryRange(ctx, start, end, period)
+func sendRevenueReport(ctx context.Context, b *bot.Bot, financeService *reporting.FinanceService, jobName, title string, period database.RevenueSummaryPeriod, start, end time.Time) {
+	// Convert half-open [start,end) into inclusive custom query for exact window:
+	loc := reporting.YangonLocation()
+	from := start.In(loc)
+	toInclusive := end.In(loc).Add(-time.Nanosecond)
+	toDay := time.Date(toInclusive.Year(), toInclusive.Month(), toInclusive.Day(), 0, 0, 0, 0, loc)
+	report, err := financeService.GetReport(ctx, reporting.ReportQuery{
+		Period:     database.RevenuePeriodCustom,
+		CustomFrom: &from,
+		CustomTo:   &toDay,
+		Now:        end.Add(-time.Nanosecond),
+	})
 	if err != nil {
 		slog.Error("Revenue report failed", "job", jobName, "error", err)
 		return
 	}
-
-	text := reporting.FormatTelegramPeriodRevenueReport(title, reporting.FormatDateRange(start, end), rows)
+	// Force period label for display while keeping custom window metrics:
+	report.Period = string(period)
+	text := reporting.FormatTelegramFinanceReport(title, report)
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    config.GetAdminTelegramId(),
 		Text:      text,
@@ -102,9 +113,11 @@ func sendRevenueReport(ctx context.Context, b *bot.Bot, purchaseRepository *data
 		slog.Error("Revenue report send failed", "job", jobName, "error", err)
 		return
 	}
-
-	totals, _ := reporting.SummarizeRevenuePeriod(rows)
-	slog.Info("Revenue report sent", "job", jobName, "service_revenue", totals.ServiceRevenue, "cash_collected", totals.CashCollected, "txns", totals.TotalPurchases)
+	slog.Info("Revenue report sent", "job", jobName,
+		"net", report.Current.NetServiceRevenue,
+		"gross", report.Current.GrossServiceRevenue,
+		"refunds", report.Current.Refunds,
+		"cash", report.Current.CashCollected)
 }
 
 func newVisionProvider(providerName, geminiAPIKey, geminiModel, openRouterAPIKey, openRouterModel, openRouterFallbackModel string) (gemini.Provider, error) {
@@ -384,7 +397,7 @@ func main() {
 		CanaryDays:          1,
 		CanaryTrafficGB:     1,
 	})
-	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, botHealthcheck, messageCache, mobilePayCache)
+	h := handler.NewHandler(syncService, paymentService, tm, customerRepository, purchaseRepository, subService, subKeyRepo, referralRepository, promoCodeRepository, appConfigRepo, botHealthcheck, messageCache, mobilePayCache, financeService)
 	handler.SetBackupService(backupService)
 
 	me, err := b.GetMe(ctx)
@@ -564,7 +577,7 @@ func main() {
 	if _, err := revenueCron.AddFunc("0 0 * * *", func() {
 		runCronJob(ctx, "daily_revenue_report", 30*time.Second, func(cronCtx context.Context) {
 			start, end := reporting.PreviousDayRange(time.Now().In(mmtZone))
-			sendRevenueReport(cronCtx, b, purchaseRepository, "daily_revenue_report", "Daily Revenue Report", database.RevenuePeriodDay, start, end)
+			sendRevenueReport(cronCtx, b, financeService, "daily_revenue_report", "Daily Revenue Report", database.RevenuePeriodDay, start, end)
 		})
 	}); err != nil {
 		fatalStartup("daily revenue cron", err)
@@ -572,7 +585,7 @@ func main() {
 	if _, err := revenueCron.AddFunc("5 0 * * 1", func() {
 		runCronJob(ctx, "weekly_revenue_report", 30*time.Second, func(cronCtx context.Context) {
 			start, end := reporting.PreviousWeekRange(time.Now().In(mmtZone))
-			sendRevenueReport(cronCtx, b, purchaseRepository, "weekly_revenue_report", "Weekly Revenue Report", database.RevenuePeriodWeek, start, end)
+			sendRevenueReport(cronCtx, b, financeService, "weekly_revenue_report", "Weekly Revenue Report", database.RevenuePeriodWeek, start, end)
 		})
 	}); err != nil {
 		fatalStartup("weekly revenue cron", err)
@@ -580,7 +593,7 @@ func main() {
 	if _, err := revenueCron.AddFunc("10 0 1 * *", func() {
 		runCronJob(ctx, "monthly_revenue_report", 30*time.Second, func(cronCtx context.Context) {
 			start, end := reporting.PreviousMonthRange(time.Now().In(mmtZone))
-			sendRevenueReport(cronCtx, b, purchaseRepository, "monthly_revenue_report", "Monthly Revenue Report", database.RevenuePeriodMonth, start, end)
+			sendRevenueReport(cronCtx, b, financeService, "monthly_revenue_report", "Monthly Revenue Report", database.RevenuePeriodMonth, start, end)
 		})
 	}); err != nil {
 		fatalStartup("monthly revenue cron", err)

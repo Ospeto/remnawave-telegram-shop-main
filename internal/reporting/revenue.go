@@ -206,6 +206,87 @@ func FormatTelegramPeriodRevenueReport(title, periodLabel string, rows []databas
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+func FormatTelegramFinanceReport(title string, report FinanceReport) string {
+	currency := html.EscapeString(firstNonEmpty(report.Currency, "MMK"))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n\n", html.EscapeString(title)))
+	rangeLabel := report.RangeStart
+	if report.RangeStart != report.RangeEnd {
+		rangeLabel = fmt.Sprintf("%s to %s", report.RangeStart, report.RangeEnd)
+	}
+	if report.InProgress {
+		rangeLabel += " (In progress)"
+	}
+	sb.WriteString(fmt.Sprintf("<b>%s</b>\n", html.EscapeString(rangeLabel)))
+	sb.WriteString(fmt.Sprintf("Net Income: <b>%s %s</b>\n", FormatNumber(report.Current.NetServiceRevenue), currency))
+	sb.WriteString(fmt.Sprintf("Gross: <b>%s %s</b>\n", FormatNumber(report.Current.GrossServiceRevenue), currency))
+	sb.WriteString(fmt.Sprintf("Refunds: <b>%s %s</b>\n", FormatNumber(report.Current.Refunds), currency))
+	sb.WriteString(fmt.Sprintf("Cash collected: <b>%s %s</b>\n", FormatNumber(report.Current.CashCollected), currency))
+	if report.Current.WalletTopUps > 0 || report.Current.WalletSpend > 0 {
+		sb.WriteString(fmt.Sprintf("Wallet: %s %s top-ups, %s %s spend\n",
+			FormatNumber(report.Current.WalletTopUps), currency,
+			FormatNumber(report.Current.WalletSpend), currency))
+	}
+	sb.WriteString(fmt.Sprintf("Orders: %d plan txns, %d users\n", report.Current.SuccessfulOrders, report.Current.UniqueCustomers))
+	sb.WriteString(fmt.Sprintf("Mix: %d new keys, %d extensions\n", report.Current.NewSubscriptions, report.Current.Extensions))
+	if len(report.Methods) > 0 {
+		sb.WriteString("\n<b>By method</b>\n")
+		for _, method := range report.Methods {
+			sb.WriteString(fmt.Sprintf("  %s: service %s %s, cash %s %s (%d txns)\n",
+				html.EscapeString(method.Method),
+				FormatNumber(method.ServiceRevenue), currency,
+				FormatNumber(method.CashCollected), currency,
+				method.Transactions,
+			))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func FormatRevenueCommandFromReport(report FinanceReport, today string) string {
+	var sb strings.Builder
+	sb.WriteString("📊 <b>Revenue Summary</b>\n\n")
+	sb.WriteString(fmt.Sprintf("<b>Selected range</b> %s", report.RangeStart))
+	if report.RangeStart != report.RangeEnd {
+		sb.WriteString(" to " + report.RangeEnd)
+	}
+	if report.InProgress {
+		sb.WriteString(" (In progress)")
+	}
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("Net Income: <b>%s %s</b>\n", FormatNumber(report.Current.NetServiceRevenue), html.EscapeString(report.Currency)))
+	sb.WriteString(fmt.Sprintf("Gross: %s, Refunds: %s, Cash: %s\n",
+		FormatNumber(report.Current.GrossServiceRevenue),
+		FormatNumber(report.Current.Refunds),
+		FormatNumber(report.Current.CashCollected),
+	))
+	sb.WriteString(fmt.Sprintf("Orders: %d, Users: %d\n", report.Current.SuccessfulOrders, report.Current.UniqueCustomers))
+	if len(report.Trend) > 0 {
+		sb.WriteString("\n<b>Trend</b>\n")
+		// show last up to 7 buckets newest last in list already ascending — print reverse for recency
+		start := 0
+		if len(report.Trend) > 7 {
+			start = len(report.Trend) - 7
+		}
+		for _, b := range report.Trend[start:] {
+			label := b.PeriodStart
+			if b.PeriodStart == today {
+				label += " (today)"
+			}
+			if b.InProgress {
+				label += " *"
+			}
+			sb.WriteString(fmt.Sprintf("  %s: net %s, gross %s, refunds %s\n",
+				html.EscapeString(label),
+				FormatNumber(b.Metrics.NetServiceRevenue),
+				FormatNumber(b.Metrics.GrossServiceRevenue),
+				FormatNumber(b.Metrics.Refunds),
+			))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
 func FormatRevenueCommand(rows []database.RevenueSummaryRow, today string) string {
 	if len(rows) == 0 {
 		return "📊 No revenue data for the selected period."
