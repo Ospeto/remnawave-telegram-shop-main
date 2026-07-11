@@ -18,7 +18,7 @@ func TestGetMeMarksUsedTrialsIneligible(t *testing.T) {
 	defer restore()
 
 	usedAt := time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.findCustomerByTelegramID = func(_ context.Context, telegramID int64) (*database.Customer, error) {
 		return &database.Customer{
 			ID:          1,
@@ -57,7 +57,7 @@ func TestActivateTrialMapsServiceErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 			handler.activateCustomerTrial = func(context.Context, int64) (string, error) {
 				return "", tt.err
 			}
@@ -80,7 +80,7 @@ func TestActivateTrialMapsServiceErrors(t *testing.T) {
 }
 
 func TestActivateTrialSuccessReturnsSubscriptionURL(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.activateCustomerTrial = func(context.Context, int64) (string, error) {
 		return "https://sub.example.com/trial", nil
 	}

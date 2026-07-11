@@ -15,7 +15,7 @@ func TestGetMeIncludesSupportURL(t *testing.T) {
 	restore := config.SetSupportURLForTesting("https://t.me/my-support")
 	defer restore()
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.findCustomerByTelegramID = func(_ context.Context, telegramID int64) (*database.Customer, error) {
 		return &database.Customer{
 			ID:         1,

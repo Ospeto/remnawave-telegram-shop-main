@@ -182,6 +182,8 @@ func main() {
 	promoCodeRepository := database.NewPromoCodeRepository(pool)
 	subKeyRepo := database.NewSubscriptionKeyRepository(pool)
 	walletTxRepo := database.NewWalletTransactionRepository(pool)
+	financialAdjustmentRepository := database.NewFinancialAdjustmentRepository(pool)
+	financeService := reporting.NewFinanceService(purchaseRepository, financialAdjustmentRepository)
 
 	// Initialize repositories first
 	// walletTxRepo is already Init at line 68
@@ -531,7 +533,7 @@ func main() {
 	})
 	mux.Handle("/readyz", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo, financeService, financialAdjustmentRepository)
 
 	// Rate Limiter: 10 req/s, burst 20
 	// This prevents abuse while allowing normal usage patterns.

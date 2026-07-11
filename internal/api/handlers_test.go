@@ -45,7 +45,7 @@ func TestPendingPurchaseConflictResponseCarriesExtendKeyID(t *testing.T) {
 		t.Fatalf("InitTranslations() error = %v", err)
 	}
 
-	handler := NewAPIHandler(nil, nil, nil, tm, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, tm, nil, nil, nil, nil, nil, nil, nil)
 	extendKeyID := int64(77)
 
 	resp := handler.pendingPurchaseConflictResponse(&database.Customer{
@@ -171,7 +171,7 @@ func TestCompactSubscriptionKeysForDisplayPrefersActiveRecordForSameIdentity(t *
 }
 
 func TestBeginScreenshotVerificationRejectsExcessiveAttemptsByCustomer(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	customerID := int64(99)
 
 	for i := 0; i < maxScreenshotVerificationsPerCustomer; i++ {
@@ -267,7 +267,7 @@ func captureSlogOutput(t *testing.T) *bytes.Buffer {
 
 func TestUploadScreenshotLogsMissingTelegramAuthReject(t *testing.T) {
 	logs := captureSlogOutput(t)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=55", nil)
 	rec := httptest.NewRecorder()
 
@@ -281,7 +281,7 @@ func TestUploadScreenshotLogsMissingTelegramAuthReject(t *testing.T) {
 
 func TestUploadScreenshotLogsInvalidPurchaseIDReject(t *testing.T) {
 	logs := captureSlogOutput(t)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/upload_screenshot?id=bad", nil)
 	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(123456789)))
 	rec := httptest.NewRecorder()
@@ -296,7 +296,7 @@ func TestUploadScreenshotLogsInvalidPurchaseIDReject(t *testing.T) {
 
 func TestUploadScreenshotLogsPurchaseOwnerMismatchReject(t *testing.T) {
 	logs := captureSlogOutput(t)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.getPurchaseByID = func(context.Context, int64) (*database.Purchase, error) {
 		return &database.Purchase{
 			ID:          55,
@@ -328,7 +328,7 @@ func TestUploadScreenshotLogsPurchaseOwnerMismatchReject(t *testing.T) {
 
 func TestUploadScreenshotLogsMissingFileFieldReject(t *testing.T) {
 	logs := captureSlogOutput(t)
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.getPurchaseByID = func(context.Context, int64) (*database.Purchase, error) {
 		return &database.Purchase{
 			ID:          55,
@@ -406,7 +406,7 @@ func TestPromoValidationStatus(t *testing.T) {
 }
 
 func TestUpdateAutoRenewReturnsGone(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/wallet/autorenew", strings.NewReader(`{"enabled":true,"duration":30}`))
 	rec := httptest.NewRecorder()
 
@@ -421,7 +421,7 @@ func TestUpdateAutoRenewReturnsGone(t *testing.T) {
 }
 
 func TestUpdateAutoRenewRejectsWrongMethod(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/wallet/autorenew", nil)
 	rec := httptest.NewRecorder()
 
@@ -575,7 +575,7 @@ func TestValidatePendingPurchaseCancellationAccess(t *testing.T) {
 }
 
 func TestScreenshotVerificationInFlight(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	if handler.screenshotVerificationInFlight(55) {
 		t.Fatal("screenshotVerificationInFlight() = true before verification starts")

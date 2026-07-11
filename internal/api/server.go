@@ -16,6 +16,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/reporting"
 	walletsvc "remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/translation"
 	"sort"
@@ -57,8 +58,21 @@ func extractRedirectSubscriptionURL(target string) string {
 	}
 }
 
-func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerRepository, paymentService *payment.PaymentService, telegramBot *bot.Bot, tm *translation.Manager, subKeyRepo *database.SubscriptionKeyRepository, promoCodeRepository *database.PromoCodeRepository, walletService *walletsvc.WalletService, referralRepo *database.ReferralRepository, appConfigRepo *database.AppConfigRepository) {
-	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo, appConfigRepo)
+func RegisterHandlers(
+	mux *http.ServeMux,
+	customerRepo *database.CustomerRepository,
+	paymentService *payment.PaymentService,
+	telegramBot *bot.Bot,
+	tm *translation.Manager,
+	subKeyRepo *database.SubscriptionKeyRepository,
+	promoCodeRepository *database.PromoCodeRepository,
+	walletService *walletsvc.WalletService,
+	referralRepo *database.ReferralRepository,
+	appConfigRepo *database.AppConfigRepository,
+	financeService *reporting.FinanceService,
+	financialAdjustmentRepo *database.FinancialAdjustmentRepository,
+) {
+	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo, appConfigRepo, financeService, financialAdjustmentRepo)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -87,6 +101,7 @@ func RegisterHandlers(mux *http.ServeMux, customerRepo *database.CustomerReposit
 	mux.HandleFunc("/api/admin/plans/", withAdmin(handler.AdminPlanByID))
 	mux.HandleFunc("/api/admin/promos", withAdmin(handler.AdminPromos))
 	mux.HandleFunc("/api/admin/promos/", withAdmin(handler.DeleteAdminPromo))
+	mux.HandleFunc("/api/admin/financial-adjustments", withAdmin(handler.CreateFinancialAdjustment))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
 
 	// Wallet endpoints

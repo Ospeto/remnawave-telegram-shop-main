@@ -11,6 +11,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/internal/reporting"
 	walletsvc "remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
@@ -404,6 +405,10 @@ func parsePaymentMethod(method string) (database.InvoiceType, error) {
 
 // --- Handler ---
 
+type financialAdjustmentCreator interface {
+	Create(ctx context.Context, in database.CreateFinancialAdjustmentInput) (*database.FinancialAdjustment, bool, error)
+}
+
 type APIHandler struct {
 	customerRepo               *database.CustomerRepository
 	paymentService             *payment.PaymentService
@@ -414,6 +419,8 @@ type APIHandler struct {
 	appConfigRepo              *database.AppConfigRepository
 	walletService              *walletsvc.WalletService
 	referralRepo               *database.ReferralRepository
+	financeService             *reporting.FinanceService
+	financialAdjustmentRepo    financialAdjustmentCreator
 	screenshotMu               sync.Mutex
 	screenshotAttempts         map[int64]time.Time
 	customerScreenshotAttempts map[int64][]time.Time
@@ -443,6 +450,8 @@ func NewAPIHandler(
 	walletService *walletsvc.WalletService,
 	referralRepo *database.ReferralRepository,
 	appConfigRepo *database.AppConfigRepository,
+	financeService *reporting.FinanceService,
+	financialAdjustmentRepo financialAdjustmentCreator,
 ) *APIHandler {
 	return &APIHandler{
 		customerRepo:               customerRepo,
@@ -454,6 +463,8 @@ func NewAPIHandler(
 		appConfigRepo:              appConfigRepo,
 		walletService:              walletService,
 		referralRepo:               referralRepo,
+		financeService:             financeService,
+		financialAdjustmentRepo:    financialAdjustmentRepo,
 		screenshotAttempts:         make(map[int64]time.Time),
 		customerScreenshotAttempts: make(map[int64][]time.Time),
 		screenshotInFlight:         make(map[int64]struct{}),
@@ -2197,4 +2208,89 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+type createFinancialAdjustmentRequest struct {
+	PurchaseID     *int64  `json:"purchase_id"`
+	AdjustmentType string  `json:"adjustment_type"`
+	Amount         float64 `json:"amount"`
+	Currency       string  `json:"currency"`
+	EffectiveAt    *string `json:"effective_at"`
+	Reason         string  `json:"reason"`
+	ExternalRef    string  `json:"external_ref"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+func (h *APIHandler) CreateFinancialAdjustment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.financialAdjustmentRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Financial adjustments unavailable", fmt.Errorf("repo nil"))
+		return
+	}
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var req createFinancialAdjustmentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.IdempotencyKey) == "" {
+		http.Error(w, "idempotency_key is required", http.StatusBadRequest)
+		return
+	}
+	if req.AdjustmentType != string(database.FinancialAdjustmentTypeRefund) {
+		http.Error(w, "adjustment_type must be refund", http.StatusBadRequest)
+		return
+	}
+	if req.Amount <= 0 {
+		http.Error(w, "amount must be positive", http.StatusBadRequest)
+		return
+	}
+	effectiveAt := h.currentTime()
+	if req.EffectiveAt != nil && strings.TrimSpace(*req.EffectiveAt) != "" {
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.EffectiveAt))
+		if err != nil {
+			http.Error(w, "effective_at must be RFC3339", http.StatusBadRequest)
+			return
+		}
+		effectiveAt = parsed
+	}
+	currency := strings.TrimSpace(req.Currency)
+	if currency == "" {
+		currency = "MMK"
+	}
+	row, created, err := h.financialAdjustmentRepo.Create(r.Context(), database.CreateFinancialAdjustmentInput{
+		PurchaseID:     req.PurchaseID,
+		AdjustmentType: database.FinancialAdjustmentTypeRefund,
+		Amount:         req.Amount,
+		Currency:       currency,
+		EffectiveAt:    effectiveAt,
+		Reason:         req.Reason,
+		ExternalRef:    req.ExternalRef,
+		CreatedBy:      fmt.Sprintf("admin:%d", telegramID),
+		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
+	})
+	if err != nil {
+		// validation-style repo errors (amount/key) still possible; map known messages to 400
+		msg := err.Error()
+		if strings.Contains(msg, "idempotency_key") || strings.Contains(msg, "amount must") || strings.Contains(msg, "unsupported adjustment_type") {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create financial adjustment", err)
+		return
+	}
+	if created {
+		w.WriteHeader(http.StatusCreated)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(row)
 }

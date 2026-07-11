@@ -27,7 +27,7 @@ func (s inMemoryPlanConfigStore) Set(_ context.Context, key string, value string
 
 func TestRegisterHandlersProtectsAdminPlanRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name   string
@@ -65,7 +65,7 @@ func TestListAdminPlansIncludesArchivedPlans(t *testing.T) {
 		{ID: "archived", Label: "Archived", Days: 90, Price: 25000, TrafficLimitGB: 100, SortOrder: 1, Active: false},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/plans", nil)
 	rec := httptest.NewRecorder()
 
@@ -97,7 +97,7 @@ func TestCreateAdminPlanPersistsAndReturnsCreatedPlan(t *testing.T) {
 		{ID: "existing", Label: "Existing", Days: 30, Price: 10000, TrafficLimitGB: 0, SortOrder: 4, Active: true},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		config.SetPlans(plans)
 		return nil
@@ -133,7 +133,7 @@ func TestCreateAdminPlanPersistsAndReturnsCreatedPlan(t *testing.T) {
 }
 
 func TestCreateAdminPlanRejectsInvalidTraffic(t *testing.T) {
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		config.SetPlans(plans)
 		return nil
@@ -158,7 +158,7 @@ func TestCreateAdminPlanRejectsDuplicateRenewalSignature(t *testing.T) {
 		{ID: "starter", Label: "Starter", Days: 30, Price: 10000, TrafficLimitGB: 0, SortOrder: 0, Active: true},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	store := inMemoryPlanConfigStore{values: map[string]string{}}
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		return config.SavePlansCatalog(context.Background(), store, plans)
@@ -184,7 +184,7 @@ func TestUpdateAdminPlanPreservesIDAndUpdatesFields(t *testing.T) {
 		{ID: "plan-1", Label: "Starter", Days: 30, Price: 10000, TrafficLimitGB: 0, SortOrder: 0, Active: true},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		config.SetPlans(plans)
 		return nil
@@ -218,7 +218,7 @@ func TestDeleteAdminPlanRejectsArchivingLastActivePlan(t *testing.T) {
 		{ID: "plan-1", Label: "Starter", Days: 30, Price: 10000, TrafficLimitGB: 0, SortOrder: 0, Active: true},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		config.SetPlans(plans)
 		return nil
@@ -253,7 +253,7 @@ func TestDeleteAdminPlanArchivesWhenAnotherActivePlanExists(t *testing.T) {
 		{ID: "plan-2", Label: "Pro", Days: 90, Price: 25000, TrafficLimitGB: 100, SortOrder: 1, Active: true},
 	})
 
-	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
 		config.SetPlans(plans)
 		return nil
