@@ -63,7 +63,8 @@ export function Checkout() {
 
     const extendKeyId = searchParams.get('extend');
     const promoCode = searchParams.get('promo');
-    const promoDiscount = Number(searchParams.get('discount'));
+    // URL `discount` is navigation/display metadata only; backend owns promo pricing.
+    // Do not use it for wallet eligibility or button amounts before purchase creation.
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
     const amountParam = searchParams.get('amount');
     const parsedTopUpAmount = Number(amountParam);
@@ -560,12 +561,10 @@ export function Checkout() {
         );
     }
 
-    const effectiveDiscountPercent = promoCode && Number.isFinite(promoDiscount) && promoDiscount > 0 ? promoDiscount : 0;
+    // Pre-purchase wallet eligibility uses full server plan price only.
+    // URL discount is not trusted; promo is applied server-side via promo_code.
     const topUpAmount = isWalletTopup && hasValidTopUpAmount ? parsedTopUpAmount : 0;
-    const baseTargetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
-    const targetAmount = !isWalletTopup && effectiveDiscountPercent > 0
-        ? Math.round(baseTargetAmount * (1 - effectiveDiscountPercent / 100))
-        : baseTargetAmount;
+    const targetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;
     const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
     const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
