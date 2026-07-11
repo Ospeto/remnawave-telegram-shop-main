@@ -101,6 +101,80 @@ describe('finance helpers', () => {
         INVALID_REVENUE_QUERY,
       );
     });
+
+    it('rejects zero, negative, and fractional periods', () => {
+      expect(() => buildRevenueQuery(asQuery({ period: 'week', periods: 0 }))).toThrow(
+        INVALID_REVENUE_QUERY,
+      );
+      expect(() => buildRevenueQuery(asQuery({ period: 'week', periods: -1 }))).toThrow(
+        INVALID_REVENUE_QUERY,
+      );
+      expect(() => buildRevenueQuery(asQuery({ period: 'month', periods: 1.5 }))).toThrow(
+        INVALID_REVENUE_QUERY,
+      );
+      expect(() =>
+        buildRevenueExportQuery(asQuery({ period: 'day', periods: Number.NaN })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+    });
+
+    it('rejects whitespace-only, malformed, and impossible custom dates', () => {
+      expect(() =>
+        buildRevenueQuery(asQuery({ period: 'custom', from: '   ', to: '2026-01-31' })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+      expect(() =>
+        buildRevenueQuery(asQuery({ period: 'custom', from: '2026/01/01', to: '2026-01-31' })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+      expect(() =>
+        buildRevenueQuery(asQuery({ period: 'custom', from: '2026-1-1', to: '2026-01-31' })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+      expect(() =>
+        buildRevenueQuery(asQuery({ period: 'custom', from: '2026-02-30', to: '2026-03-01' })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+      expect(() =>
+        buildRevenueExportQuery(
+          asQuery({ period: 'custom', from: '2026-04-31', to: '2026-05-01' }),
+        ),
+      ).toThrow(INVALID_REVENUE_QUERY);
+    });
+
+    it('rejects reversed custom ranges (from > to)', () => {
+      expect(() =>
+        buildRevenueQuery(
+          asQuery({ period: 'custom', from: '2026-01-31', to: '2026-01-01' }),
+        ),
+      ).toThrow(INVALID_REVENUE_QUERY);
+      expect(() =>
+        buildRevenueExportQuery(
+          asQuery({ period: 'custom', from: '2026-12-31', to: '2026-01-01' }),
+        ),
+      ).toThrow(INVALID_REVENUE_QUERY);
+    });
+
+    it('accepts valid leap-day and equal-boundary ranges with trimmed dates', () => {
+      expect(
+        buildRevenueQuery({ period: 'custom', from: '2024-02-29', to: '2024-02-29' }),
+      ).toBe('/api/revenue?period=custom&from=2024-02-29&to=2024-02-29');
+      expect(
+        buildRevenueQuery({
+          period: 'custom',
+          from: '  2026-01-01  ',
+          to: '  2026-01-31  ',
+        }),
+      ).toBe('/api/revenue?period=custom&from=2026-01-01&to=2026-01-31');
+      expect(
+        buildRevenueExportQuery({
+          period: 'custom',
+          from: ' 2024-02-29 ',
+          to: ' 2024-03-01 ',
+        }),
+      ).toBe('/api/revenue/export?period=custom&from=2024-02-29&to=2024-03-01');
+    });
+
+    it('rejects non-leap Feb 29', () => {
+      expect(() =>
+        buildRevenueQuery(asQuery({ period: 'custom', from: '2026-02-29', to: '2026-03-01' })),
+      ).toThrow(INVALID_REVENUE_QUERY);
+    });
   });
 
   describe('buildTrendPolylinePoints', () => {

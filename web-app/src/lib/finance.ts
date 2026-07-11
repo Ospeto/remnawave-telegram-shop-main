@@ -116,11 +116,44 @@ export function formatDelta(d: MoneyDelta): string {
 
 const FIXED_PERIODS = new Set<string>(['day', 'week', 'month', 'year']);
 
+/** Exact calendar date: YYYY-MM-DD with real month/day (rejects 2026-02-30). */
+const DATE_YYYY_MM_DD = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parse and validate a calendar date string.
+ * Trims input; requires exact YYYY-MM-DD after trim; rejects impossible dates.
+ * Returns the normalized (trimmed) date string.
+ */
+function parseCalendarDate(value: unknown): string {
+  if (typeof value !== 'string') {
+    throw new Error(INVALID_REVENUE_QUERY);
+  }
+  const trimmed = value.trim();
+  const m = DATE_YYYY_MM_DD.exec(trimmed);
+  if (!m) {
+    throw new Error(INVALID_REVENUE_QUERY);
+  }
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  // UTC construction avoids local TZ shifting the calendar day.
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day
+  ) {
+    throw new Error(INVALID_REVENUE_QUERY);
+  }
+  return trimmed;
+}
+
 /**
  * Runtime validation for JS callers that bypass TypeScript.
  * Throws INVALID_REVENUE_QUERY for any malformed combination.
+ * Returns a normalized options object (trimmed custom dates).
  */
-function assertRevenueQueryOptions(opts: RevenueQueryOptions): void {
+function normalizeRevenueQueryOptions(opts: RevenueQueryOptions): RevenueQueryOptions {
   const raw = opts as {
     period?: unknown;
     from?: unknown;
@@ -129,13 +162,15 @@ function assertRevenueQueryOptions(opts: RevenueQueryOptions): void {
   };
 
   if (raw.period === 'custom') {
-    if (typeof raw.from !== 'string' || raw.from === '' || typeof raw.to !== 'string' || raw.to === '') {
-      throw new Error(INVALID_REVENUE_QUERY);
-    }
     if (raw.periods !== undefined) {
       throw new Error(INVALID_REVENUE_QUERY);
     }
-    return;
+    const from = parseCalendarDate(raw.from);
+    const to = parseCalendarDate(raw.to);
+    if (from > to) {
+      throw new Error(INVALID_REVENUE_QUERY);
+    }
+    return { period: 'custom', from, to };
   }
 
   if (typeof raw.period === 'string' && FIXED_PERIODS.has(raw.period)) {
@@ -143,11 +178,17 @@ function assertRevenueQueryOptions(opts: RevenueQueryOptions): void {
       throw new Error(INVALID_REVENUE_QUERY);
     }
     if (raw.periods !== undefined) {
-      if (typeof raw.periods !== 'number' || !Number.isFinite(raw.periods)) {
+      if (
+        typeof raw.periods !== 'number' ||
+        !Number.isFinite(raw.periods) ||
+        !Number.isInteger(raw.periods) ||
+        raw.periods < 1
+      ) {
         throw new Error(INVALID_REVENUE_QUERY);
       }
+      return { period: raw.period as FixedFinancePeriod, periods: raw.periods };
     }
-    return;
+    return { period: raw.period as FixedFinancePeriod };
   }
 
   throw new Error(INVALID_REVENUE_QUERY);
@@ -155,14 +196,14 @@ function assertRevenueQueryOptions(opts: RevenueQueryOptions): void {
 
 /** Shared query-string construction for revenue JSON and CSV export endpoints. */
 function buildRevenueSearchParams(opts: RevenueQueryOptions): URLSearchParams {
-  assertRevenueQueryOptions(opts);
+  const normalized = normalizeRevenueQueryOptions(opts);
   const q = new URLSearchParams();
-  q.set('period', opts.period);
-  if (opts.period === 'custom') {
-    q.set('from', opts.from);
-    q.set('to', opts.to);
-  } else if (opts.periods !== undefined) {
-    q.set('periods', String(opts.periods));
+  q.set('period', normalized.period);
+  if (normalized.period === 'custom') {
+    q.set('from', normalized.from);
+    q.set('to', normalized.to);
+  } else if (normalized.periods !== undefined) {
+    q.set('periods', String(normalized.periods));
   }
   return q;
 }
