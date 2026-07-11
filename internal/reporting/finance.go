@@ -1,12 +1,20 @@
 package reporting
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
 	"remnawave-tg-shop-bot/internal/database"
 )
+
+// ErrMixedCurrency is returned when purchase or refund rows span more than one currency.
+// Callers can classify with errors.Is.
+var ErrMixedCurrency = errors.New("mixed currencies in finance report input")
+
+// ErrInvalidPeriodStart is returned when a period_start/day value cannot be parsed as YYYY-MM-DD.
+var ErrInvalidPeriodStart = errors.New("invalid period start")
 
 type MoneyDelta struct {
 	Absolute   float64  `json:"absolute"`
@@ -20,9 +28,9 @@ type FinanceMetrics struct {
 	CashCollected       float64 `json:"cash_collected"`
 	WalletTopUps        float64 `json:"wallet_topups"`
 	WalletSpend         float64 `json:"wallet_spend"`
-	SuccessfulOrders    int     `json:"successful_orders"`    // plan purchases only
-	UniqueCustomers     int     `json:"unique_customers"`     // distinct across full range
-	AverageOrderValue   float64 `json:"average_order_value"`  // 0 when orders == 0
+	SuccessfulOrders    int     `json:"successful_orders"`   // plan purchases only
+	UniqueCustomers     int     `json:"unique_customers"`    // distinct across full range
+	AverageOrderValue   float64 `json:"average_order_value"` // 0 when orders == 0
 	NewSubscriptions    int     `json:"new_subscriptions"`
 	Extensions          int     `json:"extensions"`
 }
@@ -59,7 +67,7 @@ type FinanceTrendBucket struct {
 }
 
 type FinanceReport struct {
-	Period      string          `json:"period"` // day|week|month|year|custom
+	Period      string          `json:"period"`   // day|week|month|year|custom
 	Timezone    string          `json:"timezone"` // Asia/Yangon
 	Currency    string          `json:"currency"`
 	RangeStart  string          `json:"range_start"` // inclusive YYYY-MM-DD
@@ -127,11 +135,51 @@ type bucketKey struct {
 	currency string
 }
 
+func normalizeCurrency(currency string) string {
+	return firstNonEmpty(currency, "MMK")
+}
+
+// resolveReportCurrency requires a single currency across all purchase and refund rows.
+// Empty currency values normalize to MMK. Mixed currencies return ErrMixedCurrency.
+func resolveReportCurrency(
+	purchaseRows []database.RevenueSummaryRow,
+	refundRows []database.RefundPeriodRow,
+	priorPurchaseRows []database.RevenueSummaryRow,
+	priorRefundRows []database.RefundPeriodRow,
+) (string, error) {
+	seen := map[string]struct{}{}
+	addPurchase := func(rows []database.RevenueSummaryRow) {
+		for _, row := range rows {
+			seen[normalizeCurrency(row.Currency)] = struct{}{}
+		}
+	}
+	addRefund := func(rows []database.RefundPeriodRow) {
+		for _, row := range rows {
+			seen[normalizeCurrency(row.Currency)] = struct{}{}
+		}
+	}
+	addPurchase(purchaseRows)
+	addPurchase(priorPurchaseRows)
+	addRefund(refundRows)
+	addRefund(priorRefundRows)
+
+	if len(seen) == 0 {
+		return "MMK", nil
+	}
+	if len(seen) > 1 {
+		return "", ErrMixedCurrency
+	}
+	for c := range seen {
+		return c, nil
+	}
+	return "MMK", nil
+}
+
 func aggregatePurchaseBuckets(rows []database.RevenueSummaryRow) map[bucketKey]FinanceMetrics {
 	seenPeriod := map[bucketKey]bool{}
 	out := map[bucketKey]FinanceMetrics{}
 	for _, row := range rows {
-		currency := firstNonEmpty(row.Currency, "MMK")
+		currency := normalizeCurrency(row.Currency)
 		start := firstNonEmpty(row.PeriodStart, row.Day)
 		key := bucketKey{start: start, currency: currency}
 		m := out[key]
@@ -152,7 +200,7 @@ func aggregatePurchaseBuckets(rows []database.RevenueSummaryRow) map[bucketKey]F
 
 func applyRefunds(buckets map[bucketKey]FinanceMetrics, refunds []database.RefundPeriodRow) {
 	for _, rr := range refunds {
-		key := bucketKey{start: rr.PeriodStart, currency: firstNonEmpty(rr.Currency, "MMK")}
+		key := bucketKey{start: rr.PeriodStart, currency: normalizeCurrency(rr.Currency)}
 		m := buckets[key]
 		m.Refunds += rr.RefundTotal
 		buckets[key] = m
@@ -191,6 +239,11 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	if in.CurrentStart.IsZero() || in.CurrentEnd.IsZero() || !in.CurrentEnd.After(in.CurrentStart) {
 		return FinanceReport{}, fmt.Errorf("current window is required")
 	}
+	currency, err := resolveReportCurrency(in.PurchaseRows, in.RefundRows, in.PriorPurchaseRows, in.PriorRefundRows)
+	if err != nil {
+		return FinanceReport{}, err
+	}
+
 	loc := YangonLocation()
 	now := in.Now.In(loc)
 	period := in.Period
@@ -217,40 +270,25 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 		catsByPeriod[start] = append(catsByPeriod[start], row)
 	}
 
-	// trend ascending
+	// trend ascending — single currency already validated, so one bucket per start.
 	starts := make([]string, 0, len(currentBuckets))
+	seenStart := map[string]bool{}
 	for k := range currentBuckets {
+		if seenStart[k.start] {
+			continue
+		}
+		seenStart[k.start] = true
 		starts = append(starts, k.start)
 	}
 	sort.Strings(starts)
-	// unique starts
-	uniqStarts := make([]string, 0, len(starts))
-	seenStart := map[string]bool{}
-	for _, s := range starts {
-		if seenStart[s] {
-			continue
+
+	trend := make([]FinanceTrendBucket, 0, len(starts))
+	for _, startStr := range starts {
+		m := currentBuckets[bucketKey{start: startStr, currency: currency}]
+		startDay, parseErr := time.ParseInLocation("2006-01-02", startStr, loc)
+		if parseErr != nil {
+			return FinanceReport{}, fmt.Errorf("%w: %q: %v", ErrInvalidPeriodStart, startStr, parseErr)
 		}
-		seenStart[s] = true
-		uniqStarts = append(uniqStarts, s)
-	}
-	trend := make([]FinanceTrendBucket, 0, len(uniqStarts))
-	for _, startStr := range uniqStarts {
-		// Use MMK bucket when present; otherwise the first currency for that start.
-		var m FinanceMetrics
-		found := false
-		for k, v := range currentBuckets {
-			if k.start != startStr {
-				continue
-			}
-			if !found || k.currency == "MMK" {
-				m = v
-				found = true
-				if k.currency == "MMK" {
-					break
-				}
-			}
-		}
-		startDay, _ := time.ParseInLocation("2006-01-02", startStr, loc)
 		endDay := bucketInclusiveEnd(period, startDay)
 		bucketStart := startDay
 		bucketEndExclusive := endDay.AddDate(0, 0, 1)
@@ -286,7 +324,7 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	return FinanceReport{
 		Period:      string(period),
 		Timezone:    "Asia/Yangon",
-		Currency:    firstNonEmpty(currentCurrency(in.PurchaseRows), "MMK"),
+		Currency:    currency,
 		RangeStart:  rangeStart,
 		RangeEnd:    rangeEnd,
 		GeneratedAt: now,
@@ -298,15 +336,6 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 		Methods:     methods,
 		Trend:       trend,
 	}, nil
-}
-
-func currentCurrency(rows []database.RevenueSummaryRow) string {
-	for _, row := range rows {
-		if row.Currency != "" {
-			return row.Currency
-		}
-	}
-	return "MMK"
 }
 
 func buildCategoryBreakdown(rows []database.RevenueSummaryRow) []CategoryBreakdown {

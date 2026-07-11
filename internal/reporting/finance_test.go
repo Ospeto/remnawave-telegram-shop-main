@@ -1,13 +1,12 @@
 package reporting
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"remnawave-tg-shop-bot/internal/database"
 )
-
-func emptyMetrics() FinanceMetrics { return FinanceMetrics{} }
 
 func TestBuildFinanceReport_NetEqualsGrossMinusRefunds(t *testing.T) {
 	loc := YangonLocation()
@@ -149,5 +148,255 @@ func TestBuildFinanceReport_CustomInclusiveRange(t *testing.T) {
 	}
 	if report.InProgress {
 		t.Fatal("historical custom range must not be in progress")
+	}
+}
+
+func TestBuildFinanceReport_RejectsMixedCurrency(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 100, ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			{PeriodStart: "2026-07-12", Currency: "USD", PeriodServiceRevenue: 5, ServiceRevenue: 5, TotalPurchases: 1, PaymentMethod: "crypto", RevenueCategory: "new_key"},
+		},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrMixedCurrency) {
+		t.Fatalf("err=%v want ErrMixedCurrency", err)
+	}
+}
+
+func TestBuildFinanceReport_RejectsMixedCurrencyAcrossRefunds(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 100, ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		RefundRows: []database.RefundPeriodRow{
+			{PeriodStart: "2026-07-12", Currency: "USD", RefundTotal: 10, RefundCount: 1},
+		},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrMixedCurrency) {
+		t.Fatalf("err=%v want ErrMixedCurrency", err)
+	}
+}
+
+func TestBuildFinanceReport_RejectsMixedCurrencyAcrossPrior(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PriorStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorEnd:     time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 100, ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		PriorPurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-11", Currency: "THB", PeriodServiceRevenue: 50, ServiceRevenue: 50, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrMixedCurrency) {
+		t.Fatalf("err=%v want ErrMixedCurrency", err)
+	}
+}
+
+func TestBuildFinanceReport_MalformedPeriodStart(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "not-a-date", Currency: "MMK",
+			PeriodServiceRevenue: 100, PeriodServicePurchases: 1,
+			ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrInvalidPeriodStart) {
+		t.Fatalf("err=%v want ErrInvalidPeriodStart", err)
+	}
+}
+
+func TestBuildFinanceReport_WalletTopUpCashNotServiceRevenue(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart:            "2026-07-12",
+			Currency:               "MMK",
+			InvoiceType:            string(database.InvoiceTypeWalletTopUp),
+			RevenueCategory:        "wallet_topup",
+			PaymentMethod:          "kbz",
+			PeriodServiceRevenue:   0,
+			PeriodCashCollected:    500,
+			PeriodWalletTopUps:     500,
+			PeriodServicePurchases: 0,
+			ServiceRevenue:         0,
+			CashCollected:          500,
+			WalletTopUps:           500,
+			TotalPurchases:         1,
+		}},
+		RangeUniqueCustomers: 0,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Current.GrossServiceRevenue != 0 {
+		t.Fatalf("gross service=%v want 0", report.Current.GrossServiceRevenue)
+	}
+	if report.Current.CashCollected != 500 {
+		t.Fatalf("cash=%v want 500", report.Current.CashCollected)
+	}
+	if report.Current.WalletTopUps != 500 {
+		t.Fatalf("topups=%v want 500", report.Current.WalletTopUps)
+	}
+	if len(report.Categories) != 1 || report.Categories[0].Category != "wallet_topup" || report.Categories[0].Amount != 500 {
+		t.Fatalf("categories=%+v", report.Categories)
+	}
+	if len(report.Methods) != 1 || report.Methods[0].ServiceRevenue != 0 || report.Methods[0].CashCollected != 500 {
+		t.Fatalf("methods=%+v", report.Methods)
+	}
+}
+
+func TestBuildFinanceReport_WalletSpendServiceRevenueNoCash(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart:            "2026-07-12",
+			Currency:               "MMK",
+			InvoiceType:            string(database.InvoiceTypeWalletPayment),
+			RevenueCategory:        "extension",
+			PaymentMethod:          "wallet",
+			PeriodServiceRevenue:   300,
+			PeriodCashCollected:    0,
+			PeriodWalletSpend:      300,
+			PeriodServicePurchases: 1,
+			ServiceRevenue:         300,
+			CashCollected:          0,
+			WalletSpend:            300,
+			TotalPurchases:         1,
+		}},
+		RangeUniqueCustomers: 1,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Current.GrossServiceRevenue != 300 {
+		t.Fatalf("gross=%v want 300", report.Current.GrossServiceRevenue)
+	}
+	if report.Current.CashCollected != 0 {
+		t.Fatalf("cash=%v want 0", report.Current.CashCollected)
+	}
+	if report.Current.WalletSpend != 300 {
+		t.Fatalf("wallet spend=%v want 300", report.Current.WalletSpend)
+	}
+	if len(report.Methods) != 1 || report.Methods[0].ServiceRevenue != 300 || report.Methods[0].CashCollected != 0 {
+		t.Fatalf("methods=%+v", report.Methods)
+	}
+}
+
+func TestBuildFinanceReport_UniqueCustomersFromRangeInput(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		// Bucket-level unique fields intentionally differ from range input; builder must ignore them.
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 100, PeriodServicePurchases: 1, PeriodUniqueCustomers: 9, ServiceRevenue: 100, TotalPurchases: 1, UniqueCustomers: 9, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 200, PeriodServicePurchases: 2, PeriodUniqueCustomers: 4, ServiceRevenue: 200, TotalPurchases: 2, UniqueCustomers: 4, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		RangeUniqueCustomers: 7,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Current.UniqueCustomers != 7 {
+		t.Fatalf("unique customers=%d want RangeUniqueCustomers=7 (not bucket sum)", report.Current.UniqueCustomers)
+	}
+}
+
+func TestBuildFinanceReport_TwoDecimalNormalization(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart:            "2026-07-12",
+			Currency:               "MMK",
+			PeriodServiceRevenue:   10.005,
+			PeriodCashCollected:    10.005,
+			PeriodServicePurchases: 1,
+			ServiceRevenue:         10.005,
+			CashCollected:          10.005,
+			TotalPurchases:         1,
+			PaymentMethod:          "kbz",
+			RevenueCategory:        "new_key",
+		}},
+		RefundRows: []database.RefundPeriodRow{{
+			PeriodStart: "2026-07-12",
+			Currency:    "MMK",
+			RefundTotal: 1.004,
+			RefundCount: 1,
+		}},
+		RangeUniqueCustomers: 1,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RoundMoney half-away-from-zero: 10.005→10.01, 1.004→1.00, net 9.01
+	if report.Current.GrossServiceRevenue != 10.01 {
+		t.Fatalf("gross=%v want 10.01", report.Current.GrossServiceRevenue)
+	}
+	if report.Current.Refunds != 1.00 {
+		t.Fatalf("refunds=%v want 1.00", report.Current.Refunds)
+	}
+	if report.Current.NetServiceRevenue != 9.01 {
+		t.Fatalf("net=%v want 9.01", report.Current.NetServiceRevenue)
+	}
+	if report.Current.CashCollected != 10.01 {
+		t.Fatalf("cash=%v want 10.01", report.Current.CashCollected)
+	}
+	if report.Current.AverageOrderValue != 10.01 {
+		t.Fatalf("aov=%v want 10.01", report.Current.AverageOrderValue)
+	}
+	if len(report.Categories) != 1 || report.Categories[0].Amount != 10.01 {
+		t.Fatalf("category amount=%+v want 10.01", report.Categories)
+	}
+	if len(report.Methods) != 1 || report.Methods[0].ServiceRevenue != 10.01 || report.Methods[0].CashCollected != 10.01 {
+		t.Fatalf("method money=%+v", report.Methods)
+	}
+	if len(report.Trend) != 1 {
+		t.Fatalf("trend len=%d", len(report.Trend))
+	}
+	if report.Trend[0].Metrics.GrossServiceRevenue != 10.01 || report.Trend[0].Metrics.Refunds != 1.00 {
+		t.Fatalf("trend metrics=%+v", report.Trend[0].Metrics)
 	}
 }
