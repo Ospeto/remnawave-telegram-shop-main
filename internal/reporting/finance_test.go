@@ -230,6 +230,91 @@ func TestBuildFinanceReport_MalformedPeriodStart(t *testing.T) {
 	}
 }
 
+func TestBuildFinanceReport_MalformedPriorPurchasePeriodStart(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PriorStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorEnd:     time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "2026-07-12", Currency: "MMK",
+			PeriodServiceRevenue: 100, PeriodServicePurchases: 1,
+			ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+		PriorPurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "bad-prior-date", Currency: "MMK",
+			PeriodServiceRevenue: 50, PeriodServicePurchases: 1,
+			ServiceRevenue: 50, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+		PriorUniqueCustomers: 1,
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrInvalidPeriodStart) {
+		t.Fatalf("err=%v want ErrInvalidPeriodStart", err)
+	}
+}
+
+func TestBuildFinanceReport_MalformedPriorRefundPeriodStart(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PriorStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorEnd:     time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "2026-07-12", Currency: "MMK",
+			PeriodServiceRevenue: 100, PeriodServicePurchases: 1,
+			ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+		PriorPurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "2026-07-11", Currency: "MMK",
+			PeriodServiceRevenue: 50, PeriodServicePurchases: 1,
+			ServiceRevenue: 50, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+		PriorRefundRows: []database.RefundPeriodRow{{
+			PeriodStart: "not-a-refund-date",
+			Currency:    "MMK",
+			RefundTotal: 10,
+			RefundCount: 1,
+		}},
+		PriorUniqueCustomers: 1,
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrInvalidPeriodStart) {
+		t.Fatalf("err=%v want ErrInvalidPeriodStart", err)
+	}
+}
+
+func TestBuildFinanceReport_MalformedCurrentRefundPeriodStart(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart: "2026-07-12", Currency: "MMK",
+			PeriodServiceRevenue: 100, PeriodServicePurchases: 1,
+			ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key",
+		}},
+		RefundRows: []database.RefundPeriodRow{{
+			PeriodStart: "bad-refund",
+			Currency:    "MMK",
+			RefundTotal: 5,
+			RefundCount: 1,
+		}},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrInvalidPeriodStart) {
+		t.Fatalf("err=%v want ErrInvalidPeriodStart", err)
+	}
+}
+
 func TestBuildFinanceReport_WalletTopUpCashNotServiceRevenue(t *testing.T) {
 	loc := YangonLocation()
 	in := BuildFinanceReportInput{

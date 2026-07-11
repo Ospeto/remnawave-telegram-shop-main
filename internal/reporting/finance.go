@@ -235,6 +235,52 @@ func bucketInclusiveEnd(period database.RevenueSummaryPeriod, start time.Time) t
 	}
 }
 
+func parsePeriodStart(startStr string, loc *time.Location) (time.Time, error) {
+	startDay, err := time.ParseInLocation("2006-01-02", startStr, loc)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %q: %v", ErrInvalidPeriodStart, startStr, err)
+	}
+	return startDay, nil
+}
+
+// validatePeriodStarts rejects malformed period_start/day values across all input row
+// collections before aggregation so bad prior rows cannot affect metrics or deltas.
+func validatePeriodStarts(
+	loc *time.Location,
+	purchaseRows []database.RevenueSummaryRow,
+	refundRows []database.RefundPeriodRow,
+	priorPurchaseRows []database.RevenueSummaryRow,
+	priorRefundRows []database.RefundPeriodRow,
+) error {
+	checkPurchase := func(rows []database.RevenueSummaryRow) error {
+		for _, row := range rows {
+			start := firstNonEmpty(row.PeriodStart, row.Day)
+			if _, err := parsePeriodStart(start, loc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	checkRefund := func(rows []database.RefundPeriodRow) error {
+		for _, row := range rows {
+			if _, err := parsePeriodStart(row.PeriodStart, loc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := checkPurchase(purchaseRows); err != nil {
+		return err
+	}
+	if err := checkRefund(refundRows); err != nil {
+		return err
+	}
+	if err := checkPurchase(priorPurchaseRows); err != nil {
+		return err
+	}
+	return checkRefund(priorRefundRows)
+}
+
 func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	if in.CurrentStart.IsZero() || in.CurrentEnd.IsZero() || !in.CurrentEnd.After(in.CurrentStart) {
 		return FinanceReport{}, fmt.Errorf("current window is required")
@@ -245,6 +291,10 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	}
 
 	loc := YangonLocation()
+	if err := validatePeriodStarts(loc, in.PurchaseRows, in.RefundRows, in.PriorPurchaseRows, in.PriorRefundRows); err != nil {
+		return FinanceReport{}, err
+	}
+
 	now := in.Now.In(loc)
 	period := in.Period
 	if period == "" {
@@ -285,10 +335,8 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	trend := make([]FinanceTrendBucket, 0, len(starts))
 	for _, startStr := range starts {
 		m := currentBuckets[bucketKey{start: startStr, currency: currency}]
-		startDay, parseErr := time.ParseInLocation("2006-01-02", startStr, loc)
-		if parseErr != nil {
-			return FinanceReport{}, fmt.Errorf("%w: %q: %v", ErrInvalidPeriodStart, startStr, parseErr)
-		}
+		// Period starts already validated; parse is infallible here.
+		startDay, _ := parsePeriodStart(startStr, loc)
 		endDay := bucketInclusiveEnd(period, startDay)
 		bucketStart := startDay
 		bucketEndExclusive := endDay.AddDate(0, 0, 1)
