@@ -1,16 +1,18 @@
-# 📱 Telegram Mini App — Setup Guide
+# Telegram Mini App — Setup Guide
 
-This guide walks you through setting up the **Telegram Mini App** for your Remnawave Shop bot. The Mini App lets users manage their subscription directly inside Telegram.
+This guide covers the **Telegram Mini App** for the Remnawave Shop bot. The Mini App runs inside Telegram and is served by the Go backend from `web-app/dist`.
 
 ---
 
 ## What is the Mini App?
 
-The Mini App is a small web application that runs **inside Telegram** when users tap the Menu Button or the "Connect" button. It shows:
+The Mini App is a React/Vite web app that opens from the bot menu button. Current surfaces include:
 
-- ✅ **Subscription status** (active/expired, expiry date)
-- 🚀 **One-click "Import to Happ Proxy"** button
-- 📊 User info (username, avatar)
+- **Home** — subscription status, key import, auto-renew toggles
+- **Plans** — browse plans and apply promo codes before checkout
+- **Checkout** — mobile banking payment instructions, screenshot upload, wallet pay
+- **Wallet** — balance, history, top-up entry
+- **Admin** (authorized operators) — plan and promo management where enabled
 
 ---
 
@@ -18,132 +20,119 @@ The Mini App is a small web application that runs **inside Telegram** when users
 
 | Requirement | How to check | How to install |
 |---|---|---|
-| **Node.js 18+** | `node -v` | [nodejs.org](https://nodejs.org) or `brew install node` (macOS) |
+| **Node.js 20** | `node -v` | [nodejs.org](https://nodejs.org) or `brew install node@20` (macOS) |
 | **npm** | `npm -v` | Comes with Node.js |
-| **Bot already set up** | `.env` file exists | Run `./setup.sh` → Option 1 (Fresh Install) |
-| **Public HTTPS URL** | Your server has a domain | Use a reverse proxy (nginx/Caddy) with SSL |
+| **Bot already set up** | `.env` file exists | Run `./setup.sh` → Fresh Install |
+| **Public HTTPS URL** | Domain + TLS | Bundled Caddy `edge` profile, or your own reverse proxy |
+
+Docker production builds use Node 20 in the image; local frontend builds should match.
 
 ---
 
 ## Quick Setup (Recommended)
 
-The easiest way is to use the setup script:
+Use the setup script from the repo root:
 
 ```bash
 ./setup.sh
 ```
 
-Choose **Option 9 → 📱 Setup Mini App**
+Choose the **Mini App** setup option from the menu (label may vary by script version).
 
-The script will:
-1. ✅ Check Node.js is installed
-2. 📦 Install frontend dependencies (`npm install`)
-3. 🔨 Build the Mini App (`npm run build`)
-4. ⚙️ Ask for your public HTTPS URL and save it to `.env`
-5. 📋 Show next steps
+Typical outcomes:
+
+1. Frontend is built (in Docker, or locally under `web-app/`)
+2. You set a public HTTPS `MINI_APP_URL` in `.env`
+3. You configure BotFather’s menu button to the same origin
 
 ---
 
 ## Manual Setup
 
-If you prefer to set things up manually:
-
-### Step 1: Install Dependencies
+### Step 1: Install dependencies and build
 
 ```bash
 cd web-app
-npm install
-```
-
-### Step 2: Build
-
-```bash
+npm ci
 npm run build
 ```
 
-This creates `web-app/dist/` with the compiled frontend.
+This creates `web-app/dist/`. The Go app serves that directory (relative to process CWD) as the Mini App SPA.
 
-### Step 3: Configure `.env`
-
-Add or update this line in your `.env` file:
+### Step 2: Configure `.env`
 
 ```env
 MINI_APP_URL=https://your-domain.com
 ```
 
-> ⚠️ **Must be HTTPS**. Telegram requires a secure URL for Mini Apps.
+> **Must be public HTTPS.** Telegram requires a secure Mini App URL.
 
-#### ❓ Where do I get a Public URL?
+If you use the **bundled Caddy edge** profile, also set `DOMAIN_NAME` (and `ACME_EMAIL`) to match that host. If you terminate TLS elsewhere, only `MINI_APP_URL` needs to match your public origin.
 
-**Option A: Cloudflare Tunnel (Recommended & Free)**
-Easiest way to expose your local bot securely.
-1. Install `cloudflared`.
-2. Run: `cloudflared tunnel --url http://localhost:8080`
-3. Copy the `https://....trycloudflare.com` URL.
+#### Where do I get a public URL?
 
-**Option B: Ngrok (Testing)**
-Good for quick testing, but URLs change on restart.
-1. Install `ngrok`.
-2. Run: `ngrok http 8080`
-3. Copy the `https://....ngrok-free.app` URL.
+**Option A: Bundled Caddy (production-style)**
 
-**Option C: VPS + Domain (Production)**
-If you have a VPS (DigitalOcean, Hetzner) and a domain:
-1. Point your domain A record to your VPS IP.
-2. Use a reverse proxy (Caddy/Nginx) to handle SSL.
-3. Your URL is `https://your-domain.com`.
-
-### Step 4: Restart the Bot
+1. Set `DOMAIN_NAME` and `ACME_EMAIL` in `.env`.
+2. Start app + edge:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build bot db
+docker compose --profile edge up -d --build caddy
 ```
 
-Or use `./setup.sh` → Option 4.
+3. Use `https://$DOMAIN_NAME` as `MINI_APP_URL`.
 
-### Step 5: Configure BotFather
+**Option B: Your own reverse proxy**
 
-1. Open [@BotFather](https://t.me/BotFather) in Telegram
-2. Send `/mybots`
-3. Select your bot
-4. Go to **Bot Settings** → **Menu Button**
-5. Choose **Configure menu button**
-6. Send your URL (e.g., `https://your-domain.com`)
+Point TLS at the bot’s HTTP port (default host mapping `127.0.0.1:8080` → container `8080`). Keep `HEALTH_CHECK_PORT` aligned with compose/Caddy if you change it.
+
+**Option C: Tunnel for testing** (Cloudflare Tunnel / ngrok)
+
+Expose local `8080` over HTTPS and set `MINI_APP_URL` to the tunnel URL. URLs may change on restart.
+
+### Step 3: Restart the bot
+
+```bash
+docker compose up -d --build bot db
+```
+
+Or use `./setup.sh` maintenance options.
+
+### Step 4: Configure BotFather
+
+1. Open [@BotFather](https://t.me/BotFather)
+2. `/mybots` → your bot → **Bot Settings** → **Menu Button**
+3. Set the URL to the same origin as `MINI_APP_URL` (e.g. `https://your-domain.com`)
 
 ---
 
 ## How It Works
 
 ```
-┌─────────────────────────────┐
-│     Telegram (Mobile)       │
-│  ┌───────────────────────┐  │
-│  │   Mini App (React)    │  │
-│  │                       │  │
-│  │  📊 Subscription      │  │
-│  │  ● Active             │  │
-│  │  Expires: 2026-03-15  │  │
-│  │                       │  │
-│  │  [🚀 Import to        │  │
-│  │     Happ Proxy]       │  │
-│  │                       │  │
-│  └───────────────────────┘  │
-└─────────────────────────────┘
-         │ API calls (HTTPS)
-         ▼
-┌─────────────────────────────┐
-│  Go Backend (your server)   │
-│  ├── /api/me    (auth)      │
-│  ├── /api/plans (public)    │
-│  └── /         (static)     │
-└─────────────────────────────┘
+Telegram client
+  └── Mini App (React SPA from web-app/dist)
+        │ HTTPS same origin
+        ▼
+Go backend
+  ├── /api/*   JSON API (auth via Telegram initData)
+  └── /        static SPA + fallback
 ```
+
+High-level API surfaces used by the Mini App:
+
+| Area | Examples |
+|---|---|
+| Session / home | `/api/me`, keys, auto-renew |
+| Catalog / checkout | `/api/plans`, `/api/purchase`, `/api/upload_screenshot`, `/api/promo/validate` |
+| Wallet | `/api/wallet`, `/api/wallet/history` |
+| Admin (authorized) | plan/promo admin routes |
 
 ### Security
 
-- The Mini App authenticates using Telegram's `initData` — a signed payload that proves the user is who they say they are.
-- The backend validates the HMAC-SHA256 hash using your `TELEGRAM_TOKEN`.
-- No passwords or separate login needed!
+- Auth uses Telegram `initData` (HMAC validated with `TELEGRAM_TOKEN`).
+- No separate password login.
+- Purchase creation should send a unique `Idempotency-Key` header (the bundled Mini App does this).
 
 ---
 
@@ -151,27 +140,26 @@ Or use `./setup.sh` → Option 4.
 
 | Problem | Solution |
 |---|---|
-| "Node.js not found" | Install Node.js 18+ from [nodejs.org](https://nodejs.org) |
-| "npm install failed" | Delete `web-app/node_modules` and retry |
-| "Build failed" | Check the error message; usually a missing dependency |
-| Mini App shows blank | Check browser console (F12). Likely API URL mismatch |
-| "Unauthorized" in Mini App | Make sure `TELEGRAM_TOKEN` in `.env` matches BotFather |
-| Menu Button not showing | Configure it in BotFather (Step 5 above) |
+| "Node.js not found" / wrong version | Install **Node 20** |
+| `npm ci` / build failed | Delete `web-app/node_modules` and retry; check Node version |
+| Mini App blank | Public HTTPS, `MINI_APP_URL` match, BotFather URL; see `HOWTOUSE.md` |
+| "Unauthorized" | `TELEGRAM_TOKEN` must match BotFather |
+| Menu button missing | Configure BotFather menu button (Step 4) |
+| Bundled Caddy not starting | Use `docker compose --profile edge up -d caddy` |
 
 ---
 
 ## Development (Optional)
 
-For local development:
-
 ```bash
 cd web-app
+npm ci
 npm run dev
 ```
 
-This starts a dev server on `http://localhost:5173` with hot reload. API calls are proxied to `http://localhost:8080` (your bot's health check port).
+Dev server: `http://localhost:5173` (API proxied to the bot, typically `http://localhost:8080`).
 
-> **Note**: The Mini App won't fully work locally because Telegram's `initData` is only available when opened inside Telegram. You can test the UI, but authentication won't work.
+> Full auth only works inside Telegram (`initData`). Local UI work is fine; production Mini App is the built `dist` served by Go.
 
 ---
 
@@ -180,14 +168,13 @@ This starts a dev server on `http://localhost:5173` with hot reload. API calls a
 ```
 web-app/
 ├── src/
-│   ├── App.tsx          # Main component (dashboard + import button)
-│   ├── main.tsx         # Entry point
-│   ├── index.css        # Styles (Tailwind CSS)
-│   ├── types.d.ts       # Telegram WebApp type definitions
-│   └── lib/
-│       └── twa.ts       # Telegram WebApp hook (useTelegram)
-├── package.json         # Dependencies
-├── vite.config.ts       # Build configuration
-├── tailwind.config.js   # Tailwind CSS configuration
-└── dist/                # Built files (after `npm run build`)
+│   ├── App.tsx
+│   ├── main.tsx
+│   ├── index.css
+│   ├── pages/           # Home, Plans, Checkout, Wallet, admin pages, …
+│   ├── components/
+│   └── lib/             # auth, http, translations, Telegram helpers, …
+├── package.json
+├── vite.config.ts
+└── dist/                # after `npm run build` (served by Go)
 ```

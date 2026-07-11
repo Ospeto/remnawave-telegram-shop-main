@@ -81,7 +81,7 @@ After editing plans, you must restart the bot:
 -   `/admin` -> `Operations` -> `Run E2E Check` or `/healthbot run` triggers a synthetic bot canary that checks analyzer readiness and a disposable fulfillment flow.
 
 ### Wallet System
--   Users can "Top Up" their internal balance using Crypto or Mobile Banking.
+-   Users can "Top Up" their internal balance using Mobile Banking (screenshot verification).
 -   Purchases made using Wallet Balance are instant.
 
 ---
@@ -140,15 +140,26 @@ docker run --rm -v bot_backups:/backups alpine:3.22 ls -lah /backups
 
 ### Blank Screen in Mini App
 -   **Cause**: Invalid SSL, mixed content (HTTP vs HTTPS), or `MINI_APP_URL` mismatch.
--   **Fix**: Ensure `MINI_APP_URL` matches your real HTTPS origin. If you use the bundled proxy, set `DOMAIN_NAME` to that host and start `caddy`; if you use your own reverse proxy, verify TLS there instead.
+-   **Fix**:
+    1.  Ensure `MINI_APP_URL` is a **public HTTPS** origin and matches BotFather’s menu button URL.
+    2.  If you use the **bundled Caddy edge** profile: set `DOMAIN_NAME` to that host and start Caddy with
+        `docker compose --profile edge up -d caddy`.
+    3.  If you terminate TLS with your own reverse proxy, verify certificates and that traffic reaches the bot on the expected internal port (default `8080`).
 
 ### "Dirty Database Version" Error
--   **Cause**: A migration failed mid-way (e.g., bot crashed during update).
--   **Fix**:
-    1.  Stop bot: `docker-compose stop bot`
-    2.  Reset DB version (example to version 15):
-        `docker exec remnawave-telegram-shop-db psql -U postgres -d postgres -c "UPDATE schema_migrations SET dirty = false, version = 15;"`
-    3.  Restart: `docker-compose up -d bot db`
+-   **Cause**: A migration failed mid-way (e.g., bot crashed during update). Do **not** blindly force a version number.
+-   **Safer recovery procedure**:
+    1.  Stop the bot so it does not keep retrying migrations:
+        `docker compose stop bot`
+    2.  Inspect bot logs for the failed migration name/version:
+        `docker compose logs bot`
+    3.  Read the current migration state (**read-only**):
+        `docker exec remnawave-telegram-shop-db psql -U postgres -d postgres -c "SELECT version, dirty FROM schema_migrations;"`
+    4.  Identify the failed migration under `db/migrations/` and check whether any of its SQL already applied partially.
+    5.  If you are unsure about partial state, **restore from a known-good backup** offline via `setup.sh` (see [BACKUP-RUNBOOK.md](BACKUP-RUNBOOK.md)) rather than guessing.
+    6.  Only after you know the actual last-known-good version and have repaired or rolled back partial changes, clear the dirty flag / set that version, then restart:
+        `docker compose up -d bot db`
+    7.  Confirm the bot starts cleanly and migrations complete without a new dirty state.
 
 ### Duplicate Transaction ID Error
 -   **Cause**: Testing with the same receipt twice.
