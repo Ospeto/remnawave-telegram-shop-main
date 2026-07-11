@@ -2,6 +2,7 @@ package reporting
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -483,5 +484,42 @@ func TestBuildFinanceReport_TwoDecimalNormalization(t *testing.T) {
 	}
 	if report.Trend[0].Metrics.GrossServiceRevenue != 10.01 || report.Trend[0].Metrics.Refunds != 1.00 {
 		t.Fatalf("trend metrics=%+v", report.Trend[0].Metrics)
+	}
+}
+
+func TestFormatFinanceReportCSV_MatchesJSONTotals(t *testing.T) {
+	report := FinanceReport{
+		Period: "day", Timezone: "Asia/Yangon", Currency: "MMK",
+		RangeStart: "2026-07-12", RangeEnd: "2026-07-12",
+		Current: FinanceMetrics{
+			GrossServiceRevenue: 1000, Refunds: 100, NetServiceRevenue: 900,
+			CashCollected: 800, WalletTopUps: 200, WalletSpend: 200,
+			SuccessfulOrders: 2, UniqueCustomers: 2, AverageOrderValue: 500,
+			NewSubscriptions: 1, Extensions: 1,
+		},
+		Methods: []MethodBreakdown{{Method: "kbz", Transactions: 1, ServiceRevenue: 600, CashCollected: 600}},
+		Categories: []CategoryBreakdown{{Category: "new_key", Orders: 1, Amount: 600}},
+		Trend: []FinanceTrendBucket{{
+			PeriodStart: "2026-07-12", PeriodEnd: "2026-07-12",
+			Metrics:    FinanceMetrics{GrossServiceRevenue: 1000, Refunds: 100, NetServiceRevenue: 900},
+			Categories: []CategoryBreakdown{{Category: "new_key", Orders: 1, Amount: 600}},
+			Methods:    []MethodBreakdown{{Method: "kbz", Transactions: 1, ServiceRevenue: 600, CashCollected: 600}},
+		}},
+	}
+	csvBytes, err := FormatFinanceReportCSV(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(csvBytes)
+	for _, want := range []string{
+		"gross_service_revenue,1000.00",
+		"refunds,100.00",
+		"net_service_revenue,900.00",
+		"cash_collected,800.00",
+		"unique_customers,2",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("csv missing %q in %s", want, s)
+		}
 	}
 }
