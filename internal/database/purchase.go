@@ -700,6 +700,29 @@ func (pr *PurchaseRepository) GetRevenueSummaryRange(ctx context.Context, start,
 	return result, rows.Err()
 }
 
+func buildCountDistinctServiceCustomersSQL() string {
+	return `
+		SELECT COUNT(DISTINCT p.customer_id)
+		FROM purchase p
+		JOIN customer c ON c.id = p.customer_id
+		WHERE p.status = 'paid'
+		  AND p.paid_at IS NOT NULL
+		  AND p.invoice_type <> 'wallet_topup'
+		  AND p.paid_at >= $1
+		  AND p.paid_at < $2
+		  AND ($3::bigint = 0 OR c.telegram_id <> $3)`
+}
+
+func (pr *PurchaseRepository) CountDistinctServiceCustomers(ctx context.Context, start, end time.Time) (int, error) {
+	adminID := config.GetAdminTelegramId()
+	var n int
+	err := pr.pool.QueryRow(ctx, buildCountDistinctServiceCustomersSQL(), start, end, adminID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count distinct service customers: %w", err)
+	}
+	return n, nil
+}
+
 // RecentPaidRow holds a paid purchase with the customer's Telegram ID.
 type RecentPaidRow struct {
 	PurchaseID    int64

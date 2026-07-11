@@ -196,3 +196,19 @@ func TestBuildRevenueSummaryQueryRejectsUnknownPeriod(t *testing.T) {
 		t.Fatal("buildRevenueSummaryQuery() error = nil, want unsupported period error")
 	}
 }
+
+func TestBuildCountDistinctServiceCustomersSQL_ExcludesAdminAndWalletTopups(t *testing.T) {
+	q := buildCountDistinctServiceCustomersSQL()
+	for _, want := range []string{
+		"COUNT(DISTINCT p.customer_id)",
+		"invoice_type <> 'wallet_topup'",
+		"status = 'paid'",
+		"telegram_id",
+		"paid_at >= $1",
+		"paid_at < $2",
+	} {
+		if !strings.Contains(q, want) {
+			t.Fatalf("missing %q: %s", want, q)
+		}
+	}
+}
