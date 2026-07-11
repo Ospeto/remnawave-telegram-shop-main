@@ -409,6 +409,11 @@ type financialAdjustmentCreator interface {
 	Create(ctx context.Context, in database.CreateFinancialAdjustmentInput) (*database.FinancialAdjustment, bool, error)
 }
 
+// financeReporter is the sole reviewed finance report path used by revenue JSON/CSV handlers.
+type financeReporter interface {
+	GetReport(ctx context.Context, q reporting.ReportQuery) (reporting.FinanceReport, error)
+}
+
 type APIHandler struct {
 	customerRepo               *database.CustomerRepository
 	paymentService             *payment.PaymentService
@@ -419,7 +424,7 @@ type APIHandler struct {
 	appConfigRepo              *database.AppConfigRepository
 	walletService              *walletsvc.WalletService
 	referralRepo               *database.ReferralRepository
-	financeService             *reporting.FinanceService
+	financeService             financeReporter
 	financialAdjustmentRepo    financialAdjustmentCreator
 	screenshotMu               sync.Mutex
 	screenshotAttempts         map[int64]time.Time
@@ -1930,50 +1935,106 @@ func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (h *APIHandler) parseReportQuery(r *http.Request) (reporting.ReportQuery, error) {
+	period, err := database.NormalizeRevenueSummaryPeriod(r.URL.Query().Get("period"))
+	if err != nil {
+		return reporting.ReportQuery{}, fmt.Errorf("%w: period must be day, week, month, year, or custom", reporting.ErrInvalidReportQuery)
+	}
+	q := reporting.ReportQuery{Period: period, Now: h.currentTime()}
+	if period == database.RevenuePeriodCustom {
+		fromStr := strings.TrimSpace(r.URL.Query().Get("from"))
+		toStr := strings.TrimSpace(r.URL.Query().Get("to"))
+		if fromStr == "" || toStr == "" {
+			return reporting.ReportQuery{}, fmt.Errorf("%w: custom period requires from and to (YYYY-MM-DD)", reporting.ErrInvalidReportQuery)
+		}
+		loc := reporting.YangonLocation()
+		fromDay, err := time.ParseInLocation("2006-01-02", fromStr, loc)
+		if err != nil {
+			return reporting.ReportQuery{}, fmt.Errorf("%w: from must be YYYY-MM-DD", reporting.ErrInvalidReportQuery)
+		}
+		toDay, err := time.ParseInLocation("2006-01-02", toStr, loc)
+		if err != nil {
+			return reporting.ReportQuery{}, fmt.Errorf("%w: to must be YYYY-MM-DD", reporting.ErrInvalidReportQuery)
+		}
+		q.CustomFrom = &fromDay
+		q.CustomTo = &toDay
+		return q, nil
+	}
+	// periods takes precedence; days maps to periods for day period only (compat)
+	if p := r.URL.Query().Get("periods"); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 {
+			return reporting.ReportQuery{}, fmt.Errorf("%w: periods must be a positive integer", reporting.ErrInvalidReportQuery)
+		}
+		q.HistoryPeriods = n
+	} else if d := r.URL.Query().Get("days"); d != "" && period == database.RevenuePeriodDay {
+		n, err := strconv.Atoi(d)
+		if err != nil || n < 1 {
+			return reporting.ReportQuery{}, fmt.Errorf("%w: days must be a positive integer", reporting.ErrInvalidReportQuery)
+		}
+		q.HistoryPeriods = n
+	}
+	return q, nil
+}
+
 func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	period, err := database.NormalizeRevenueSummaryPeriod(r.URL.Query().Get("period"))
-	if err != nil {
-		http.Error(w, "period must be day, week, or month", http.StatusBadRequest)
+	if h.financeService == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", fmt.Errorf("finance service nil"))
 		return
 	}
-
-	daysStr := r.URL.Query().Get("days")
-	days := 30
-	if daysStr != "" {
-		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 && d <= 365 {
-			days = d
-		}
-	}
-
-	var summary []database.RevenueSummaryRow
-	if period == database.RevenuePeriodDay {
-		summary, err = h.paymentService.GetRevenueSummary(r.Context(), days)
-	} else {
-		periods := 12
-		if periodsStr := r.URL.Query().Get("periods"); periodsStr != "" {
-			if p, parseErr := strconv.Atoi(periodsStr); parseErr == nil && p > 0 && p <= 120 {
-				periods = p
-			}
-		}
-		summary, err = h.paymentService.GetRevenueSummaryForPeriods(r.Context(), period, periods)
-	}
+	q, err := h.parseReportQuery(r)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	report, err := h.financeService.GetReport(r.Context(), q)
+	if err != nil {
+		if errors.Is(err, reporting.ErrInvalidReportQuery) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", err)
 		return
 	}
-
-	// Ensure we return an empty array instead of null for consistency
-	if summary == nil {
-		summary = []database.RevenueSummaryRow{}
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summary)
+	_ = json.NewEncoder(w).Encode(report)
+}
+
+func (h *APIHandler) ExportRevenue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.financeService == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", fmt.Errorf("finance service nil"))
+		return
+	}
+	q, err := h.parseReportQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	report, err := h.financeService.GetReport(r.Context(), q)
+	if err != nil {
+		if errors.Is(err, reporting.ErrInvalidReportQuery) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", err)
+		return
+	}
+	csvBytes, err := reporting.FormatFinanceReportCSV(report)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="finance-report.csv"`)
+	_, _ = w.Write(csvBytes)
 }
 
 // --- Wallet Handlers ---

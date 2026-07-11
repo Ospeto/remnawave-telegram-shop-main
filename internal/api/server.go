@@ -96,6 +96,7 @@ func RegisterHandlers(
 	mux.HandleFunc("/api/upload_screenshot", withUploadAuth(handler.UploadScreenshot))
 	mux.HandleFunc("/api/purchase/status", withAuth(handler.GetPurchaseStatus))
 	mux.HandleFunc("/api/revenue", withAdmin(handler.GetRevenueSummary))
+	mux.HandleFunc("/api/revenue/export", withAdmin(handler.ExportRevenue))
 	mux.HandleFunc("/api/promo/validate", withAuth(handler.ValidatePromo))
 	mux.HandleFunc("/api/admin/plans", withAdmin(handler.AdminPlans))
 	mux.HandleFunc("/api/admin/plans/", withAdmin(handler.AdminPlanByID))
