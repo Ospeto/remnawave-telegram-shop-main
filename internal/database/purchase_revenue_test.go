@@ -3,7 +3,52 @@ package database
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestNormalizeRevenueSummaryPeriod_YearAndCustom(t *testing.T) {
+	y, err := NormalizeRevenueSummaryPeriod("year")
+	if err != nil || y != RevenuePeriodYear {
+		t.Fatalf("year: got %q err=%v", y, err)
+	}
+	c, err := NormalizeRevenueSummaryPeriod("custom")
+	if err != nil || c != RevenuePeriodCustom {
+		t.Fatalf("custom: got %q err=%v", c, err)
+	}
+	if _, err := NormalizeRevenueSummaryPeriod("quarter"); err == nil {
+		t.Fatal("expected error for quarter")
+	}
+}
+
+func TestBuildRevenueSummaryQuery_YearBucket(t *testing.T) {
+	q, err := buildRevenueSummaryQuery(RevenuePeriodYear)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(q, "DATE_TRUNC('year'") {
+		t.Fatalf("missing year trunc: %s", q)
+	}
+	if !strings.Contains(q, "Asia/Yangon") {
+		t.Fatalf("missing Yangon: %s", q)
+	}
+}
+
+func TestInclusiveYangonDateRangeToHalfOpen(t *testing.T) {
+	loc := revenueSummaryLocation()
+	from := time.Date(2026, 1, 1, 0, 0, 0, 0, loc)
+	to := time.Date(2026, 1, 31, 0, 0, 0, 0, loc)
+	start, end, err := InclusiveYangonDateRangeToHalfOpen(from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !start.Equal(from) {
+		t.Fatalf("start=%v want %v", start, from)
+	}
+	wantEnd := time.Date(2026, 2, 1, 0, 0, 0, 0, loc)
+	if !end.Equal(wantEnd) {
+		t.Fatalf("end=%v want %v", end, wantEnd)
+	}
+}
 
 func TestBuildRevenueSummaryQueryExcludesAdminTelegramID(t *testing.T) {
 	query, err := buildRevenueSummaryQuery(RevenuePeriodDay)

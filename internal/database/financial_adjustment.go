@@ -19,13 +19,6 @@ type FinancialAdjustmentType string
 
 const FinancialAdjustmentTypeRefund FinancialAdjustmentType = "refund"
 
-// Year/custom period labels used by refund aggregation SQL bucketing.
-// (Purchase revenue helpers currently normalize day/week/month only.)
-const (
-	RevenuePeriodYear   RevenueSummaryPeriod = "year"
-	RevenuePeriodCustom RevenueSummaryPeriod = "custom"
-)
-
 // Stable repository errors for expected PostgreSQL constraint failures.
 // Causes are preserved via %w so callers can still inspect *pgconn.PgError.
 var (

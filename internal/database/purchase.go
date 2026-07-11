@@ -389,9 +389,11 @@ func (cr *PurchaseRepository) FindSuccessfulPaidPurchaseByCustomer(ctx context.C
 type RevenueSummaryPeriod string
 
 const (
-	RevenuePeriodDay   RevenueSummaryPeriod = "day"
-	RevenuePeriodWeek  RevenueSummaryPeriod = "week"
-	RevenuePeriodMonth RevenueSummaryPeriod = "month"
+	RevenuePeriodDay    RevenueSummaryPeriod = "day"
+	RevenuePeriodWeek   RevenueSummaryPeriod = "week"
+	RevenuePeriodMonth  RevenueSummaryPeriod = "month"
+	RevenuePeriodYear   RevenueSummaryPeriod = "year"
+	RevenuePeriodCustom RevenueSummaryPeriod = "custom"
 )
 
 func NormalizeRevenueSummaryPeriod(period string) (RevenueSummaryPeriod, error) {
@@ -402,6 +404,10 @@ func NormalizeRevenueSummaryPeriod(period string) (RevenueSummaryPeriod, error) 
 		return RevenuePeriodWeek, nil
 	case RevenuePeriodMonth:
 		return RevenuePeriodMonth, nil
+	case RevenuePeriodYear:
+		return RevenuePeriodYear, nil
+	case RevenuePeriodCustom:
+		return RevenuePeriodCustom, nil
 	default:
 		return "", fmt.Errorf("unsupported revenue period: %s", period)
 	}
@@ -445,15 +451,27 @@ const revenueSummaryTimezone = "Asia/Yangon"
 
 func revenuePeriodExpression(period RevenueSummaryPeriod) (string, error) {
 	switch period {
-	case RevenuePeriodDay:
+	case RevenuePeriodDay, RevenuePeriodCustom:
 		return fmt.Sprintf("(p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
 	case RevenuePeriodWeek:
 		return fmt.Sprintf("DATE_TRUNC('week', p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
 	case RevenuePeriodMonth:
 		return fmt.Sprintf("DATE_TRUNC('month', p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
+	case RevenuePeriodYear:
+		return fmt.Sprintf("DATE_TRUNC('year', p.paid_at AT TIME ZONE '%s')::date", revenueSummaryTimezone), nil
 	default:
 		return "", fmt.Errorf("unsupported revenue period: %s", period)
 	}
+}
+
+func InclusiveYangonDateRangeToHalfOpen(from, to time.Time) (time.Time, time.Time, error) {
+	loc := revenueSummaryLocation()
+	start := time.Date(from.In(loc).Year(), from.In(loc).Month(), from.In(loc).Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(to.In(loc).Year(), to.In(loc).Month(), to.In(loc).Day(), 0, 0, 0, 0, loc)
+	if endDay.Before(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("to must be on or after from")
+	}
+	return start, endDay.AddDate(0, 0, 1), nil
 }
 
 func buildRevenueSummaryQuery(period RevenueSummaryPeriod) (string, error) {
@@ -602,6 +620,9 @@ func (pr *PurchaseRepository) GetRevenueSummaryForPeriods(ctx context.Context, p
 	case RevenuePeriodMonth:
 		end = startOfRevenueMonth(now).AddDate(0, 1, 0)
 		start = end.AddDate(0, -periods, 0)
+	case RevenuePeriodYear:
+		end = startOfRevenueYear(now).AddDate(1, 0, 0)
+		start = end.AddDate(-periods, 0, 0)
 	default:
 		return nil, fmt.Errorf("unsupported revenue period: %s", period)
 	}
@@ -617,6 +638,10 @@ func startOfRevenueWeek(t time.Time) time.Time {
 
 func startOfRevenueMonth(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+}
+
+func startOfRevenueYear(t time.Time) time.Time {
+	return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
 }
 
 func (pr *PurchaseRepository) GetRevenueSummaryRange(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]RevenueSummaryRow, error) {

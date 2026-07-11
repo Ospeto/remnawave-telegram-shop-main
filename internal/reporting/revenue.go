@@ -74,6 +74,15 @@ func PreviousMonthRange(now time.Time) (time.Time, time.Time) {
 	return end.AddDate(0, -1, 0), end
 }
 
+func StartOfYear(t time.Time) time.Time {
+	return time.Date(t.Year(), 1, 1, 0, 0, 0, 0, t.Location())
+}
+
+func PreviousYearRange(now time.Time) (time.Time, time.Time) {
+	end := StartOfYear(now)
+	return end.AddDate(-1, 0, 0), end
+}
+
 func FormatDateRange(start, end time.Time) string {
 	lastIncludedDay := end.Add(-time.Nanosecond).In(start.Location())
 	if start.Format("2006-01-02") == lastIncludedDay.Format("2006-01-02") {
