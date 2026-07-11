@@ -417,7 +417,8 @@ The Go app serves the Mini App and these API routes:
 | `/api/wallet/autorenew` | Legacy endpoint; returns `410 Gone`. Use `/api/keys/autorenew`. |
 | `/api/referrals` | Referral information |
 | `/api/keys/autorenew` | Per-key auto-renew settings |
-| `/api/revenue` | Admin revenue summary. Supports `period=day|week|month`; use `days` for daily history and `periods` for weekly/monthly history. |
+| `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. |
+| `/api/revenue/export` | CSV export of the same `FinanceReport` (same query params and totals as JSON). |
 | `/redirect` | Simple redirect helper |
 
 Notes:

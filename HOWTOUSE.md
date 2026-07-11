@@ -164,3 +164,38 @@ docker run --rm -v bot_backups:/backups alpine:3.22 ls -lah /backups
 ### Duplicate Transaction ID Error
 -   **Cause**: Testing with the same receipt twice.
 -   **Fix**: Use Test Mode (`/test`), which bypasses this check safely.
+
+---
+
+## Structured finance reporting
+
+1. Open the Mini App as admin → **Finance** card → `/admin/finance`.
+2. Use Daily/Weekly/Monthly/Yearly tabs or a custom Yangon date range.
+3. Export CSV from the page (same totals as on-screen JSON metrics).
+4. Telegram `/revenue` and scheduled daily/weekly/monthly jobs use the same `FinanceService` definitions (Net Income, Gross, Refunds, Cash).
+
+### Recording a service refund
+
+Service refunds are **not** inferred from purchase status and are **not** wallet cleanup refunds.
+
+```http
+POST /api/admin/financial-adjustments
+Authorization: <admin mini-app session>
+Content-Type: application/json
+
+{
+  "adjustment_type": "refund",
+  "amount": 1000.00,
+  "currency": "MMK",
+  "purchase_id": 123,
+  "effective_at": "2026-07-12T10:00:00+06:30",
+  "reason": "customer request",
+  "external_ref": "bank-txn-1",
+  "idempotency_key": "refund:123:bank-txn-1"
+}
+```
+
+- Replay with the same `idempotency_key` returns the existing row (HTTP 200).
+- This endpoint writes only the finance ledger. It does **not** change purchase fulfillment, Remnawave state, or wallet balances.
+- Wallet cleanup refunds (`wallet_transaction.type = refund`) are operational wallet corrections and must not be entered as service refunds.
+- Historical refunds are not auto-backfilled; enter explicit adjustments after reconciliation.

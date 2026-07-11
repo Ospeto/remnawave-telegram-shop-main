@@ -178,3 +178,19 @@ web-app/
 ├── vite.config.ts
 └── dist/                # after `npm run build` (served by Go)
 ```
+
+---
+
+## Admin Finance
+
+- Route: `/admin/finance` (admin session required).
+- Data source: `GET /api/revenue` returns a structured `FinanceReport` (not raw purchase rows).
+- CSV: `GET /api/revenue/export` with the same query params; totals match JSON.
+- Timezone: all period boundaries are `Asia/Yangon`.
+- Metrics:
+  - Gross service revenue: paid plan purchases (includes wallet spend; excludes wallet top-ups)
+  - Refunds: `financial_adjustment` rows with `adjustment_type=refund` on effective date
+  - Net Income: gross − refunds
+  - Cash collected: external money including wallet top-ups
+- The browser never aggregates money; it only renders server values.
+- Trend chart is pure SVG (no chart library).
