@@ -15,8 +15,7 @@ This repository is intended for operators who want a production-capable Telegram
 
 - sells subscription plans defined in environment configuration
 - provisions or extends access through the Remnawave API
-- supports multiple payment paths:
-  - Crypto Pay
+- supports payment paths:
   - mobile banking with screenshot verification
   - internal wallet top-ups and wallet purchases
 - supports promo codes, referral rewards, trials, and auto-renew toggles
@@ -124,9 +123,8 @@ You need:
 
 Optional, depending on the payment features you enable:
 
-- Crypto Pay token
-- OpenRouter API key
-- Gemini API key
+- OpenRouter API key (screenshot verification)
+- Gemini API key (screenshot verification fallback)
 
 ## Quick Start
 
@@ -182,23 +180,15 @@ If you want the repository to manage HTTPS for you with bundled Caddy, also set:
 docker compose up -d --build bot db
 ```
 
-If you use legacy Compose:
+(Legacy Compose: `docker-compose` works the same way if the plugin is unavailable.)
+
+4. Optional: start the bundled HTTPS proxy (Caddy is behind the Compose `edge` profile).
 
 ```bash
-docker-compose up -d --build bot db
+docker compose --profile edge up -d --build caddy
 ```
 
-4. Optional: start the bundled HTTPS proxy.
-
-```bash
-docker compose up -d --build caddy
-```
-
-If you use legacy Compose:
-
-```bash
-docker-compose up -d --build caddy
-```
+The Mini App URL must be **public HTTPS**. `DOMAIN_NAME` / `ACME_EMAIL` are only required when you use this bundled Caddy edge; if you terminate TLS elsewhere, point `MINI_APP_URL` at that public origin instead.
 
 5. Follow logs if needed.
 
@@ -210,7 +200,7 @@ docker compose logs -f db
 If you started bundled Caddy:
 
 ```bash
-docker compose logs -f caddy
+docker compose --profile edge logs -f caddy
 ```
 
 ## Telegram Setup
@@ -226,7 +216,7 @@ docker compose logs -f caddy
 1. Open your bot in BotFather.
 2. Go to `Bot Settings`.
 3. Configure the menu button with your Mini App URL.
-4. Set the URL to the same HTTPS origin you deploy for the app, for example:
+4. Set the URL to the same **public HTTPS** origin you deploy for the app, for example:
 
 ```text
 https://shop.example.com
@@ -234,8 +224,8 @@ https://shop.example.com
 
 Also set:
 
-- `DOMAIN_NAME=shop.example.com`
-- `MINI_APP_URL=https://shop.example.com`
+- `MINI_APP_URL=https://shop.example.com` (required for the Mini App link)
+- `DOMAIN_NAME=shop.example.com` only if you use the **bundled Caddy edge** profile
 
 If `MINI_APP_URL` is left empty, the Mini App link is effectively disabled.
 
@@ -258,10 +248,10 @@ The full template lives in [.env.sample](.env.sample).
 
 | Variable | Purpose |
 | --- | --- |
-| `DOMAIN_NAME` | Public domain used by the optional bundled Caddy proxy |
+| `DOMAIN_NAME` | Public domain used only by the optional bundled Caddy `edge` profile |
 | `ACME_EMAIL` | Email for the optional bundled Caddy / Let's Encrypt flow |
-| `MINI_APP_URL` | Full HTTPS URL for the Telegram Mini App |
-| `HEALTH_CHECK_PORT` | Internal HTTP listen port, default `8080` |
+| `MINI_APP_URL` | Full public HTTPS URL for the Telegram Mini App |
+| `HEALTH_CHECK_PORT` | Internal HTTP listen port, default `8080`. Keep this aligned with compose healthcheck and bundled Caddy (`bot:8080`) if you change it |
 | `IS_WEB_APP_LINK` | Whether to present the web app as the primary user-facing link |
 
 ### Remnawave
@@ -358,10 +348,11 @@ This matters when you put another private reverse proxy in front of the bot or C
 
 ## Payments and Checkout Flows
 
-### Crypto Pay
+### Crypto Pay (disabled)
 
-- crypto checkout is currently disabled in this runtime
-- keep the config unset unless you plan to restore that payment rail in a future change
+- Crypto Pay checkout is **currently disabled** in this runtime
+- do not configure or re-enable Crypto Pay without an explicit product decision and full payment-path review
+- keep any legacy crypto config unset
 
 ### Mobile Banking
 
@@ -554,7 +545,7 @@ docker compose up -d --build bot db
 If you use bundled Caddy, refresh it separately after the app comes back:
 
 ```bash
-docker compose up -d caddy
+docker compose --profile edge up -d caddy
 ```
 
 If you are doing a production update, verify:
@@ -593,18 +584,19 @@ For end-to-end behavior, Docker Compose is still the recommended path because th
 
 ## Testing
 
-Backend:
+Backend (repo root; matches CI):
 
 ```bash
 go test ./...
-go test -race ./...
+go vet ./...
+go build ./cmd/app
 ```
 
-Frontend:
+Frontend (`web-app/`):
 
 ```bash
 cd web-app
-npm test -- --run
+npm test
 npm run build
 ```
 
@@ -614,9 +606,9 @@ npm run build
 
 Check:
 
-- `MINI_APP_URL`
-- `DOMAIN_NAME`
-- HTTPS termination in Caddy
+- `MINI_APP_URL` is a public HTTPS origin matching BotFather
+- HTTPS termination (bundled Caddy: `docker compose --profile edge up -d caddy`, or your own reverse proxy)
+- `DOMAIN_NAME` only if using bundled Caddy edge
 - BotFather menu button URL
 
 ### Mobile banking verification fails immediately
