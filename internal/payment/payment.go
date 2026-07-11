@@ -45,6 +45,12 @@ var (
 	// ErrPurchaseFinalizationPending means fulfillment succeeded but the final DB
 	// transition to paid could not be persisted cleanly.
 	ErrPurchaseFinalizationPending = errors.New("purchase finalization is pending")
+	// ErrPurchaseFinalizationNotSupported means this purchase status/invoice path
+	// cannot be automatically finalized (non-top-up or non-processing).
+	ErrPurchaseFinalizationNotSupported = errors.New("purchase finalization is not supported")
+	// ErrPurchaseFinalizationEvidenceMissing means top-up ledger proof is missing
+	// or a refund ledger exists, so automatic finalization is refused.
+	ErrPurchaseFinalizationEvidenceMissing = errors.New("purchase finalization evidence is missing")
 	// ErrAwaitingReceiptVerification means the customer already has a receipt-based
 	// payment waiting for screenshot verification and should complete that flow first.
 	ErrAwaitingReceiptVerification = errors.New("customer already has a pending receipt verification")
@@ -171,6 +177,36 @@ type walletTopUpStore interface {
 	BeginTx(ctx context.Context) (walletTopUpTx, error)
 	AddBalance(ctx context.Context, tx walletTopUpTx, customerID int64, amount float64) error
 	LogTopUp(ctx context.Context, tx walletTopUpTx, purchaseID int64, customerID int64, amount float64) error
+}
+
+// walletTopUpFinalizeStore is the narrow dependency surface for finalize-only
+// recovery of stuck processing wallet top-ups (no Remnawave, no balance mutation).
+type walletTopUpFinalizeStore interface {
+	FindPurchaseByID(ctx context.Context, purchaseID int64) (*database.Purchase, error)
+	WalletLedgerAvailable() bool
+	ExistsByPurchaseIDAndType(ctx context.Context, purchaseID int64, txType database.WalletTransactionType) (bool, error)
+	MarkAsPaid(ctx context.Context, purchaseID int64) error
+}
+
+type repositoryWalletTopUpFinalizeStore struct {
+	purchaseRepo *database.PurchaseRepository
+	walletTxRepo *database.WalletTransactionRepository
+}
+
+func (s repositoryWalletTopUpFinalizeStore) FindPurchaseByID(ctx context.Context, purchaseID int64) (*database.Purchase, error) {
+	return s.purchaseRepo.FindById(ctx, purchaseID)
+}
+
+func (s repositoryWalletTopUpFinalizeStore) WalletLedgerAvailable() bool {
+	return s.walletTxRepo != nil
+}
+
+func (s repositoryWalletTopUpFinalizeStore) ExistsByPurchaseIDAndType(ctx context.Context, purchaseID int64, txType database.WalletTransactionType) (bool, error) {
+	return s.walletTxRepo.ExistsByPurchaseIDAndType(ctx, purchaseID, txType)
+}
+
+func (s repositoryWalletTopUpFinalizeStore) MarkAsPaid(ctx context.Context, purchaseID int64) error {
+	return s.purchaseRepo.MarkAsPaid(ctx, purchaseID)
 }
 
 type repositoryWalletTopUpStore struct {
@@ -492,6 +528,108 @@ func (s *PaymentService) GetTestTransactionID() string {
 }
 
 const syncCacheTTL = 2 * time.Minute
+
+// FinalizeProcessingWalletTopUpIfSettled marks a stuck processing wallet top-up as
+// paid when local ledger proof shows the top-up already settled. It never credits
+// balance, refunds, calls Remnawave, or sends notifications.
+//
+// Outcomes:
+//   - nil: finalized now, or already paid (idempotent no-op)
+//   - ErrPurchaseFinalizationNotSupported: status/invoice path cannot be auto-finalized
+//   - ErrPurchaseFinalizationEvidenceMissing: top-up proof missing or refund exists
+func (s *PaymentService) FinalizeProcessingWalletTopUpIfSettled(ctx context.Context, purchaseID int64) error {
+	return finalizeProcessingWalletTopUpIfSettled(ctx, purchaseID, repositoryWalletTopUpFinalizeStore{
+		purchaseRepo: s.purchaseRepository,
+		walletTxRepo: s.walletTxRepo,
+	})
+}
+
+func finalizeProcessingWalletTopUpIfSettled(ctx context.Context, purchaseID int64, store walletTopUpFinalizeStore) error {
+	purchase, err := store.FindPurchaseByID(ctx, purchaseID)
+	if err != nil {
+		return err
+	}
+	if purchase == nil {
+		return fmt.Errorf("purchase %d not found", purchaseID)
+	}
+
+	// Paid is an idempotent no-op before any evidence checks.
+	if purchase.Status == database.PurchaseStatusPaid {
+		return nil
+	}
+
+	if purchase.Status != database.PurchaseStatusProcessing {
+		slog.Info("Wallet top-up finalize refused: unsupported status",
+			"purchase_id", purchaseID,
+			"status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
+		return ErrPurchaseFinalizationNotSupported
+	}
+
+	// PR 1: wallet top-up only. Refuse all service / extension / mobile paths.
+	if purchase.InvoiceType != database.InvoiceTypeWalletTopUp {
+		slog.Info("Wallet top-up finalize refused: unsupported invoice type",
+			"purchase_id", purchaseID,
+			"status", purchase.Status,
+			"invoice_type", purchase.InvoiceType,
+		)
+		return ErrPurchaseFinalizationNotSupported
+	}
+
+	if !store.WalletLedgerAvailable() {
+		slog.Info("Wallet top-up finalize refused: wallet ledger unavailable",
+			"purchase_id", purchaseID,
+			"invoice_type", purchase.InvoiceType,
+		)
+		return ErrPurchaseFinalizationEvidenceMissing
+	}
+
+	hasTopUp, err := store.ExistsByPurchaseIDAndType(ctx, purchaseID, database.WalletTransactionTypeTopup)
+	if err != nil {
+		return err
+	}
+	if !hasTopUp {
+		slog.Info("Wallet top-up finalize refused: top-up ledger missing",
+			"purchase_id", purchaseID,
+			"invoice_type", purchase.InvoiceType,
+		)
+		return ErrPurchaseFinalizationEvidenceMissing
+	}
+
+	hasRefund, err := store.ExistsByPurchaseIDAndType(ctx, purchaseID, database.WalletTransactionTypeRefund)
+	if err != nil {
+		return err
+	}
+	if hasRefund {
+		slog.Info("Wallet top-up finalize refused: refund ledger exists",
+			"purchase_id", purchaseID,
+			"invoice_type", purchase.InvoiceType,
+		)
+		return ErrPurchaseFinalizationEvidenceMissing
+	}
+
+	if err := store.MarkAsPaid(context.WithoutCancel(ctx), purchaseID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// processPurchaseWhenAlreadyProcessing is the ProcessPurchaseById recovery branch
+// for status=processing: attempt safe top-up finalize, else preserve in-flight.
+func processPurchaseWhenAlreadyProcessing(ctx context.Context, purchaseID int64, finalize func(context.Context, int64) error) error {
+	if err := finalize(ctx, purchaseID); err == nil {
+		return nil
+	} else if errors.Is(err, ErrPurchaseFinalizationNotSupported) || errors.Is(err, ErrPurchaseFinalizationEvidenceMissing) {
+		return ErrPurchaseInFlight
+	} else {
+		slog.Warn("Processing purchase recovery failed unexpectedly",
+			"purchase_id", purchaseID,
+			"error", err,
+		)
+		return fmt.Errorf("%w: recovery failed: %v", ErrPurchaseInFlight, err)
+	}
+}
 
 func settleWalletTopUp(
 	ctx context.Context,
@@ -1130,8 +1268,19 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		return nil
 	}
 	if purchase.Status == database.PurchaseStatusProcessing {
-		slog.Info("Purchase already being processed, skipping duplicate fulfillment", "purchase_id", purchaseId)
-		return ErrPurchaseInFlight
+		// Safe top-up-only finalize: if balance was credited but MarkAsPaid failed,
+		// complete the paid transition without replaying side effects. On any
+		// recovery failure, preserve external ErrPurchaseInFlight for callers.
+		err := processPurchaseWhenAlreadyProcessing(ctx, purchaseId, s.FinalizeProcessingWalletTopUpIfSettled)
+		if err == nil {
+			slog.Info("Finalized stuck processing wallet top-up", "purchase_id", purchaseId)
+		} else {
+			slog.Info("Purchase already being processed, skipping duplicate fulfillment",
+				"purchase_id", purchaseId,
+				"invoice_type", purchase.InvoiceType,
+			)
+		}
+		return err
 	}
 
 	originalStatus := purchase.Status
