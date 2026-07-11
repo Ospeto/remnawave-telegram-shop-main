@@ -282,8 +282,10 @@ export function Home() {
                         <div style={{
                             width: 44, height: 44, borderRadius: 12,
                             background: 'var(--digital-card-inner-bg)',
+                            backdropFilter: 'blur(10px)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             color: 'var(--digital-card-text)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
                         }} aria-hidden="true">
                             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M4 19V5" />
@@ -292,7 +294,7 @@ export function Home() {
                             </svg>
                         </div>
                         <div style={{ flex: 1 }}>
-                            <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px' }}>
+                            <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px', color: 'var(--digital-card-text)', letterSpacing: '0.2px' }}>
                                 {t('admin_finance_card_title')}
                             </div>
                             <div style={{ fontSize: '13px', color: 'var(--digital-card-hint)', marginTop: 1 }}>
@@ -303,7 +305,7 @@ export function Home() {
                             width: 28, height: 28, borderRadius: 14,
                             background: 'var(--digital-card-inner-bg)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 14,
+                            fontSize: 14, color: 'var(--digital-card-text)',
                         }} aria-hidden="true">→</div>
                     </Link>
                 )}

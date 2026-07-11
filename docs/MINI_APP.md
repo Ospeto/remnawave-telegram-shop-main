@@ -193,4 +193,5 @@ web-app/
   - Net Income: gross − refunds
   - Cash collected: external money including wallet top-ups
 - The browser never aggregates money; it only renders server values.
+- Headline cards = **selected period** (today / this week / this month / this year / custom range) with deltas vs the preceding equivalent period; the trend chart = dense history buckets for the requested `periods` window.
 - Trend chart is pure SVG (no chart library).

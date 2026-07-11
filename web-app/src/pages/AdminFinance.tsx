@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
@@ -31,13 +31,55 @@ const PERIOD_TABS = [
   ['custom', 'Custom'],
 ] as const;
 
+const cardChrome: CSSProperties = {
+  padding: 14,
+  borderRadius: 16,
+  background: 'var(--digital-card-bg, rgba(255,255,255,0.06))',
+  backdropFilter: 'blur(12px)',
+  boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+  border: '1px solid var(--digital-card-border, rgba(255,255,255,0.08))',
+};
+
 function periodsFor(period: Exclude<FinancePeriod, 'custom'>): number {
   if (period === 'day') return 30;
   if (period === 'year') return 5;
   return 12;
 }
 
+function trendIsEmpty(report: FinanceReport): boolean {
+  if (report.trend.length === 0) return true;
+  return report.trend.every(
+    (b) =>
+      b.metrics.gross_service_revenue === 0 &&
+      b.metrics.refunds === 0 &&
+      b.metrics.net_service_revenue === 0 &&
+      b.metrics.successful_orders === 0,
+  );
+}
+
 function FinanceTrendChart({ report }: { report: FinanceReport }) {
+  const { t } = useLanguage();
+  if (trendIsEmpty(report)) {
+    return (
+      <div
+        role="img"
+        aria-label="Finance trend empty"
+        style={{
+          ...cardChrome,
+          minHeight: 120,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--digital-card-hint)',
+          fontSize: 13,
+          textAlign: 'center',
+        }}
+      >
+        {t('finance_trend_empty')}
+      </div>
+    );
+  }
+
   const width = 320;
   const height = 140;
   const pad = 16;
@@ -49,11 +91,13 @@ function FinanceTrendChart({ report }: { report: FinanceReport }) {
   const netPts = buildTrendPolylinePoints(net, width, height, pad);
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="Finance trend">
-      <polyline fill="none" stroke="var(--digital-card-hint)" strokeWidth="1.5" points={grossPts} />
-      <polyline fill="none" stroke="#e74c3c" strokeWidth="1.5" points={refundPts} />
-      <polyline fill="none" stroke="var(--digital-card-text)" strokeWidth="2" points={netPts} />
-    </svg>
+    <div style={{ ...cardChrome, padding: 12 }}>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="Finance trend">
+        <polyline fill="none" stroke="var(--digital-card-hint)" strokeWidth="1.5" points={grossPts} />
+        <polyline fill="none" stroke="#e74c3c" strokeWidth="1.5" points={refundPts} />
+        <polyline fill="none" stroke="var(--digital-card-text)" strokeWidth="2" points={netPts} />
+      </svg>
+    </div>
   );
 }
 
@@ -67,7 +111,9 @@ export function AdminFinance() {
   const [to, setTo] = useState('');
   const [report, setReport] = useState<FinanceReport | null>(null);
   const [loading, setLoading] = useState(true);
+  const [softLoading, setSoftLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -75,18 +121,24 @@ export function AdminFinance() {
   const load = useCallback(async () => {
     if (!initData) {
       setLoading(false);
+      setSoftLoading(false);
       return;
     }
 
     // Custom range needs both dates before querying (query builder rejects empty/invalid).
     if (period === 'custom' && (!from || !to)) {
       setLoading(false);
-      setReport(null);
+      setSoftLoading(false);
       setError(null);
       return;
     }
 
-    setLoading(true);
+    const hasReport = report != null;
+    if (hasReport) {
+      setSoftLoading(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
       const me = await fetchUserScopedJSONWithTelegramAuth<UserData>(
@@ -97,6 +149,7 @@ export function AdminFinance() {
       if (!me.is_admin) {
         setIsAdmin(false);
         setLoading(false);
+        setSoftLoading(false);
         return;
       }
       setIsAdmin(true);
@@ -112,11 +165,20 @@ export function AdminFinance() {
         clearTelegramSession();
         setSessionExpired(true);
       } else {
-        setError(e instanceof APIError ? e.body || e.message : 'Failed to load finance');
+        // Keep last successful report visible; only set page error when nothing to show.
+        const msg = e instanceof APIError ? e.body || e.message : 'Failed to load finance';
+        if (!hasReport) {
+          setError(msg);
+        } else {
+          setExportError(msg);
+        }
       }
     } finally {
       setLoading(false);
+      setSoftLoading(false);
     }
+    // report intentionally omitted from deps: used only as "has prior data" flag for soft loading.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, from, to, initData, tg]);
 
   useEffect(() => {
@@ -137,11 +199,12 @@ export function AdminFinance() {
   const onExport = async () => {
     if (!initData) return;
     if (period === 'custom' && (!from || !to)) {
-      setError('Select a custom date range before export');
+      setExportError('Select a custom date range before export');
       return;
     }
 
     playClick();
+    setExportError(null);
     try {
       const url =
         period === 'custom'
@@ -154,7 +217,7 @@ export function AdminFinance() {
         return;
       }
       if (!res.ok) {
-        setError('Export failed');
+        setExportError(t('finance_export_failed'));
         return;
       }
       const blob = await res.blob();
@@ -165,7 +228,7 @@ export function AdminFinance() {
       a.click();
       URL.revokeObjectURL(objectUrl);
     } catch {
-      setError('Export failed');
+      setExportError(t('finance_export_failed'));
     }
   };
 
@@ -186,7 +249,8 @@ export function AdminFinance() {
     );
   }
 
-  if (loading || isAdmin === null) {
+  // Full-page loading only on first load (no report yet).
+  if ((loading && report == null) || isAdmin === null) {
     return <LoadingScreen />;
   }
 
@@ -194,7 +258,8 @@ export function AdminFinance() {
     return <div role="alert">{t('finance_admin_required')}</div>;
   }
 
-  if (error) {
+  // First-load error with no report: full error state.
+  if (error && report == null) {
     return (
       <div role="alert">
         {error}
@@ -211,20 +276,59 @@ export function AdminFinance() {
     report.current.gross_service_revenue === 0;
 
   return (
-    <div style={{ padding: 16, maxWidth: 480, margin: '0 auto' }}>
+    <div
+      style={{
+        padding: 16,
+        maxWidth: 480,
+        margin: '0 auto',
+        opacity: softLoading ? 0.72 : 1,
+        transition: 'opacity 0.15s ease',
+      }}
+      data-soft-loading={softLoading ? 'true' : 'false'}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-        <h1 style={{ margin: 0 }}>{t('finance_title')}</h1>
-        <button type="button" onClick={() => void onExport()}>
+        <h1 style={{ margin: 0, fontSize: 22 }}>{t('finance_title')}</h1>
+        <button
+          type="button"
+          onClick={() => void onExport()}
+          style={{
+            padding: '8px 12px',
+            borderRadius: 12,
+            border: '1px solid var(--digital-card-border, rgba(255,255,255,0.12))',
+            background: 'var(--digital-card-inner-bg)',
+            color: 'var(--digital-card-text)',
+            cursor: 'pointer',
+          }}
+        >
           {t('finance_export_csv')}
         </button>
       </div>
 
-      <div style={{ fontSize: 12, color: 'var(--digital-card-hint)' }}>
+      <div style={{ fontSize: 12, color: 'var(--digital-card-hint)', marginTop: 4 }}>
         {report?.timezone ?? 'Asia/Yangon'} · {report?.range_start}
+        {report?.range_end && report.range_end !== report.range_start ? ` → ${report.range_end}` : ''}
         {report?.in_progress ? ` · ${t('finance_in_progress')}` : ''}
+        {softLoading ? ' · …' : ''}
       </div>
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+      {exportError && (
+        <div
+          role="alert"
+          data-testid="export-error"
+          style={{
+            marginTop: 10,
+            padding: '10px 12px',
+            borderRadius: 12,
+            background: 'rgba(231, 76, 60, 0.12)',
+            color: 'var(--digital-card-text)',
+            fontSize: 13,
+          }}
+        >
+          {exportError}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
         {PERIOD_TABS.map(([value, label]) => (
           <button
             key={value}
@@ -234,6 +338,19 @@ export function AdminFinance() {
               playClick();
               setPeriod(value);
             }}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 20,
+              border: period === value
+                ? '1px solid var(--digital-card-text)'
+                : '1px solid var(--digital-card-border, rgba(255,255,255,0.12))',
+              background: period === value
+                ? 'var(--digital-card-inner-bg)'
+                : 'transparent',
+              color: 'var(--digital-card-text)',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
           >
             {label}
           </button>
@@ -241,7 +358,7 @@ export function AdminFinance() {
       </div>
 
       {period === 'custom' && (
-        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <input
             aria-label="From date"
             type="date"
@@ -259,32 +376,48 @@ export function AdminFinance() {
 
       {report && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 16 }}>
-            <div className="digital-card" style={{ padding: 12, gridColumn: '1 / -1' }}>
-              <div>{t('finance_net_income')}</div>
-              <strong>{formatMoneyMMK(report.current.net_service_revenue)}</strong>
-              {report.in_progress && <span> · {t('finance_in_progress')}</span>}
-              {report.delta && <div>{formatDelta(report.delta.net_service_revenue)}</div>}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 14 }}>
+            <div className="digital-card" style={{ ...cardChrome, gridColumn: '1 / -1' }} data-testid="headline-net">
+              <div style={{ fontSize: 13, color: 'var(--digital-card-hint)' }}>{t('finance_net_income')}</div>
+              <strong style={{ fontSize: 22 }}>{formatMoneyMMK(report.current.net_service_revenue)}</strong>
+              {report.in_progress && (
+                <span style={{ marginLeft: 6, fontSize: 12, color: 'var(--digital-card-hint)' }}>
+                  · {t('finance_in_progress')}
+                </span>
+              )}
+              {report.delta && (
+                <div style={{ fontSize: 12, marginTop: 4 }}>{formatDelta(report.delta.net_service_revenue)}</div>
+              )}
             </div>
-            <div className="digital-card" style={{ padding: 12 }}>
-              <div>{t('finance_gross')}</div>
+            <div className="digital-card" style={cardChrome}>
+              <div style={{ fontSize: 13, color: 'var(--digital-card-hint)' }}>{t('finance_gross')}</div>
               <strong>{formatMoneyMMK(report.current.gross_service_revenue)}</strong>
             </div>
-            <div className="digital-card" style={{ padding: 12 }}>
-              <div>{t('finance_refunds')}</div>
+            <div className="digital-card" style={cardChrome}>
+              <div style={{ fontSize: 13, color: 'var(--digital-card-hint)' }}>{t('finance_refunds')}</div>
               <strong>{formatMoneyMMK(report.current.refunds)}</strong>
             </div>
-            <div className="digital-card" style={{ padding: 12 }}>
-              <div>{t('finance_cash')}</div>
+            <div className="digital-card" style={{ ...cardChrome, gridColumn: '1 / -1' }}>
+              <div style={{ fontSize: 13, color: 'var(--digital-card-hint)' }}>{t('finance_cash')}</div>
               <strong>{formatMoneyMMK(report.current.cash_collected)}</strong>
             </div>
           </div>
 
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: 14 }}>
             <FinanceTrendChart report={report} />
           </div>
 
-          <ul style={{ marginTop: 16, paddingLeft: 18 }}>
+          <ul
+            style={{
+              marginTop: 14,
+              padding: 14,
+              listStyle: 'none',
+              ...cardChrome,
+              fontSize: 13,
+              display: 'grid',
+              gap: 6,
+            }}
+          >
             <li>
               {t('finance_wallet_topups')}: {formatMoneyMMK(report.current.wallet_topups)}
             </li>
@@ -308,57 +441,67 @@ export function AdminFinance() {
             </li>
           </ul>
 
-          <table style={{ width: '100%', marginTop: 16, fontSize: 13 }}>
-            <thead>
-              <tr>
-                <th align="left">Period</th>
-                <th align="right">Net</th>
-                <th align="right">Gross</th>
-                <th align="right">Refunds</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.trend.map((b) => (
-                <tr key={b.period_start}>
-                  <td>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setExpanded((prev) => ({
-                          ...prev,
-                          [b.period_start]: !prev[b.period_start],
-                        }))
-                      }
-                    >
-                      {b.period_start}
-                      {b.in_progress ? ' *' : ''}
-                    </button>
-                    {expanded[b.period_start] && (
-                      <div>
-                        {b.categories.map((c) => (
-                          <div key={c.category}>
-                            {c.category}: {c.orders} / {formatMoneyMMK(c.amount)}
-                          </div>
-                        ))}
-                        {b.methods.map((m) => (
-                          <div key={m.method}>
-                            {m.method}: {formatMoneyMMK(m.service_revenue)}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </td>
-                  <td align="right">{formatMoneyMMK(b.metrics.net_service_revenue)}</td>
-                  <td align="right">{formatMoneyMMK(b.metrics.gross_service_revenue)}</td>
-                  <td align="right">{formatMoneyMMK(b.metrics.refunds)}</td>
+          <div style={{ ...cardChrome, marginTop: 14, padding: 10, overflowX: 'auto' }}>
+            <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th align="left" style={{ padding: '6px 4px' }}>Period</th>
+                  <th align="right" style={{ padding: '6px 4px' }}>Net</th>
+                  <th align="right" style={{ padding: '6px 4px' }}>Gross</th>
+                  <th align="right" style={{ padding: '6px 4px' }}>Refunds</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {report.trend.map((b) => (
+                  <tr key={b.period_start}>
+                    <td style={{ padding: '6px 4px', verticalAlign: 'top' }}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpanded((prev) => ({
+                            ...prev,
+                            [b.period_start]: !prev[b.period_start],
+                          }))
+                        }
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--digital-card-text)',
+                          cursor: 'pointer',
+                          padding: 0,
+                          textAlign: 'left',
+                        }}
+                      >
+                        {b.period_start}
+                        {b.in_progress ? ' *' : ''}
+                      </button>
+                      {expanded[b.period_start] && (
+                        <div style={{ marginTop: 4, fontSize: 12, color: 'var(--digital-card-hint)' }}>
+                          {b.categories.map((c) => (
+                            <div key={c.category}>
+                              {c.category}: {c.orders} / {formatMoneyMMK(c.amount)}
+                            </div>
+                          ))}
+                          {b.methods.map((m) => (
+                            <div key={m.method}>
+                              {m.method}: {formatMoneyMMK(m.service_revenue)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                    <td align="right" style={{ padding: '6px 4px' }}>{formatMoneyMMK(b.metrics.net_service_revenue)}</td>
+                    <td align="right" style={{ padding: '6px 4px' }}>{formatMoneyMMK(b.metrics.gross_service_revenue)}</td>
+                    <td align="right" style={{ padding: '6px 4px' }}>{formatMoneyMMK(b.metrics.refunds)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
 
-      {isEmpty && <p>{t('finance_empty')}</p>}
+      {isEmpty && <p style={{ marginTop: 12, color: 'var(--digital-card-hint)' }}>{t('finance_empty')}</p>}
     </div>
   );
 }

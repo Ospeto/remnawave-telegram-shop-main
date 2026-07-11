@@ -171,7 +171,7 @@ docker run --rm -v bot_backups:/backups alpine:3.22 ls -lah /backups
 
 1. Open the Mini App as admin → **Finance** card → `/admin/finance`.
 2. Use Daily/Weekly/Monthly/Yearly tabs or a custom Yangon date range.
-3. Export CSV from the page (same totals as on-screen JSON metrics).
+3. Headline cards show the **selected period** (not the full history window); the chart shows dense history. Export CSV from the page (same totals as on-screen JSON metrics).
 4. Telegram `/revenue` and scheduled daily/weekly/monthly jobs use the same `FinanceService` definitions (Net Income, Gross, Refunds, Cash).
 
 ### Recording a service refund
@@ -195,7 +195,7 @@ Content-Type: application/json
 }
 ```
 
-- Replay with the same `idempotency_key` returns the existing row (HTTP 200).
+- Replay with the same `idempotency_key` and the same payload returns the existing row (HTTP 200). Same key with a different amount/currency/type/effective_at/purchase_id returns HTTP 409.
 - This endpoint writes only the finance ledger. It does **not** change purchase fulfillment, Remnawave state, or wallet balances.
 - Wallet cleanup refunds (`wallet_transaction.type = refund`) are operational wallet corrections and must not be entered as service refunds.
 - Historical refunds are not auto-backfilled; enter explicit adjustments after reconciliation.

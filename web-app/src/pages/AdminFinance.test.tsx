@@ -252,4 +252,125 @@ describe('AdminFinance', () => {
       expect(exportCalls.length).toBeGreaterThan(0);
     });
   });
+
+  it('keeps report visible when export fails', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/me') {
+        return jsonResponse({
+          user: { id: 1, telegram_id: 42 },
+          keys: [],
+          is_active: false,
+          expire_at: null,
+          days_remaining: 0,
+          trial_eligible: false,
+          trial_days: 0,
+          is_admin: true,
+        });
+      }
+      if (url.startsWith('/api/revenue?') && !url.includes('export')) {
+        return jsonResponse(sampleReport);
+      }
+      if (url.startsWith('/api/revenue/export?')) {
+        return new Response('export boom', { status: 500 });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+
+    renderWithAppProviders([
+      { path: '/admin/finance', element: <AdminFinance /> },
+    ], ['/admin/finance']);
+
+    await screen.findByRole('heading', { name: /Finance/i });
+    expect(screen.getByTestId('headline-net')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Export CSV/i }));
+    expect(await screen.findByTestId('export-error')).toHaveTextContent(/Export failed/i);
+    // Report content must remain mounted.
+    expect(screen.getByTestId('headline-net')).toBeTruthy();
+    expect(screen.getAllByText(/900\.00/).length).toBeGreaterThan(0);
+  });
+
+  it('shows empty trend copy when all trend buckets are zero', async () => {
+    const emptyTrendReport: FinanceReport = {
+      ...sampleReport,
+      current: { ...baseMetrics, gross_service_revenue: 0, refunds: 0, net_service_revenue: 0, successful_orders: 0 },
+      trend: [{
+        period_start: '2026-07-12',
+        period_end: '2026-07-12',
+        in_progress: true,
+        metrics: { ...baseMetrics, gross_service_revenue: 0, refunds: 0, net_service_revenue: 0, successful_orders: 0 },
+        categories: [],
+        methods: [],
+      }],
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/me') {
+        return jsonResponse({
+          user: { id: 1, telegram_id: 42 },
+          keys: [],
+          is_active: false,
+          expire_at: null,
+          days_remaining: 0,
+          trial_eligible: false,
+          trial_days: 0,
+          is_admin: true,
+        });
+      }
+      if (url.startsWith('/api/revenue?')) {
+        return jsonResponse(emptyTrendReport);
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+
+    renderWithAppProviders([
+      { path: '/admin/finance', element: <AdminFinance /> },
+    ], ['/admin/finance']);
+
+    expect(await screen.findByRole('img', { name: /Finance trend empty/i })).toHaveTextContent(/No activity/i);
+  });
+
+  it('keeps headline cards mounted while refetching period', async () => {
+    let revenueCalls = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/me') {
+        return jsonResponse({
+          user: { id: 1, telegram_id: 42 },
+          keys: [],
+          is_active: false,
+          expire_at: null,
+          days_remaining: 0,
+          trial_eligible: false,
+          trial_days: 0,
+          is_admin: true,
+        });
+      }
+      if (url.startsWith('/api/revenue?')) {
+        revenueCalls += 1;
+        // Delay second response so soft-loading state is observable.
+        if (revenueCalls > 1) {
+          await new Promise((r) => setTimeout(r, 30));
+        }
+        return jsonResponse({
+          ...sampleReport,
+          period: url.includes('week') ? 'week' : 'day',
+        });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+
+    renderWithAppProviders([
+      { path: '/admin/finance', element: <AdminFinance /> },
+    ], ['/admin/finance']);
+
+    await screen.findByTestId('headline-net');
+    fireEvent.click(screen.getByRole('button', { name: /Weekly/i }));
+    // Headline cards stay mounted during soft refetch (no full-page LoadingScreen).
+    expect(screen.getByTestId('headline-net')).toBeTruthy();
+    await waitFor(() => {
+      expect(revenueCalls).toBeGreaterThan(1);
+    });
+    expect(screen.getByTestId('headline-net')).toBeTruthy();
+  });
 });
