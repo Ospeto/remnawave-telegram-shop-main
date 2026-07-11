@@ -122,6 +122,9 @@ func TestGetRevenueSummary_OKJSON(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type=%q want application/json", ct)
+	}
 	var got reporting.FinanceReport
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -154,6 +157,12 @@ func TestExportRevenue_CSVMatchesJSONNet(t *testing.T) {
 	if recCSV.Code != http.StatusOK {
 		t.Fatalf("csv status=%d", recCSV.Code)
 	}
+	if ct := recCSV.Header().Get("Content-Type"); ct != "text/csv; charset=utf-8" {
+		t.Fatalf("Content-Type=%q want text/csv; charset=utf-8", ct)
+	}
+	if cd := recCSV.Header().Get("Content-Disposition"); cd != `attachment; filename="finance-report.csv"` {
+		t.Fatalf("Content-Disposition=%q", cd)
+	}
 	if !strings.Contains(recCSV.Body.String(), "net_service_revenue,900.00") {
 		t.Fatalf("csv=%s", recCSV.Body.String())
 	}
@@ -162,13 +171,71 @@ func TestExportRevenue_CSVMatchesJSONNet(t *testing.T) {
 	}
 }
 
-func TestRegisterHandlersProtectsRevenueExport(t *testing.T) {
+func TestGetRevenueSummary_NilService500(t *testing.T) {
+	// NewAPIHandler(nil finance) must leave financeService as a true nil interface.
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=day", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.GetRevenueSummary(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Failed to fetch revenue") {
+		t.Fatalf("body=%s want sanitized message", rec.Body.String())
+	}
+}
+
+func TestExportRevenue_NilService500(t *testing.T) {
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue/export?period=day", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.ExportRevenue(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Failed to export revenue") {
+		t.Fatalf("body=%s want sanitized message", rec.Body.String())
+	}
+}
+
+func TestGetRevenueSummary_ExcessiveHistory400(t *testing.T) {
+	// Real FinanceService validates bounds in ResolveReportWindow before repo access.
+	svc := reporting.NewFinanceService(nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, svc, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=day&periods=367", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.GetRevenueSummary(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetRevenueSummary_CustomRangeOver366Days400(t *testing.T) {
+	svc := reporting.NewFinanceService(nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, svc, nil)
+	// Inclusive span > 366 days (2025-01-01 .. 2026-01-03).
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=custom&from=2025-01-01&to=2026-01-03", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.GetRevenueSummary(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterHandlersProtectsRevenueRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	req := httptest.NewRequest(http.MethodGet, "/api/revenue/export?period=day", nil)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code == http.StatusOK {
-		t.Fatal("unauthenticated export must not succeed")
+
+	for _, path := range []string{"/api/revenue?period=day", "/api/revenue/export?period=day"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s status=%d want %d body=%s", path, rec.Code, http.StatusUnauthorized, rec.Body.String())
+		}
 	}
 }

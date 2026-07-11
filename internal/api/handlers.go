@@ -458,7 +458,7 @@ func NewAPIHandler(
 	financeService *reporting.FinanceService,
 	financialAdjustmentRepo financialAdjustmentCreator,
 ) *APIHandler {
-	return &APIHandler{
+	h := &APIHandler{
 		customerRepo:               customerRepo,
 		paymentService:             paymentService,
 		telegramBot:                telegramBot,
@@ -468,13 +468,18 @@ func NewAPIHandler(
 		appConfigRepo:              appConfigRepo,
 		walletService:              walletService,
 		referralRepo:               referralRepo,
-		financeService:             financeService,
 		financialAdjustmentRepo:    financialAdjustmentRepo,
 		screenshotAttempts:         make(map[int64]time.Time),
 		customerScreenshotAttempts: make(map[int64][]time.Time),
 		screenshotInFlight:         make(map[int64]struct{}),
 		now:                        time.Now,
 	}
+	// Assign only a non-nil concrete pointer so a nil *FinanceService stays a nil interface
+	// (typed-nil interface would bypass nil checks and panic on GetReport).
+	if financeService != nil {
+		h.financeService = financeService
+	}
+	return h
 }
 
 func (h *APIHandler) currentTime() time.Time {
@@ -1982,13 +1987,14 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.financeService == nil {
-		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", fmt.Errorf("finance service nil"))
-		return
-	}
+	// Validate query before service availability so parse failures stay 400.
 	q, err := h.parseReportQuery(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if h.financeService == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", fmt.Errorf("finance service nil"))
 		return
 	}
 	report, err := h.financeService.GetReport(r.Context(), q)
@@ -2009,13 +2015,14 @@ func (h *APIHandler) ExportRevenue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.financeService == nil {
-		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", fmt.Errorf("finance service nil"))
-		return
-	}
+	// Validate query before service availability so parse failures stay 400.
 	q, err := h.parseReportQuery(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if h.financeService == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", fmt.Errorf("finance service nil"))
 		return
 	}
 	report, err := h.financeService.GetReport(r.Context(), q)
