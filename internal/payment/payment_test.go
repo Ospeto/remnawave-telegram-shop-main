@@ -1007,6 +1007,387 @@ func (f *fakeWalletTopUpStore) LogTopUp(_ context.Context, _ walletTopUpTx, purc
 	return f.logErr
 }
 
+// --- PR 1: finalize-only recovery for stuck processing wallet top-ups ---
+
+type fakeWalletTopUpFinalizeStore struct {
+	purchase       *database.Purchase
+	findErr        error
+	ledgerOK       bool
+	topupExists    bool
+	refundExists   bool
+	existsErr      error
+	markPaidErr    error
+	markPaidCalls  int
+	existsCalls    []database.WalletTransactionType
+	lastPurchaseID int64
+}
+
+func (f *fakeWalletTopUpFinalizeStore) FindPurchaseByID(_ context.Context, purchaseID int64) (*database.Purchase, error) {
+	f.lastPurchaseID = purchaseID
+	if f.findErr != nil {
+		return nil, f.findErr
+	}
+	if f.purchase == nil {
+		return nil, nil
+	}
+	// Return a shallow copy so tests can assert status without shared mutation surprises.
+	cp := *f.purchase
+	return &cp, nil
+}
+
+func (f *fakeWalletTopUpFinalizeStore) WalletLedgerAvailable() bool {
+	return f.ledgerOK
+}
+
+func (f *fakeWalletTopUpFinalizeStore) ExistsByPurchaseIDAndType(_ context.Context, purchaseID int64, txType database.WalletTransactionType) (bool, error) {
+	f.lastPurchaseID = purchaseID
+	f.existsCalls = append(f.existsCalls, txType)
+	if f.existsErr != nil {
+		return false, f.existsErr
+	}
+	switch txType {
+	case database.WalletTransactionTypeTopup:
+		return f.topupExists, nil
+	case database.WalletTransactionTypeRefund:
+		return f.refundExists, nil
+	default:
+		return false, nil
+	}
+}
+
+func (f *fakeWalletTopUpFinalizeStore) MarkAsPaid(_ context.Context, purchaseID int64) error {
+	f.markPaidCalls++
+	f.lastPurchaseID = purchaseID
+	if f.markPaidErr != nil {
+		return f.markPaidErr
+	}
+	if f.purchase != nil {
+		f.purchase.Status = database.PurchaseStatusPaid
+	}
+	return nil
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_ProcessingTopUpWithLedgerFinalizes(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          42,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 42, store)
+	if err != nil {
+		t.Fatalf("finalizeProcessingWalletTopUpIfSettled() error = %v, want nil", err)
+	}
+	if store.markPaidCalls != 1 {
+		t.Fatalf("MarkAsPaid calls = %d, want 1", store.markPaidCalls)
+	}
+	if store.purchase.Status != database.PurchaseStatusPaid {
+		t.Fatalf("purchase status = %s, want paid", store.purchase.Status)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_MissingTopUpLedgerRefuses(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          42,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:    true,
+		topupExists: false,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 42, store)
+	if !errors.Is(err, ErrPurchaseFinalizationEvidenceMissing) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationEvidenceMissing", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_RefundLedgerRefuses(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          42,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:     true,
+		topupExists:  true,
+		refundExists: true,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 42, store)
+	if !errors.Is(err, ErrPurchaseFinalizationEvidenceMissing) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationEvidenceMissing", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_PaidNoOp(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          42,
+			Status:      database.PurchaseStatusPaid,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK: true,
+		// Even if ledger flags are false, paid must no-op before evidence.
+		topupExists: false,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 42, store)
+	if err != nil {
+		t.Fatalf("error = %v, want nil for already-paid", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0 for paid no-op", store.markPaidCalls)
+	}
+	if len(store.existsCalls) != 0 {
+		t.Fatalf("ExistsByPurchaseIDAndType calls = %v, want none before evidence for paid", store.existsCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_UnsupportedStatuses(t *testing.T) {
+	statuses := []database.PurchaseStatus{
+		database.PurchaseStatusNew,
+		database.PurchaseStatusPending,
+		database.PurchaseStatusCancel,
+		database.PurchaseStatus("failed"),
+		database.PurchaseStatus("refunded"),
+	}
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			store := &fakeWalletTopUpFinalizeStore{
+				purchase: &database.Purchase{
+					ID:          7,
+					Status:      status,
+					InvoiceType: database.InvoiceTypeWalletTopUp,
+				},
+				ledgerOK:    true,
+				topupExists: true,
+			}
+			err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 7, store)
+			if !errors.Is(err, ErrPurchaseFinalizationNotSupported) {
+				t.Fatalf("status %s: error = %v, want ErrPurchaseFinalizationNotSupported", status, err)
+			}
+			if store.markPaidCalls != 0 {
+				t.Fatalf("status %s: MarkAsPaid calls = %d, want 0", status, store.markPaidCalls)
+			}
+		})
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_WalletPaymentWithPurchaseLedgerRefuses(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          9,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletPayment,
+		},
+		ledgerOK:    true,
+		topupExists: true, // even if a ledger row exists, service path is refused
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 9, store)
+	if !errors.Is(err, ErrPurchaseFinalizationNotSupported) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationNotSupported", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+	if len(store.existsCalls) != 0 {
+		t.Fatalf("must not inspect ledger for non-top-up: calls=%v", store.existsCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_MobileBankingRefuses(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          10,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 10, store)
+	if !errors.Is(err, ErrPurchaseFinalizationNotSupported) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationNotSupported", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_WalletPaymentWithExtendKeyIDRefuses(t *testing.T) {
+	extendID := int64(55)
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          11,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletPayment,
+			ExtendKeyID: &extendID,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 11, store)
+	if !errors.Is(err, ErrPurchaseFinalizationNotSupported) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationNotSupported", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_NewKeyLikePurchaseRefuses(t *testing.T) {
+	// New-key service purchase: wallet_payment, no ExtendKeyID, days/traffic set.
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:             12,
+			Status:         database.PurchaseStatusProcessing,
+			InvoiceType:    database.InvoiceTypeWalletPayment,
+			Days:           30,
+			TrafficLimitGB: 100,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 12, store)
+	if !errors.Is(err, ErrPurchaseFinalizationNotSupported) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationNotSupported", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestFinalizeProcessingWalletTopUpIfSettled_NilWalletRepoRefusesNoPanic(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          13,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK: false, // walletTxRepo nil
+	}
+
+	err := finalizeProcessingWalletTopUpIfSettled(context.Background(), 13, store)
+	if !errors.Is(err, ErrPurchaseFinalizationEvidenceMissing) {
+		t.Fatalf("error = %v, want ErrPurchaseFinalizationEvidenceMissing", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+	if len(store.existsCalls) != 0 {
+		t.Fatalf("must not call Exists when ledger unavailable: %v", store.existsCalls)
+	}
+}
+
+func TestProcessPurchaseWhenAlreadyProcessing_TopUpWithLedgerFinalizes(t *testing.T) {
+	// Wired ProcessPurchaseById branch: successful finalize returns nil (not InFlight).
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          99,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+	}
+
+	err := processPurchaseWhenAlreadyProcessing(context.Background(), 99, func(ctx context.Context, id int64) error {
+		return finalizeProcessingWalletTopUpIfSettled(ctx, id, store)
+	})
+	if err != nil {
+		t.Fatalf("processPurchaseWhenAlreadyProcessing() error = %v, want nil", err)
+	}
+	if store.markPaidCalls != 1 {
+		t.Fatalf("MarkAsPaid calls = %d, want 1", store.markPaidCalls)
+	}
+}
+
+func TestProcessPurchaseWhenAlreadyProcessing_MarkAsPaidErrorReturnsWrappedInFlight(t *testing.T) {
+	markErr := errors.New("mark paid failed")
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          102,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:    true,
+		topupExists: true,
+		markPaidErr: markErr,
+	}
+
+	err := processPurchaseWhenAlreadyProcessing(context.Background(), 102, func(ctx context.Context, id int64) error {
+		return finalizeProcessingWalletTopUpIfSettled(ctx, id, store)
+	})
+	if !errors.Is(err, ErrPurchaseInFlight) {
+		t.Fatalf("error = %v, want ErrPurchaseInFlight for external callers", err)
+	}
+	if !strings.Contains(err.Error(), markErr.Error()) {
+		t.Fatalf("error = %v, want underlying MarkAsPaid error visible", err)
+	}
+	if store.markPaidCalls != 1 {
+		t.Fatalf("MarkAsPaid calls = %d, want 1", store.markPaidCalls)
+	}
+}
+
+func TestProcessPurchaseWhenAlreadyProcessing_EvidenceMissingReturnsInFlight(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          100,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeWalletTopUp,
+		},
+		ledgerOK:    true,
+		topupExists: false,
+	}
+
+	err := processPurchaseWhenAlreadyProcessing(context.Background(), 100, func(ctx context.Context, id int64) error {
+		return finalizeProcessingWalletTopUpIfSettled(ctx, id, store)
+	})
+	if !errors.Is(err, ErrPurchaseInFlight) {
+		t.Fatalf("error = %v, want ErrPurchaseInFlight for external callers", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
+func TestProcessPurchaseWhenAlreadyProcessing_UnsupportedReturnsInFlight(t *testing.T) {
+	store := &fakeWalletTopUpFinalizeStore{
+		purchase: &database.Purchase{
+			ID:          101,
+			Status:      database.PurchaseStatusProcessing,
+			InvoiceType: database.InvoiceTypeMobileBanking,
+		},
+		ledgerOK: true,
+	}
+
+	err := processPurchaseWhenAlreadyProcessing(context.Background(), 101, func(ctx context.Context, id int64) error {
+		return finalizeProcessingWalletTopUpIfSettled(ctx, id, store)
+	})
+	if !errors.Is(err, ErrPurchaseInFlight) {
+		t.Fatalf("error = %v, want ErrPurchaseInFlight", err)
+	}
+	if store.markPaidCalls != 0 {
+		t.Fatalf("MarkAsPaid calls = %d, want 0", store.markPaidCalls)
+	}
+}
+
 func TestSettleWalletTopUpSuccess(t *testing.T) {
 	tx := &fakeWalletTopUpTx{}
 	store := &fakeWalletTopUpStore{tx: tx}
