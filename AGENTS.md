@@ -89,10 +89,41 @@ Health endpoints: `/livez` (liveness), `/readyz` (DB + Remnawave + vision readin
 2. **Live restore is disabled** in the running bot — inspect/list only; restore offline via `setup.sh` / runbook. Do not “fix” runtime restore for convenience.
 3. **Money-safety paths** (`internal/payment`, `internal/wallet`, purchase/fulfillment state): preserve **idempotency**, transaction-ID uniqueness, and wallet balance invariants. Prefer additive tests over speculative refactors.
 
+## Production deploy (VPS)
+
+Hands-off deploy skill: `~/.hermes/skills/wavy-vps-deploy/SKILL.md`  
+Script: `~/.hermes/skills/wavy-vps-deploy/scripts/deploy_latest.sh`
+
+| Fact | Value |
+|------|--------|
+| Local repo | `/Users/macbookair/coding_projects/Wavy_Best_Shop` |
+| VPS | `root@92.112.127.10` |
+| App path | `/opt/remnawave-shop` |
+| Public Mini App | `https://shop.wavypremium.xyz/` |
+| Rebuild service | **`bot` only** — never recreate `db` for normal deploys |
+
+### Deploy rules
+
+1. Deploy **`origin/main` only** unless the operator explicitly names another commit.
+2. Local preflight: `git fetch origin main`, `HEAD == origin/main`, no tracked dirty files, `go test ./...`.
+3. VPS must also be clean on tracked files before reset to `origin/main`.
+4. Never print/copy SSH keys, `.env`, `TELEGRAM_TOKEN`, or other secrets.
+5. Preserve payment/wallet safety — no manual DB edits during deploy.
+6. After deploy, verify: VPS commit before/after, `docker compose ps`, `http://127.0.0.1:8080/readyz`, public Mini App HTTP, `/api/plans` smoke, Telegram `getMe` + `getWebhookInfo` **from the VPS**, recent bot logs for getUpdates/error/panic/fatal.
+7. If Telegram API fails but Mini App/`readyz` are OK, report that clearly (commands may be broken while Mini App still works). Known quirk: this host has had intermittent Telegram egress timeouts.
+
+### Finance reporting (shipped)
+
+- Admin Mini App: `/admin/finance` (admin-only Home card).
+- Shared assembly: `internal/reporting.FinanceService.GetReport` (API JSON/CSV, Telegram `/revenue`, cron).
+- Refund ledger: migration `000033_financial_adjustment`; admin POST adjustment is ledger-only (not purchase/wallet mutation).
+- Timezone: Asia/Yangon; weeks Mon–Sun; Net Income = gross service revenue − refunds on effective date.
+
 ## Docs worth opening first
 
 - `readme.md` — setup, env, architecture overview
-- `HOWTOUSE.md` — admin ops, test mode, dirty migrations, Mini App troubleshooting
+- `HOWTOUSE.md` — admin ops, test mode, dirty migrations, Mini App troubleshooting, structured finance reporting
 - `BACKUP-RUNBOOK.md` — backup/restore safety
-- `docs/MINI_APP.md` — Mini App build/dev details
+- `docs/MINI_APP.md` — Mini App build/dev details + Admin Finance
+- `docs/plans/2026-07-12-financial-reporting-design.md` — finance reporting design
 - `.env.sample` — canonical env surface
