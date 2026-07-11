@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,14 +48,49 @@ func (f *fakeAdjustmentRepo) Create(ctx context.Context, in database.CreateFinan
 	return f.row, f.created, nil
 }
 
-func TestCreateFinancialAdjustment_MissingIdempotencyKey400(t *testing.T) {
-	repo := &fakeAdjustmentRepo{}
-	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
-	body := `{"adjustment_type":"refund","amount":100,"currency":"MMK"}`
+func postFinancialAdjustment(t *testing.T, h *APIHandler, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(body))
 	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
 	rec := httptest.NewRecorder()
 	h.CreateFinancialAdjustment(rec, req)
+	return rec
+}
+
+func assertSanitizedBody(t *testing.T, body, secret string) {
+	t.Helper()
+	if strings.Contains(body, secret) {
+		t.Fatalf("response leaked secret detail %q: %q", secret, body)
+	}
+	if strings.Contains(body, "SQLSTATE") || strings.Contains(body, "pq:") {
+		t.Fatalf("response leaked database detail: %q", body)
+	}
+}
+
+func assertJSONFinancialAdjustment(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantKey string) database.FinancialAdjustment {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	ct := rec.Header().Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type=%q want application/json", ct)
+	}
+	var row database.FinancialAdjustment
+	if err := json.Unmarshal(rec.Body.Bytes(), &row); err != nil {
+		t.Fatalf("invalid JSON body: %v body=%s", err, rec.Body.String())
+	}
+	if wantKey != "" && row.IdempotencyKey != wantKey {
+		t.Fatalf("key=%q want %q", row.IdempotencyKey, wantKey)
+	}
+	return row
+}
+
+func TestCreateFinancialAdjustment_MissingIdempotencyKey400(t *testing.T) {
+	repo := &fakeAdjustmentRepo{}
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
+	body := `{"adjustment_type":"refund","amount":100,"currency":"MMK"}`
+	rec := postFinancialAdjustment(t, h, body)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
@@ -65,10 +103,7 @@ func TestCreateFinancialAdjustment_NonPositiveAmount400(t *testing.T) {
 	repo := &fakeAdjustmentRepo{}
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
 	body := `{"adjustment_type":"refund","amount":0,"currency":"MMK","idempotency_key":"k1"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(body))
-	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
-	rec := httptest.NewRecorder()
-	h.CreateFinancialAdjustment(rec, req)
+	rec := postFinancialAdjustment(t, h, body)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d", rec.Code)
 	}
@@ -79,44 +114,89 @@ func TestCreateFinancialAdjustment_Created201AndReplay200(t *testing.T) {
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
 	body := `{"adjustment_type":"refund","amount":100.5,"currency":"MMK","idempotency_key":"refund:1","reason":"test"}`
 
-	req1 := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(body))
-	req1 = req1.WithContext(context.WithValue(req1.Context(), telegramIDKey, int64(42)))
-	rec1 := httptest.NewRecorder()
-	h.CreateFinancialAdjustment(rec1, req1)
-	if rec1.Code != http.StatusCreated {
-		t.Fatalf("create status=%d body=%s", rec1.Code, rec1.Body.String())
-	}
+	rec1 := postFinancialAdjustment(t, h, body)
+	assertJSONFinancialAdjustment(t, rec1, http.StatusCreated, "refund:1")
 	if repo.last.CreatedBy != "admin:42" {
 		t.Fatalf("created_by=%q", repo.last.CreatedBy)
 	}
 
 	repo.created = false // simulate idempotent hit
-	req2 := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(body))
-	req2 = req2.WithContext(context.WithValue(req2.Context(), telegramIDKey, int64(42)))
-	rec2 := httptest.NewRecorder()
-	h.CreateFinancialAdjustment(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("replay status=%d", rec2.Code)
-	}
-	var row database.FinancialAdjustment
-	if err := json.Unmarshal(rec2.Body.Bytes(), &row); err != nil {
-		t.Fatal(err)
-	}
-	if row.IdempotencyKey != "refund:1" {
-		t.Fatalf("key=%q", row.IdempotencyKey)
-	}
+	rec2 := postFinancialAdjustment(t, h, body)
+	assertJSONFinancialAdjustment(t, rec2, http.StatusOK, "refund:1")
 }
 
 func TestCreateFinancialAdjustment_RepoError500(t *testing.T) {
-	repo := &fakeAdjustmentRepo{err: context.DeadlineExceeded}
+	secret := "pgx: connection reset token=super-secret"
+	repo := &fakeAdjustmentRepo{err: fmt.Errorf("%s: %w", secret, context.DeadlineExceeded)}
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
 	body := `{"adjustment_type":"refund","amount":10,"currency":"MMK","idempotency_key":"k2"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(body))
-	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
-	rec := httptest.NewRecorder()
-	h.CreateFinancialAdjustment(rec, req)
+	rec := postFinancialAdjustment(t, h, body)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d", rec.Code)
+	}
+	assertSanitizedBody(t, rec.Body.String(), "super-secret")
+	if !strings.Contains(rec.Body.String(), "Failed to create financial adjustment") {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+}
+
+func TestCreateFinancialAdjustment_SentinelStatuses(t *testing.T) {
+	secret := "SQLSTATE 23503 detail=purchase_id=999 token=leak-me"
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantPublic string
+	}{
+		{
+			name:       "foreign_key_400",
+			err:        fmt.Errorf("insert financial_adjustment: %w: %s", database.ErrFinancialAdjustmentForeignKey, secret),
+			wantStatus: http.StatusBadRequest,
+			wantPublic: "Invalid financial adjustment",
+		},
+		{
+			name:       "check_400",
+			err:        fmt.Errorf("insert financial_adjustment: %w: %s", database.ErrFinancialAdjustmentCheck, secret),
+			wantStatus: http.StatusBadRequest,
+			wantPublic: "Invalid financial adjustment",
+		},
+		{
+			name:       "unique_409",
+			err:        fmt.Errorf("insert financial_adjustment: %w: %s", database.ErrFinancialAdjustmentUnique, secret),
+			wantStatus: http.StatusConflict,
+			wantPublic: "Financial adjustment conflict",
+		},
+		{
+			name:       "idempotency_conflict_409",
+			err:        fmt.Errorf("insert financial_adjustment: %w: %s", database.ErrFinancialAdjustmentIdempotencyConflict, secret),
+			wantStatus: http.StatusConflict,
+			wantPublic: "Financial adjustment conflict",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeAdjustmentRepo{err: tc.err}
+			h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
+			body := `{"adjustment_type":"refund","amount":10,"currency":"MMK","idempotency_key":"sentinel-key"}`
+			rec := postFinancialAdjustment(t, h, body)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantPublic) {
+				t.Fatalf("body=%q want public %q", rec.Body.String(), tc.wantPublic)
+			}
+			assertSanitizedBody(t, rec.Body.String(), "leak-me")
+			assertSanitizedBody(t, rec.Body.String(), secret)
+			if errors.Is(tc.err, database.ErrFinancialAdjustmentForeignKey) ||
+				errors.Is(tc.err, database.ErrFinancialAdjustmentCheck) ||
+				errors.Is(tc.err, database.ErrFinancialAdjustmentUnique) ||
+				errors.Is(tc.err, database.ErrFinancialAdjustmentIdempotencyConflict) {
+				// wrapped sentinel must still classify via errors.Is
+			} else {
+				t.Fatal("test case must wrap a known sentinel")
+			}
+		})
 	}
 }
 

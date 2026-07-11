@@ -2277,20 +2277,25 @@ func (h *APIHandler) CreateFinancialAdjustment(w http.ResponseWriter, r *http.Re
 		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
 	})
 	if err != nil {
-		// validation-style repo errors (amount/key) still possible; map known messages to 400
-		msg := err.Error()
-		if strings.Contains(msg, "idempotency_key") || strings.Contains(msg, "amount must") || strings.Contains(msg, "unsupported adjustment_type") {
-			http.Error(w, msg, http.StatusBadRequest)
+		switch {
+		case errors.Is(err, database.ErrFinancialAdjustmentForeignKey),
+			errors.Is(err, database.ErrFinancialAdjustmentCheck):
+			writeSanitizedError(w, http.StatusBadRequest, "Invalid financial adjustment", err)
+			return
+		case errors.Is(err, database.ErrFinancialAdjustmentUnique),
+			errors.Is(err, database.ErrFinancialAdjustmentIdempotencyConflict):
+			writeSanitizedError(w, http.StatusConflict, "Financial adjustment conflict", err)
+			return
+		default:
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to create financial adjustment", err)
 			return
 		}
-		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create financial adjustment", err)
-		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	if created {
 		w.WriteHeader(http.StatusCreated)
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
-	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(row)
 }
