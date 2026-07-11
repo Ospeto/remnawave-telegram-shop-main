@@ -169,43 +169,6 @@ func SummarizeRevenuePeriod(rows []database.RevenueSummaryRow) (RevenuePeriodTot
 	return totals, methodList
 }
 
-func FormatTelegramPeriodRevenueReport(title, periodLabel string, rows []database.RevenueSummaryRow) string {
-	if len(rows) == 0 {
-		return fmt.Sprintf("📊 <b>%s</b>\n\n<b>%s</b>\nNo paid activity.", html.EscapeString(title), html.EscapeString(periodLabel))
-	}
-
-	totals, methods := SummarizeRevenuePeriod(rows)
-	rawCurrency := firstNonEmpty(totals.Currency, "MMK")
-	currency := html.EscapeString(rawCurrency)
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n\n", html.EscapeString(title)))
-	sb.WriteString(fmt.Sprintf("<b>%s</b>\n", html.EscapeString(periodLabel)))
-	sb.WriteString(fmt.Sprintf("Service revenue: <b>%s %s</b> (%d plan txns, %d users)\n", FormatNumber(totals.ServiceRevenue), currency, totals.ServicePurchases, totals.UniqueCustomers))
-	sb.WriteString(fmt.Sprintf("Cash collected: <b>%s %s</b>\n", FormatNumber(totals.CashCollected), currency))
-	if totals.WalletTopUps > 0 || totals.WalletSpend > 0 {
-		sb.WriteString(fmt.Sprintf("Wallet: %s %s top-ups, %s %s wallet spend\n", FormatNumber(totals.WalletTopUps), currency, FormatNumber(totals.WalletSpend), currency))
-	}
-	sb.WriteString(fmt.Sprintf("Mix: %d new keys, %d extensions, %d top-ups\n", totals.NewKeyPurchases, totals.ExtensionPurchases, totals.WalletTopUpPurchases))
-
-	if len(methods) > 0 {
-		sb.WriteString("\n<b>By method</b>\n")
-		for _, method := range methods {
-			methodCurrency := html.EscapeString(firstNonEmpty(method.Currency, rawCurrency))
-			sb.WriteString(fmt.Sprintf("  %s: service %s %s, cash %s %s (%d txns)\n",
-				html.EscapeString(method.Method),
-				FormatNumber(method.ServiceRevenue),
-				methodCurrency,
-				FormatNumber(method.CashCollected),
-				methodCurrency,
-				method.Transactions,
-			))
-		}
-	}
-
-	return strings.TrimRight(sb.String(), "\n")
-}
-
 func FormatTelegramFinanceReport(title string, report FinanceReport) string {
 	currency := html.EscapeString(firstNonEmpty(report.Currency, "MMK"))
 	var sb strings.Builder
@@ -263,7 +226,8 @@ func FormatRevenueCommandFromReport(report FinanceReport, today string) string {
 	sb.WriteString(fmt.Sprintf("Orders: %d, Users: %d\n", report.Current.SuccessfulOrders, report.Current.UniqueCustomers))
 	if len(report.Trend) > 0 {
 		sb.WriteString("\n<b>Trend</b>\n")
-		// show last up to 7 buckets newest last in list already ascending — print reverse for recency
+		// Print up to the last 7 buckets in chronological order (oldest → newest).
+		// Trend is already ascending; when longer than 7, take the trailing slice.
 		start := 0
 		if len(report.Trend) > 7 {
 			start = len(report.Trend) - 7
@@ -285,77 +249,6 @@ func FormatRevenueCommandFromReport(report FinanceReport, today string) string {
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-func FormatRevenueCommand(rows []database.RevenueSummaryRow, today string) string {
-	if len(rows) == 0 {
-		return "📊 No revenue data for the selected period."
-	}
-
-	byDay := make(map[string][]database.RevenueSummaryRow)
-	var days []string
-	for _, row := range rows {
-		day := firstNonEmpty(row.PeriodStart, row.Day)
-		if day == "" {
-			continue
-		}
-		if _, ok := byDay[day]; !ok {
-			days = append(days, day)
-		}
-		byDay[day] = append(byDay[day], row)
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(days)))
-
-	var sb strings.Builder
-	sb.WriteString("📊 <b>Revenue Summary</b>\n\n")
-
-	sb.WriteString("<b>Today</b>\n")
-	if todayRows := byDay[today]; len(todayRows) > 0 {
-		writeCompactPeriodSummary(&sb, todayRows)
-	} else {
-		sb.WriteString("  No paid activity yet today\n")
-	}
-
-	sb.WriteString("\n<b>Last 7 Days</b>\n")
-	for _, day := range days {
-		totals, _ := SummarizeRevenuePeriod(byDay[day])
-		label := day
-		if day == today {
-			label += " (today)"
-		}
-		sb.WriteString(fmt.Sprintf("  %s: %s %s service, %s %s cash (%d plan txns, %d users)\n",
-			html.EscapeString(label),
-			FormatNumber(totals.ServiceRevenue),
-			html.EscapeString(totals.Currency),
-			FormatNumber(totals.CashCollected),
-			html.EscapeString(totals.Currency),
-			totals.ServicePurchases,
-			totals.UniqueCustomers,
-		))
-	}
-
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-func writeCompactPeriodSummary(sb *strings.Builder, rows []database.RevenueSummaryRow) {
-	totals, methods := SummarizeRevenuePeriod(rows)
-	currency := html.EscapeString(totals.Currency)
-	sb.WriteString(fmt.Sprintf("  Service revenue: <b>%s %s</b> (%d plan txns, %d users)\n", FormatNumber(totals.ServiceRevenue), currency, totals.ServicePurchases, totals.UniqueCustomers))
-	sb.WriteString(fmt.Sprintf("  Cash collected: <b>%s %s</b>\n", FormatNumber(totals.CashCollected), currency))
-	if totals.WalletTopUps > 0 || totals.WalletSpend > 0 {
-		sb.WriteString(fmt.Sprintf("  Wallet: %s %s top-ups, %s %s spend\n", FormatNumber(totals.WalletTopUps), currency, FormatNumber(totals.WalletSpend), currency))
-	}
-	for _, method := range methods {
-		if method.ServiceRevenue == 0 && method.CashCollected == 0 {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("  %s: service %s, cash %s (%d txns)\n",
-			html.EscapeString(method.Method),
-			FormatNumber(method.ServiceRevenue),
-			FormatNumber(method.CashCollected),
-			method.Transactions,
-		))
-	}
 }
 
 func FormatNumber(n float64) string {

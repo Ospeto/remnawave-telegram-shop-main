@@ -1,6 +1,7 @@
 package reporting
 
 import (
+	"encoding/csv"
 	"errors"
 	"strings"
 	"testing"
@@ -86,20 +87,24 @@ func TestBuildFinanceReport_NetEqualsGrossMinusRefunds(t *testing.T) {
 func TestBuildFinanceReport_PriorDeltaAndTrendOrder(t *testing.T) {
 	loc := YangonLocation()
 	now := time.Date(2026, 7, 12, 10, 0, 0, 0, loc)
+	// Selected = today only; history window has 3 days of purchase rows for dense trend.
 	in := BuildFinanceReportInput{
 		Period:       database.RevenuePeriodDay,
 		Now:          now,
-		CurrentStart: time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
 		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
-		PriorStart:   time.Date(2026, 7, 10, 0, 0, 0, 0, loc),
-		PriorEnd:     time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorEnd:     time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		TrendStart:   time.Date(2026, 7, 10, 0, 0, 0, 0, loc),
+		TrendEnd:     time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
 		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-10", Currency: "MMK", PeriodServiceRevenue: 200, PeriodServicePurchases: 1, ServiceRevenue: 200, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
 			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 500, PeriodServicePurchases: 1, ServiceRevenue: 500, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
 			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 1000, PeriodServicePurchases: 2, ServiceRevenue: 1000, TotalPurchases: 2, PaymentMethod: "kbz", RevenueCategory: "new_key"},
 		},
 		RangeUniqueCustomers: 2,
 		PriorPurchaseRows: []database.RevenueSummaryRow{
-			{PeriodStart: "2026-07-10", Currency: "MMK", PeriodServiceRevenue: 500, PeriodServicePurchases: 1, ServiceRevenue: 500, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 500, PeriodServicePurchases: 1, ServiceRevenue: 500, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
 		},
 		PriorUniqueCustomers: 1,
 	}
@@ -107,18 +112,113 @@ func TestBuildFinanceReport_PriorDeltaAndTrendOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Current = selected day only (1000), not sum of history.
+	if report.Current.GrossServiceRevenue != 1000 {
+		t.Fatalf("current gross=%v want 1000 (selected day only)", report.Current.GrossServiceRevenue)
+	}
 	if report.Prior == nil || report.Prior.GrossServiceRevenue != 500 {
 		t.Fatalf("prior=%+v", report.Prior)
 	}
-	// Current window spans two day buckets (500+1000=1500); prior is 500 → absolute delta 1000.
-	if report.Delta == nil || report.Delta.GrossServiceRevenue.Absolute != 1000 {
+	// Delta = today − yesterday = 1000 − 500 = 500.
+	if report.Delta == nil || report.Delta.GrossServiceRevenue.Absolute != 500 {
 		t.Fatalf("delta=%+v", report.Delta)
 	}
-	if len(report.Trend) < 2 {
-		t.Fatalf("trend len=%d", len(report.Trend))
+	if len(report.Trend) != 3 {
+		t.Fatalf("trend len=%d want 3 dense days", len(report.Trend))
 	}
 	if report.Trend[0].PeriodStart > report.Trend[1].PeriodStart {
 		t.Fatal("trend must be ascending")
+	}
+	if report.RangeStart != "2026-07-12" || report.RangeEnd != "2026-07-12" {
+		t.Fatalf("range metadata must be selected period, got %s..%s", report.RangeStart, report.RangeEnd)
+	}
+}
+
+func TestBuildFinanceReport_SelectedPeriodNotWindowSum(t *testing.T) {
+	loc := YangonLocation()
+	now := time.Date(2026, 7, 12, 15, 0, 0, 0, loc)
+	// 3 days of data with periods=7 style history window — Current must be today only.
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          now,
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PriorStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		PriorEnd:     time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		TrendStart:   time.Date(2026, 7, 6, 0, 0, 0, 0, loc),
+		TrendEnd:     time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-10", Currency: "MMK", PeriodServiceRevenue: 100, PeriodServicePurchases: 1, ServiceRevenue: 100, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 200, PeriodServicePurchases: 1, ServiceRevenue: 200, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 300, PeriodServicePurchases: 1, ServiceRevenue: 300, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		RangeUniqueCustomers: 1,
+		PriorPurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 200, PeriodServicePurchases: 1, ServiceRevenue: 200, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		PriorUniqueCustomers: 1,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Current.GrossServiceRevenue != 300 {
+		t.Fatalf("current=%v want 300 (today only, not 100+200+300)", report.Current.GrossServiceRevenue)
+	}
+	if report.Prior == nil || report.Prior.GrossServiceRevenue != 200 {
+		t.Fatalf("prior=%+v want 200 (yesterday only)", report.Prior)
+	}
+	if report.Delta == nil || report.Delta.GrossServiceRevenue.Absolute != 100 {
+		t.Fatalf("delta=%+v want 100", report.Delta)
+	}
+	// Dense trend: 7 day buckets even with only 3 activity days.
+	if len(report.Trend) != 7 {
+		t.Fatalf("trend len=%d want 7 dense buckets", len(report.Trend))
+	}
+	// Gap day 2026-07-09 (no purchases) must appear with zeros.
+	var foundGap bool
+	for _, b := range report.Trend {
+		if b.PeriodStart == "2026-07-09" {
+			foundGap = true
+			if b.Metrics.GrossServiceRevenue != 0 || b.Metrics.NetServiceRevenue != 0 || b.Metrics.SuccessfulOrders != 0 {
+				t.Fatalf("gap day metrics not zero: %+v", b.Metrics)
+			}
+		}
+	}
+	if !foundGap {
+		t.Fatal("expected dense zero bucket for 2026-07-09")
+	}
+}
+
+func TestBuildFinanceReport_DenseTrendZeroActivityDay(t *testing.T) {
+	loc := YangonLocation()
+	now := time.Date(2026, 7, 12, 12, 0, 0, 0, loc)
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          now,
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		TrendStart:   time.Date(2026, 7, 10, 0, 0, 0, 0, loc),
+		TrendEnd:     time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{
+			{PeriodStart: "2026-07-10", Currency: "MMK", PeriodServiceRevenue: 50, PeriodServicePurchases: 1, ServiceRevenue: 50, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+			// gap on 2026-07-11
+			{PeriodStart: "2026-07-12", Currency: "MMK", PeriodServiceRevenue: 80, PeriodServicePurchases: 1, ServiceRevenue: 80, TotalPurchases: 1, PaymentMethod: "kbz", RevenueCategory: "new_key"},
+		},
+		RangeUniqueCustomers: 1,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Trend) != 3 {
+		t.Fatalf("trend len=%d want 3", len(report.Trend))
+	}
+	if report.Trend[1].PeriodStart != "2026-07-11" {
+		t.Fatalf("middle bucket=%s want 2026-07-11", report.Trend[1].PeriodStart)
+	}
+	if report.Trend[1].Metrics.GrossServiceRevenue != 0 || report.Trend[1].Metrics.Refunds != 0 || report.Trend[1].Metrics.SuccessfulOrders != 0 {
+		t.Fatalf("gap metrics=%+v", report.Trend[1].Metrics)
 	}
 }
 
@@ -405,11 +505,14 @@ func TestBuildFinanceReport_WalletSpendServiceRevenueNoCash(t *testing.T) {
 
 func TestBuildFinanceReport_UniqueCustomersFromRangeInput(t *testing.T) {
 	loc := YangonLocation()
+	// Selected = today; history rows may include other days — unique customers come from RangeUniqueCustomers for selected.
 	in := BuildFinanceReportInput{
 		Period:       database.RevenuePeriodDay,
 		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
-		CurrentStart: time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
 		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		TrendStart:   time.Date(2026, 7, 11, 0, 0, 0, 0, loc),
+		TrendEnd:     time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
 		// Bucket-level unique fields intentionally differ from range input; builder must ignore them.
 		PurchaseRows: []database.RevenueSummaryRow{
 			{PeriodStart: "2026-07-11", Currency: "MMK", PeriodServiceRevenue: 100, PeriodServicePurchases: 1, PeriodUniqueCustomers: 9, ServiceRevenue: 100, TotalPurchases: 1, UniqueCustomers: 9, PaymentMethod: "kbz", RevenueCategory: "new_key"},
@@ -423,6 +526,10 @@ func TestBuildFinanceReport_UniqueCustomersFromRangeInput(t *testing.T) {
 	}
 	if report.Current.UniqueCustomers != 7 {
 		t.Fatalf("unique customers=%d want RangeUniqueCustomers=7 (not bucket sum)", report.Current.UniqueCustomers)
+	}
+	// Categories/methods for selected day only.
+	if report.Current.GrossServiceRevenue != 200 {
+		t.Fatalf("current gross=%v want 200 (selected day)", report.Current.GrossServiceRevenue)
 	}
 }
 
@@ -521,5 +628,64 @@ func TestFormatFinanceReportCSV_MatchesJSONTotals(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("csv missing %q in %s", want, s)
 		}
+	}
+}
+
+func TestFormatFinanceReportCSV_FullRecordsAndEscaping(t *testing.T) {
+	report := FinanceReport{
+		Period: "day", Timezone: "Asia/Yangon", Currency: "MMK",
+		RangeStart: "2026-07-12", RangeEnd: "2026-07-12",
+		Current: FinanceMetrics{GrossServiceRevenue: 10, NetServiceRevenue: 10, SuccessfulOrders: 1},
+		Categories: []CategoryBreakdown{
+			{Category: "new_key, \"quoted\"", Orders: 1, Amount: 10},
+			{Category: "line\nbreak", Orders: 2, Amount: 20},
+		},
+		Methods: []MethodBreakdown{
+			{Method: "kbz,pay", Transactions: 1, ServiceRevenue: 10, CashCollected: 10},
+		},
+		Trend: []FinanceTrendBucket{{
+			PeriodStart: "2026-07-12",
+			Metrics:     FinanceMetrics{GrossServiceRevenue: 10, NetServiceRevenue: 10},
+		}},
+	}
+	csvBytes, err := FormatFinanceReportCSV(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := csv.NewReader(strings.NewReader(string(csvBytes)))
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("parse csv: %v\n%s", err, csvBytes)
+	}
+	if len(records) < 2 {
+		t.Fatalf("too few records: %d", len(records))
+	}
+	if got := records[0]; len(got) != 3 || got[0] != "section" || got[1] != "key" || got[2] != "value" {
+		t.Fatalf("header=%v", records[0])
+	}
+	// Find escaped category labels via full record equality (not substrings).
+	var foundQuoted, foundNewline, foundMethod bool
+	for _, rec := range records {
+		if len(rec) != 3 {
+			t.Fatalf("record width=%d want 3: %v", len(rec), rec)
+		}
+		if rec[0] == "category" && rec[1] == "new_key, \"quoted\"" {
+			foundQuoted = true
+			if rec[2] != "1:10.00" {
+				t.Fatalf("quoted category value=%q", rec[2])
+			}
+		}
+		if rec[0] == "category" && rec[1] == "line\nbreak" {
+			foundNewline = true
+		}
+		if rec[0] == "method" && rec[1] == "kbz,pay" {
+			foundMethod = true
+			if rec[2] != "1:10.00:10.00" {
+				t.Fatalf("method value=%q", rec[2])
+			}
+		}
+	}
+	if !foundQuoted || !foundNewline || !foundMethod {
+		t.Fatalf("missing escaped records quoted=%v newline=%v method=%v in %v", foundQuoted, foundNewline, foundMethod, records)
 	}
 }

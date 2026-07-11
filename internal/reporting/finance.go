@@ -97,10 +97,15 @@ type BuildFinanceReportInput struct {
 	RangeUniqueCustomers int
 	PriorUniqueCustomers int
 	// Window fields filled by FinanceService before BuildFinanceReport:
+	// CurrentStart/End = selected period for headline cards (half-open).
 	CurrentStart time.Time
 	CurrentEnd   time.Time // half-open
 	PriorStart   time.Time
 	PriorEnd     time.Time // half-open
+	// TrendStart/End = full history window for dense trend buckets (half-open).
+	// When zero, trend falls back to CurrentStart/CurrentEnd (single selected period).
+	TrendStart time.Time
+	TrendEnd   time.Time // half-open
 }
 
 func moneyDelta(current, prior float64) MoneyDelta {
@@ -281,6 +286,23 @@ func validatePeriodStarts(
 	return checkRefund(priorRefundRows)
 }
 
+func filterRowsByPeriodStart(rows []database.RevenueSummaryRow, startKey string) []database.RevenueSummaryRow {
+	if startKey == "" {
+		return nil
+	}
+	out := make([]database.RevenueSummaryRow, 0)
+	for _, row := range rows {
+		if firstNonEmpty(row.PeriodStart, row.Day) == startKey {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func metricsForBucket(buckets map[bucketKey]FinanceMetrics, startKey, currency string, uniqueCustomers int) FinanceMetrics {
+	return finalizeMetrics(buckets[bucketKey{start: startKey, currency: currency}], uniqueCustomers)
+}
+
 func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	if in.CurrentStart.IsZero() || in.CurrentEnd.IsZero() || !in.CurrentEnd.After(in.CurrentStart) {
 		return FinanceReport{}, fmt.Errorf("current window is required")
@@ -301,17 +323,38 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 		period = database.RevenuePeriodDay
 	}
 
-	currentBuckets := aggregatePurchaseBuckets(in.PurchaseRows)
-	applyRefunds(currentBuckets, in.RefundRows)
+	// Grain used for bucket keys / dense trend (custom uses day buckets).
+	bucketPeriod := period
+	if period == database.RevenuePeriodCustom {
+		bucketPeriod = database.RevenuePeriodDay
+	}
+
+	allBuckets := aggregatePurchaseBuckets(in.PurchaseRows)
+	applyRefunds(allBuckets, in.RefundRows)
 	priorBuckets := aggregatePurchaseBuckets(in.PriorPurchaseRows)
 	applyRefunds(priorBuckets, in.PriorRefundRows)
 
-	current := finalizeMetrics(sumMetrics(currentBuckets), in.RangeUniqueCustomers)
+	// Headline Current = selected period only (not full history window sum).
+	// Custom: selected range is the whole custom window → sum all buckets in PurchaseRows
+	// that fall in the selected range (which is the custom fetch for trend=selected).
+	selectedKey := in.CurrentStart.In(loc).Format("2006-01-02")
+	var current FinanceMetrics
+	var selectedPurchaseRows []database.RevenueSummaryRow
+	if period == database.RevenuePeriodCustom {
+		// Entire custom range is the selected period.
+		current = finalizeMetrics(sumMetrics(allBuckets), in.RangeUniqueCustomers)
+		selectedPurchaseRows = in.PurchaseRows
+	} else {
+		current = metricsForBucket(allBuckets, selectedKey, currency, in.RangeUniqueCustomers)
+		selectedPurchaseRows = filterRowsByPeriodStart(in.PurchaseRows, selectedKey)
+	}
+
+	// Prior is always a single equivalent period (or equal-length custom prior range).
 	prior := finalizeMetrics(sumMetrics(priorBuckets), in.PriorUniqueCustomers)
 
-	// Range-level categories/methods (selected window totals).
-	categories := buildCategoryBreakdown(in.PurchaseRows)
-	methods := buildMethodBreakdown(in.PurchaseRows)
+	// Categories/Methods for selected period only (summary cards / CSV).
+	categories := buildCategoryBreakdown(selectedPurchaseRows)
+	methods := buildMethodBreakdown(selectedPurchaseRows)
 
 	// Per-period breakdown maps for truthful expandable trend rows.
 	catsByPeriod := map[string][]database.RevenueSummaryRow{}
@@ -320,27 +363,26 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 		catsByPeriod[start] = append(catsByPeriod[start], row)
 	}
 
-	// trend ascending — single currency already validated, so one bucket per start.
-	starts := make([]string, 0, len(currentBuckets))
-	seenStart := map[string]bool{}
-	for k := range currentBuckets {
-		if seenStart[k.start] {
-			continue
-		}
-		seenStart[k.start] = true
-		starts = append(starts, k.start)
+	// Dense trend over history window (zeros for quiet buckets), chronological ascending.
+	trendStart := in.TrendStart
+	trendEnd := in.TrendEnd
+	if trendStart.IsZero() || trendEnd.IsZero() || !trendEnd.After(trendStart) {
+		// Fallback: single selected period when trend window not provided.
+		trendStart = in.CurrentStart
+		trendEnd = in.CurrentEnd
 	}
-	sort.Strings(starts)
 
-	trend := make([]FinanceTrendBucket, 0, len(starts))
-	for _, startStr := range starts {
-		m := currentBuckets[bucketKey{start: startStr, currency: currency}]
-		// Period starts already validated; parse is infallible here.
-		startDay, _ := parsePeriodStart(startStr, loc)
-		endDay := bucketInclusiveEnd(period, startDay)
-		bucketStart := startDay
+	bucketStarts := denseBucketStarts(bucketPeriod, trendStart.In(loc), trendEnd.In(loc))
+	trend := make([]FinanceTrendBucket, 0, len(bucketStarts))
+	for _, startDay := range bucketStarts {
+		startStr := startDay.Format("2006-01-02")
+		m := allBuckets[bucketKey{start: startStr, currency: currency}]
+		endDay := bucketInclusiveEnd(bucketPeriod, startDay)
 		bucketEndExclusive := endDay.AddDate(0, 0, 1)
-		inProgress := !now.Before(bucketStart) && now.Before(bucketEndExclusive)
+		// For week/month/year, bucketInclusiveEnd returns inclusive last day; exclusive end is next day after that.
+		// For week: start + 6 days inclusive → exclusive = start+7 which equals endDay.AddDate(0,0,1) only if endDay is last day.
+		// bucketInclusiveEnd for week returns start+6d; +1d = start+7d ✓
+		inProgress := !now.Before(startDay) && now.Before(bucketEndExclusive)
 		periodRows := catsByPeriod[startStr]
 		trend = append(trend, FinanceTrendBucket{
 			PeriodStart: startStr,

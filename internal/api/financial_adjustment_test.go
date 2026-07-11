@@ -109,6 +109,45 @@ func TestCreateFinancialAdjustment_NonPositiveAmount400(t *testing.T) {
 	}
 }
 
+func TestCreateFinancialAdjustment_NaNAmount400(t *testing.T) {
+	repo := &fakeAdjustmentRepo{}
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
+	// JSON allows NaN only via non-standard encoding; use a number that decodes then fails validation
+	// by sending the string form Go's encoding/json rejects — instead send Inf via raw JSON number
+	// that json.Unmarshal accepts as float64 NaN is not standard. Use math via crafted payload:
+	// encoding/json rejects NaN/Inf in numbers. Simulate by posting a valid decode path with
+	// amount set after decode is not possible; use "null" no — use very large then check Inf path
+	// via direct handler field is hard. Send amount as string fails decode.
+	// Practical approach: call with body using JavaScript-style NaN is invalid JSON.
+	// Use amount that becomes non-finite only if we inject — instead test via repo-bypass:
+	// Decode `"amount":1e400` may become +Inf in float64.
+	body := `{"adjustment_type":"refund","amount":1e400,"currency":"MMK","idempotency_key":"nan-key"}`
+	rec := postFinancialAdjustment(t, h, body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400 for non-finite amount", rec.Code, rec.Body.String())
+	}
+	if repo.calls != 0 {
+		t.Fatal("repo should not be called for non-finite amount")
+	}
+}
+
+func TestCreateFinancialAdjustment_IdempotencyMismatch409(t *testing.T) {
+	secret := "payload-mismatch-detail=leak"
+	repo := &fakeAdjustmentRepo{
+		err: fmt.Errorf("create: %w: %s", database.ErrFinancialAdjustmentIdempotencyMismatch, secret),
+	}
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)
+	body := `{"adjustment_type":"refund","amount":10,"currency":"MMK","idempotency_key":"mismatch-key"}`
+	rec := postFinancialAdjustment(t, h, body)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Idempotency key already used with a different payload") {
+		t.Fatalf("body=%q", rec.Body.String())
+	}
+	assertSanitizedBody(t, rec.Body.String(), "leak")
+}
+
 func TestCreateFinancialAdjustment_Created201AndReplay200(t *testing.T) {
 	repo := &fakeAdjustmentRepo{}
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, repo)

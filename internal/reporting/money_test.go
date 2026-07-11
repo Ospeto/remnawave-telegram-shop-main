@@ -1,15 +1,41 @@
 package reporting
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestRoundMoney_TwoDecimals(t *testing.T) {
-	if RoundMoney(1.005) != 1.01 {
-		t.Fatalf("1.005 -> %v", RoundMoney(1.005))
+	cases := []struct {
+		in   float64
+		want float64
+	}{
+		{1.005, 1.01},
+		{2.004, 2.00},
+		{-1.005, -1.01},
+		{0, 0},
+		{0.005, 0.01},
+		{-0.005, -0.01},
+		{1.015, 1.02},
+		{1.025, 1.03}, // half-away-from-zero (not banker's)
+		{2.5, 2.50},
 	}
-	if RoundMoney(2.004) != 2.00 {
-		t.Fatalf("2.004 -> %v", RoundMoney(2.004))
+	for _, tc := range cases {
+		got := RoundMoney(tc.in)
+		if got != tc.want {
+			t.Fatalf("RoundMoney(%v)=%v want %v", tc.in, got, tc.want)
+		}
 	}
-	if RoundMoney(-1.005) != -1.01 {
-		t.Fatalf("-1.005 -> %v", RoundMoney(-1.005))
+}
+
+func TestRoundMoney_NonFinite(t *testing.T) {
+	if got := RoundMoney(math.NaN()); got != 0 {
+		t.Fatalf("NaN -> %v want 0", got)
+	}
+	if got := RoundMoney(math.Inf(1)); got != 0 {
+		t.Fatalf("+Inf -> %v want 0", got)
+	}
+	if got := RoundMoney(math.Inf(-1)); got != 0 {
+		t.Fatalf("-Inf -> %v want 0", got)
 	}
 }

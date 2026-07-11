@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -569,9 +570,10 @@ func (h Handler) RevenueCommandHandler(ctx context.Context, b *bot.Bot, update *
 		HistoryPeriods: 7,
 	})
 	if err != nil {
+		slog.Error("failed to load revenue report", "error", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("❌ Error fetching revenue: %v", err),
+			Text:   "❌ Failed to load revenue report",
 		})
 		return
 	}

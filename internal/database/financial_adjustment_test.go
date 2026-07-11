@@ -151,19 +151,38 @@ func (q *scriptedQuerier) QueryRow(ctx context.Context, sql string, args ...inte
 }
 
 func sampleAdjustmentRow(id int64, amount float64, key string) stubRow {
-	now := time.Date(2026, 7, 12, 11, 0, 0, 0, time.UTC)
+	// Match validCreateInput effective_at so payload-safe idempotency compares equal.
+	effectiveAt := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
+	createdAt := time.Date(2026, 7, 12, 11, 0, 0, 0, time.UTC)
 	return stubRow{vals: []interface{}{
 		id,
 		(*int64)(nil),
 		FinancialAdjustmentTypeRefund,
 		amount,
 		"MMK",
-		now,
+		effectiveAt,
 		"customer refund",
 		"ref-1",
 		"admin:1",
 		key,
-		now,
+		createdAt,
+	}}
+}
+
+func sampleAdjustmentRowCustom(id int64, purchaseID *int64, adjType FinancialAdjustmentType, amount float64, currency string, effectiveAt time.Time, key string) stubRow {
+	createdAt := time.Date(2026, 7, 12, 11, 0, 0, 0, time.UTC)
+	return stubRow{vals: []interface{}{
+		id,
+		purchaseID,
+		adjType,
+		amount,
+		currency,
+		effectiveAt,
+		"customer refund",
+		"ref-1",
+		"admin:1",
+		key,
+		createdAt,
 	}}
 }
 
@@ -202,13 +221,14 @@ func TestCreateFinancialAdjustment_FirstInsertCreatedTrue(t *testing.T) {
 }
 
 func TestCreateFinancialAdjustment_DuplicateIdempotencyKeyCreatedFalse(t *testing.T) {
+	// Same key + same payload (amount matches normalized 100.01 from validCreateInput).
 	q := &scriptedQuerier{calls: []struct {
 		sql  string
 		args []interface{}
 		row  pgx.Row
 	}{
 		{row: stubRow{err: pgx.ErrNoRows}},
-		{row: sampleAdjustmentRow(7, 50.00, "idem-key-1")},
+		{row: sampleAdjustmentRow(7, 100.01, "idem-key-1")},
 	}}
 
 	got, created, err := createFinancialAdjustment(context.Background(), q, validCreateInput())
@@ -229,6 +249,74 @@ func TestCreateFinancialAdjustment_DuplicateIdempotencyKeyCreatedFalse(t *testin
 	}
 	if len(q.calls[1].args) != 1 || q.calls[1].args[0] != "idem-key-1" {
 		t.Fatalf("reload args: %#v", q.calls[1].args)
+	}
+}
+
+func TestCreateFinancialAdjustment_IdempotencyMismatchDifferentAmount(t *testing.T) {
+	q := &scriptedQuerier{calls: []struct {
+		sql  string
+		args []interface{}
+		row  pgx.Row
+	}{
+		{row: stubRow{err: pgx.ErrNoRows}},
+		{row: sampleAdjustmentRow(7, 50.00, "idem-key-1")},
+	}}
+
+	got, created, err := createFinancialAdjustment(context.Background(), q, validCreateInput())
+	if !errors.Is(err, ErrFinancialAdjustmentIdempotencyMismatch) {
+		t.Fatalf("err=%v want ErrFinancialAdjustmentIdempotencyMismatch", err)
+	}
+	if created || got != nil {
+		t.Fatalf("created=%v got=%+v", created, got)
+	}
+}
+
+func TestCreateFinancialAdjustment_IdempotencyMismatchDifferentFields(t *testing.T) {
+	base := validCreateInput()
+	pid := int64(99)
+	cases := []struct {
+		name string
+		row  stubRow
+		mut  func(*CreateFinancialAdjustmentInput)
+	}{
+		{
+			name: "purchase_id",
+			row:  sampleAdjustmentRowCustom(7, &pid, FinancialAdjustmentTypeRefund, 100.01, "MMK", base.EffectiveAt, base.IdempotencyKey),
+			mut:  func(in *CreateFinancialAdjustmentInput) { /* request has nil purchase_id */ },
+		},
+		{
+			name: "currency",
+			row:  sampleAdjustmentRowCustom(7, nil, FinancialAdjustmentTypeRefund, 100.01, "USD", base.EffectiveAt, base.IdempotencyKey),
+			mut:  func(in *CreateFinancialAdjustmentInput) {},
+		},
+		{
+			name: "effective_at",
+			row:  sampleAdjustmentRowCustom(7, nil, FinancialAdjustmentTypeRefund, 100.01, "MMK", base.EffectiveAt.Add(2*time.Hour), base.IdempotencyKey),
+			mut:  func(in *CreateFinancialAdjustmentInput) {},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := validCreateInput()
+			if tc.mut != nil {
+				tc.mut(&in)
+			}
+			q := &scriptedQuerier{calls: []struct {
+				sql  string
+				args []interface{}
+				row  pgx.Row
+			}{
+				{row: stubRow{err: pgx.ErrNoRows}},
+				{row: tc.row},
+			}}
+			got, created, err := createFinancialAdjustment(context.Background(), q, in)
+			if !errors.Is(err, ErrFinancialAdjustmentIdempotencyMismatch) {
+				t.Fatalf("err=%v want mismatch", err)
+			}
+			if created || got != nil {
+				t.Fatalf("created=%v got=%+v", created, got)
+			}
+		})
 	}
 }
 

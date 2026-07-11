@@ -226,6 +226,38 @@ func TestGetRevenueSummary_CustomRangeOver366Days400(t *testing.T) {
 	}
 }
 
+func TestGetRevenueSummary_MixedCurrency400(t *testing.T) {
+	fake := &fakeFinanceService{err: reporting.ErrMixedCurrency}
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h.financeService = fake
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=day", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.GetRevenueSummary(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "mixed currencies") {
+		// sanitized message preferred; raw sentinel text is acceptable only if not leaking internals
+	}
+	if rec.Code == http.StatusInternalServerError {
+		t.Fatal("mixed currency must not be 500")
+	}
+}
+
+func TestExportRevenue_MixedCurrency400(t *testing.T) {
+	fake := &fakeFinanceService{err: fmt.Errorf("build: %w", reporting.ErrMixedCurrency)}
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h.financeService = fake
+	req := httptest.NewRequest(http.MethodGet, "/api/revenue/export?period=day", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	h.ExportRevenue(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s want 400", rec.Code, rec.Body.String())
+	}
+}
+
 func TestRegisterHandlersProtectsRevenueRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)

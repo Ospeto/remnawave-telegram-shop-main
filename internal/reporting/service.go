@@ -63,33 +63,36 @@ func (s *FinanceService) GetReport(ctx context.Context, q ReportQuery) (FinanceR
 		bucketPeriod = database.RevenuePeriodDay
 	}
 
-	cs, ce, ps, pe, err := ResolveReportWindow(period, now, q.HistoryPeriods, q.CustomFrom, q.CustomTo)
+	windows, err := ResolveReportWindows(period, now, q.HistoryPeriods, q.CustomFrom, q.CustomTo)
 	if err != nil {
 		return FinanceReport{}, err
 	}
 
-	purchaseRows, err := s.purchases.GetRevenueSummaryRange(ctx, cs, ce, bucketPeriod)
+	// Fetch purchase/refund rows for the full trend history window (dense trend needs all buckets).
+	// Prior is a separate single-period window immediately before selected.
+	purchaseRows, err := s.purchases.GetRevenueSummaryRange(ctx, windows.TrendStart, windows.TrendEnd, bucketPeriod)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("load purchase revenue: %w", err)
 	}
-	priorPurchaseRows, err := s.purchases.GetRevenueSummaryRange(ctx, ps, pe, bucketPeriod)
+	priorPurchaseRows, err := s.purchases.GetRevenueSummaryRange(ctx, windows.PriorStart, windows.PriorEnd, bucketPeriod)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("load prior purchase revenue: %w", err)
 	}
 	adminID := s.adminID()
-	refundRows, err := s.refunds.SumRefundsByPeriod(ctx, cs, ce, bucketPeriod, adminID)
+	refundRows, err := s.refunds.SumRefundsByPeriod(ctx, windows.TrendStart, windows.TrendEnd, bucketPeriod, adminID)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("load refunds: %w", err)
 	}
-	priorRefundRows, err := s.refunds.SumRefundsByPeriod(ctx, ps, pe, bucketPeriod, adminID)
+	priorRefundRows, err := s.refunds.SumRefundsByPeriod(ctx, windows.PriorStart, windows.PriorEnd, bucketPeriod, adminID)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("load prior refunds: %w", err)
 	}
-	uniq, err := s.purchases.CountDistinctServiceCustomers(ctx, cs, ce)
+	// Unique customers for selected period only (headline cards), not full history window.
+	uniq, err := s.purchases.CountDistinctServiceCustomers(ctx, windows.SelectedStart, windows.SelectedEnd)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("count customers: %w", err)
 	}
-	priorUniq, err := s.purchases.CountDistinctServiceCustomers(ctx, ps, pe)
+	priorUniq, err := s.purchases.CountDistinctServiceCustomers(ctx, windows.PriorStart, windows.PriorEnd)
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("count prior customers: %w", err)
 	}
@@ -97,7 +100,7 @@ func (s *FinanceService) GetReport(ctx context.Context, q ReportQuery) (FinanceR
 	return BuildFinanceReport(BuildFinanceReportInput{
 		Period:               period,
 		Now:                  now.In(YangonLocation()),
-		HistoryPeriods:       q.HistoryPeriods,
+		HistoryPeriods:       windows.HistoryPeriods,
 		CustomFrom:           q.CustomFrom,
 		CustomTo:             q.CustomTo,
 		PurchaseRows:         purchaseRows,
@@ -106,9 +109,13 @@ func (s *FinanceService) GetReport(ctx context.Context, q ReportQuery) (FinanceR
 		PriorRefundRows:      priorRefundRows,
 		RangeUniqueCustomers: uniq,
 		PriorUniqueCustomers: priorUniq,
-		CurrentStart:         cs,
-		CurrentEnd:           ce,
-		PriorStart:           ps,
-		PriorEnd:             pe,
+		// CurrentStart/End describe the selected period for cards/metadata.
+		CurrentStart: windows.SelectedStart,
+		CurrentEnd:   windows.SelectedEnd,
+		PriorStart:   windows.PriorStart,
+		PriorEnd:     windows.PriorEnd,
+		// Trend window for dense bucket materialization.
+		TrendStart: windows.TrendStart,
+		TrendEnd:   windows.TrendEnd,
 	})
 }

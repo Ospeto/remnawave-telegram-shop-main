@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -1999,8 +2000,10 @@ func (h *APIHandler) GetRevenueSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := h.financeService.GetReport(r.Context(), q)
 	if err != nil {
-		if errors.Is(err, reporting.ErrInvalidReportQuery) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, reporting.ErrInvalidReportQuery) ||
+			errors.Is(err, reporting.ErrMixedCurrency) ||
+			errors.Is(err, reporting.ErrInvalidPeriodStart) {
+			http.Error(w, "Invalid revenue report request", http.StatusBadRequest)
 			return
 		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to fetch revenue", err)
@@ -2027,8 +2030,10 @@ func (h *APIHandler) ExportRevenue(w http.ResponseWriter, r *http.Request) {
 	}
 	report, err := h.financeService.GetReport(r.Context(), q)
 	if err != nil {
-		if errors.Is(err, reporting.ErrInvalidReportQuery) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, reporting.ErrInvalidReportQuery) ||
+			errors.Is(err, reporting.ErrMixedCurrency) ||
+			errors.Is(err, reporting.ErrInvalidPeriodStart) {
+			http.Error(w, "Invalid revenue report request", http.StatusBadRequest)
 			return
 		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to export revenue", err)
@@ -2316,8 +2321,8 @@ func (h *APIHandler) CreateFinancialAdjustment(w http.ResponseWriter, r *http.Re
 		http.Error(w, "adjustment_type must be refund", http.StatusBadRequest)
 		return
 	}
-	if req.Amount <= 0 {
-		http.Error(w, "amount must be positive", http.StatusBadRequest)
+	if req.Amount <= 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) {
+		http.Error(w, "amount must be a finite positive number", http.StatusBadRequest)
 		return
 	}
 	effectiveAt := h.currentTime()
@@ -2349,6 +2354,9 @@ func (h *APIHandler) CreateFinancialAdjustment(w http.ResponseWriter, r *http.Re
 		case errors.Is(err, database.ErrFinancialAdjustmentForeignKey),
 			errors.Is(err, database.ErrFinancialAdjustmentCheck):
 			writeSanitizedError(w, http.StatusBadRequest, "Invalid financial adjustment", err)
+			return
+		case errors.Is(err, database.ErrFinancialAdjustmentIdempotencyMismatch):
+			writeSanitizedError(w, http.StatusConflict, "Idempotency key already used with a different payload", err)
 			return
 		case errors.Is(err, database.ErrFinancialAdjustmentUnique),
 			errors.Is(err, database.ErrFinancialAdjustmentIdempotencyConflict):

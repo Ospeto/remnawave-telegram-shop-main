@@ -22,10 +22,13 @@ const FinancialAdjustmentTypeRefund FinancialAdjustmentType = "refund"
 // Stable repository errors for expected PostgreSQL constraint failures.
 // Causes are preserved via %w so callers can still inspect *pgconn.PgError.
 var (
-	ErrFinancialAdjustmentForeignKey         = errors.New("financial_adjustment foreign key violation")
-	ErrFinancialAdjustmentCheck              = errors.New("financial_adjustment check constraint violation")
-	ErrFinancialAdjustmentUnique             = errors.New("financial_adjustment unique violation")
+	ErrFinancialAdjustmentForeignKey          = errors.New("financial_adjustment foreign key violation")
+	ErrFinancialAdjustmentCheck               = errors.New("financial_adjustment check constraint violation")
+	ErrFinancialAdjustmentUnique              = errors.New("financial_adjustment unique violation")
 	ErrFinancialAdjustmentIdempotencyConflict = errors.New("financial_adjustment idempotency key conflict")
+	// ErrFinancialAdjustmentIdempotencyMismatch is returned when an idempotency key
+	// already exists but the request payload does not match the stored row.
+	ErrFinancialAdjustmentIdempotencyMismatch = errors.New("financial_adjustment idempotency payload mismatch")
 )
 
 type FinancialAdjustment struct {
@@ -195,6 +198,67 @@ func scanFinancialAdjustment(row pgx.Row, dest *FinancialAdjustment) error {
 	)
 }
 
+func purchaseIDEqual(a, b *int64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func moneyEqual(a, b float64) bool {
+	// Compare after half-away-from-zero two-decimal normalization (same as write path).
+	return roundMoney2(a) == roundMoney2(b)
+}
+
+func roundMoney2(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	scaled := v * 100
+	if scaled >= 0 {
+		scaled = math.Floor(scaled + 0.5)
+	} else {
+		scaled = math.Ceil(scaled - 0.5)
+	}
+	return scaled / 100
+}
+
+func effectiveAtEqual(a, b time.Time) bool {
+	// Match storage precision: compare UTC truncated to the second.
+	return a.UTC().Truncate(time.Second).Equal(b.UTC().Truncate(time.Second))
+}
+
+// financialAdjustmentPayloadMatches reports whether the reloaded row matches the
+// request payload fields that define idempotent identity (excluding reason/ref/created_by).
+func financialAdjustmentPayloadMatches(existing *FinancialAdjustment, in CreateFinancialAdjustmentInput, amount float64, currency string) bool {
+	if existing == nil {
+		return false
+	}
+	if !purchaseIDEqual(existing.PurchaseID, in.PurchaseID) {
+		return false
+	}
+	if existing.AdjustmentType != in.AdjustmentType {
+		return false
+	}
+	if !moneyEqual(existing.Amount, amount) {
+		return false
+	}
+	existingCurrency := strings.TrimSpace(existing.Currency)
+	if existingCurrency == "" {
+		existingCurrency = "MMK"
+	}
+	if !strings.EqualFold(existingCurrency, currency) {
+		return false
+	}
+	if !effectiveAtEqual(existing.EffectiveAt, in.EffectiveAt) {
+		return false
+	}
+	return true
+}
+
 func createFinancialAdjustment(ctx context.Context, q financialAdjustmentRowQuerier, in CreateFinancialAdjustmentInput) (*FinancialAdjustment, bool, error) {
 	amount, err := validateCreateFinancialAdjustmentInput(in)
 	if err != nil {
@@ -223,6 +287,9 @@ func createFinancialAdjustment(ctx context.Context, q financialAdjustmentRowQuer
 	err = scanFinancialAdjustment(q.QueryRow(ctx, buildLoadFinancialAdjustmentByIdempotencyKeySQL(), idempotencyKey), existing)
 	if err != nil {
 		return nil, false, fmt.Errorf("load existing financial_adjustment: %w", classifyFinancialAdjustmentError(err))
+	}
+	if !financialAdjustmentPayloadMatches(existing, in, amount, currency) {
+		return nil, false, ErrFinancialAdjustmentIdempotencyMismatch
 	}
 	return existing, false, nil
 }
