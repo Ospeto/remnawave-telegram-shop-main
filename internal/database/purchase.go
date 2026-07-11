@@ -466,8 +466,10 @@ func revenuePeriodExpression(period RevenueSummaryPeriod) (string, error) {
 
 func InclusiveYangonDateRangeToHalfOpen(from, to time.Time) (time.Time, time.Time, error) {
 	loc := revenueSummaryLocation()
-	start := time.Date(from.In(loc).Year(), from.In(loc).Month(), from.In(loc).Day(), 0, 0, 0, 0, loc)
-	endDay := time.Date(to.In(loc).Year(), to.In(loc).Month(), to.In(loc).Day(), 0, 0, 0, 0, loc)
+	localFrom := from.In(loc)
+	localTo := to.In(loc)
+	start := time.Date(localFrom.Year(), localFrom.Month(), localFrom.Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(localTo.Year(), localTo.Month(), localTo.Day(), 0, 0, 0, 0, loc)
 	if endDay.Before(start) {
 		return time.Time{}, time.Time{}, fmt.Errorf("to must be on or after from")
 	}
