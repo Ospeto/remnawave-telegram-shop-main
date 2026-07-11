@@ -109,3 +109,33 @@ func TestPreviousWeekRangeUsesCompletedYangonWeek(t *testing.T) {
 		t.Fatalf("FormatDateRange() = %s, want %s", got, want)
 	}
 }
+
+func TestSummarizeRevenuePeriod_PreservesZeroServiceRevenue(t *testing.T) {
+	rows := []database.RevenueSummaryRow{{
+		PeriodStart:          "2026-07-01",
+		Currency:             "MMK",
+		PeriodServiceRevenue: 0,
+		PeriodCashCollected:  0,
+		PeriodTotalPurchases: 0,
+		ServiceRevenue:       0,
+		TotalRevenue:         0,
+	}}
+	totals, _ := SummarizeRevenuePeriod(rows)
+	if totals.ServiceRevenue != 0 {
+		t.Fatalf("service=%v want 0", totals.ServiceRevenue)
+	}
+}
+
+func TestSummarizeRevenuePeriod_PeriodZeroWinsOverBreakdownFallback(t *testing.T) {
+	rows := []database.RevenueSummaryRow{{
+		PeriodStart:          "2026-07-01",
+		Currency:             "MMK",
+		PeriodServiceRevenue: 0,
+		TotalRevenue:         999,
+		ServiceRevenue:       999,
+	}}
+	totals, _ := SummarizeRevenuePeriod(rows)
+	if totals.ServiceRevenue != 0 {
+		t.Fatalf("got %v want 0 (period field is authoritative including zero)", totals.ServiceRevenue)
+	}
+}

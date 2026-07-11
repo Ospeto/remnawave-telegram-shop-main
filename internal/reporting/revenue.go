@@ -111,16 +111,16 @@ func SummarizeRevenuePeriod(rows []database.RevenueSummaryRow) (RevenuePeriodTot
 			periods[key] = RevenuePeriodTotals{
 				PeriodStart:          start,
 				Currency:             currency,
-				TotalPurchases:       firstPositive(row.PeriodTotalPurchases, row.TotalPurchases),
-				ServicePurchases:     firstPositive(row.PeriodServicePurchases, row.NewKeyPurchases+row.ExtensionPurchases),
-				UniqueCustomers:      firstPositive(row.PeriodUniqueCustomers, row.UniqueCustomers),
-				CashCollected:        firstPositiveFloat(row.PeriodCashCollected, row.CashCollected),
-				WalletTopUps:         firstPositiveFloat(row.PeriodWalletTopUps, row.WalletTopUps),
-				WalletSpend:          firstPositiveFloat(row.PeriodWalletSpend, row.WalletSpend),
-				ServiceRevenue:       firstPositiveFloat(row.PeriodServiceRevenue, firstPositiveFloat(row.ServiceRevenue, row.TotalRevenue)),
-				NewKeyPurchases:      firstPositive(row.PeriodNewKeyPurchases, row.NewKeyPurchases),
-				ExtensionPurchases:   firstPositive(row.PeriodExtensionPurchases, row.ExtensionPurchases),
-				WalletTopUpPurchases: firstPositive(row.PeriodWalletTopUpPurchases, row.WalletTopUpPurchases),
+				TotalPurchases:       row.PeriodTotalPurchases,
+				ServicePurchases:     row.PeriodServicePurchases,
+				UniqueCustomers:      row.PeriodUniqueCustomers, // per-bucket only; not range-level
+				CashCollected:        row.PeriodCashCollected,
+				WalletTopUps:         row.PeriodWalletTopUps,
+				WalletSpend:          row.PeriodWalletSpend,
+				ServiceRevenue:       row.PeriodServiceRevenue,
+				NewKeyPurchases:      row.PeriodNewKeyPurchases,
+				ExtensionPurchases:   row.PeriodExtensionPurchases,
+				WalletTopUpPurchases: row.PeriodWalletTopUpPurchases,
 			}
 		}
 
@@ -129,11 +129,11 @@ func SummarizeRevenuePeriod(rows []database.RevenueSummaryRow) (RevenuePeriodTot
 		total := methods[methodKey]
 		total.Method = method
 		total.Currency = currency
-		total.Transactions += row.TotalPurchases
-		total.ServiceRevenue += firstPositiveFloat(row.ServiceRevenue, row.TotalRevenue)
+		total.ServiceRevenue += row.ServiceRevenue
 		total.CashCollected += row.CashCollected
 		total.WalletTopUps += row.WalletTopUps
 		total.WalletSpend += row.WalletSpend
+		total.Transactions += row.TotalPurchases
 		methods[methodKey] = total
 	}
 
@@ -319,22 +319,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func firstPositive(values ...int) int {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
-}
-
-func firstPositiveFloat(values ...float64) float64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }
