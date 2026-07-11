@@ -113,7 +113,7 @@ describe('Checkout', () => {
         });
     });
 
-    it('uses the discounted checkout amount for wallet eligibility', async () => {
+    it('ignores forged URL discount for pre-purchase wallet eligibility', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);
 
@@ -146,9 +146,123 @@ describe('Checkout', () => {
             { path: '/wallet', element: <div>Wallet</div> },
         ], ['/checkout/0?promo=SAVE20&discount=20']);
 
-        const walletButton = await screen.findByRole('button', { name: 'Pay 8,000 MMK from Wallet' });
-        expect(walletButton.getAttribute('disabled')).toBeNull();
-        expect(screen.queryByText('Wallet balance is not enough for wallet payment')).toBeNull();
+        // Balance 8500 < full plan price 10000 → wallet disabled; URL discount must not enable pay.
+        const walletButton = await screen.findByRole('button', { name: 'Pay 10,000 MMK from Wallet' });
+        expect(walletButton).toBeDisabled();
+        expect(screen.queryByRole('button', { name: 'Pay 8,000 MMK from Wallet' })).toBeNull();
+        expect(screen.getByText('Wallet balance is not enough for wallet payment')).toBeTruthy();
+    });
+
+    it('sends promo_code from URL but never client discount or amount for service purchases', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 10000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/purchase') {
+                return jsonResponse({
+                    purchase_id: 21,
+                    payment_phone: '09123456789',
+                    amount: 8000,
+                    currency: 'MMK',
+                    instructions: 'Pay now',
+                    invoice_type: 'mobile_banking',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/0?promo=SAVE20&discount=99']);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Pay via mobile banking' }));
+
+        await screen.findByText('How to pay');
+        await waitFor(() => {
+            const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
+            expect(purchaseCall).toBeTruthy();
+
+            const [, options] = purchaseCall as [string, RequestInit];
+            const body = JSON.parse(String(options.body));
+            expect(body.promo_code).toBe('SAVE20');
+            expect(body.discount).toBeUndefined();
+            expect(body.amount).toBeUndefined();
+        });
+    });
+
+    it('shows wallet success UI for wallet_payment invoice type without manual pay instructions', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 10000, currency: 'MMK' });
+            }
+            if (url === '/api/purchase') {
+                const body = JSON.parse(String(init?.body ?? '{}'));
+                expect(body.payment_method).toBe('wallet');
+                return jsonResponse({
+                    purchase_id: 33,
+                    amount: 5000,
+                    currency: 'MMK',
+                    invoice_type: 'wallet_payment',
+                    happ_link: 'https://happ.example/key',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/0']);
+
+        const walletButton = await screen.findByRole('button', { name: 'Pay 5,000 MMK from Wallet' });
+        expect(walletButton).not.toBeDisabled();
+        fireEvent.click(walletButton);
+
+        expect(await screen.findByText('✅ Payment Verified!')).toBeTruthy();
+        expect(screen.queryByText('How to pay')).toBeNull();
     });
 
     it('resumes a pending screenshot payment when the API rejects creating another one', async () => {
