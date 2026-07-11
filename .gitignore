@@ -351,3 +351,6 @@ web-app/node_modules/
 
 # Slim deepwork session state (local agent scratch)
 .slim/deepwork/
+
+# Local isolated Git worktrees
+.worktrees/
