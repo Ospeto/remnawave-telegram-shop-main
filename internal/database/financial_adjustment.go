@@ -10,6 +10,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 
+	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
@@ -23,6 +24,15 @@ const FinancialAdjustmentTypeRefund FinancialAdjustmentType = "refund"
 const (
 	RevenuePeriodYear   RevenueSummaryPeriod = "year"
 	RevenuePeriodCustom RevenueSummaryPeriod = "custom"
+)
+
+// Stable repository errors for expected PostgreSQL constraint failures.
+// Causes are preserved via %w so callers can still inspect *pgconn.PgError.
+var (
+	ErrFinancialAdjustmentForeignKey         = errors.New("financial_adjustment foreign key violation")
+	ErrFinancialAdjustmentCheck              = errors.New("financial_adjustment check constraint violation")
+	ErrFinancialAdjustmentUnique             = errors.New("financial_adjustment unique violation")
+	ErrFinancialAdjustmentIdempotencyConflict = errors.New("financial_adjustment idempotency key conflict")
 )
 
 type FinancialAdjustment struct {
@@ -58,6 +68,11 @@ type RefundPeriodRow struct {
 	RefundCount int
 }
 
+// financialAdjustmentRowQuerier is the narrow surface Create needs (pool or test stub).
+type financialAdjustmentRowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+}
+
 type FinancialAdjustmentRepository struct {
 	pool *pgxpool.Pool
 }
@@ -83,20 +98,19 @@ func normalizeAdjustmentAmount(amount float64) (float64, error) {
 	return out, nil
 }
 
-func validateCreateFinancialAdjustmentInput(in CreateFinancialAdjustmentInput) error {
+// validateCreateFinancialAdjustmentInput checks non-amount fields and returns a
+// single normalized amount so Create does not re-round.
+func validateCreateFinancialAdjustmentInput(in CreateFinancialAdjustmentInput) (float64, error) {
 	if in.AdjustmentType != FinancialAdjustmentTypeRefund {
-		return fmt.Errorf("unsupported adjustment_type: %s", in.AdjustmentType)
+		return 0, fmt.Errorf("unsupported adjustment_type: %s", in.AdjustmentType)
 	}
 	if strings.TrimSpace(in.IdempotencyKey) == "" {
-		return fmt.Errorf("idempotency_key is required")
+		return 0, fmt.Errorf("idempotency_key is required")
 	}
 	if strings.TrimSpace(in.CreatedBy) == "" {
-		return fmt.Errorf("created_by is required")
+		return 0, fmt.Errorf("created_by is required")
 	}
-	if _, err := normalizeAdjustmentAmount(in.Amount); err != nil {
-		return err
-	}
-	return nil
+	return normalizeAdjustmentAmount(in.Amount)
 }
 
 func buildCreateFinancialAdjustmentSQL() string {
@@ -108,6 +122,13 @@ func buildCreateFinancialAdjustmentSQL() string {
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id, purchase_id, adjustment_type, amount, currency, effective_at,
 		          reason, external_ref, created_by, idempotency_key, created_at`
+}
+
+func buildLoadFinancialAdjustmentByIdempotencyKeySQL() string {
+	return `
+		SELECT id, purchase_id, adjustment_type, amount, currency, effective_at,
+		       reason, external_ref, created_by, idempotency_key, created_at
+		FROM financial_adjustment WHERE idempotency_key = $1`
 }
 
 func buildSumRefundsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
@@ -141,11 +162,48 @@ func buildSumRefundsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
 		ORDER BY 1 ASC`, bucket), nil
 }
 
-func (r *FinancialAdjustmentRepository) Create(ctx context.Context, in CreateFinancialAdjustmentInput) (*FinancialAdjustment, bool, error) {
-	if err := validateCreateFinancialAdjustmentInput(in); err != nil {
-		return nil, false, err
+func isIdempotencyKeyConstraint(name string) bool {
+	n := strings.ToLower(name)
+	return strings.Contains(n, "idempotency")
+}
+
+// classifyFinancialAdjustmentError maps expected PostgreSQL failures to stable
+// sentinel errors while preserving the original cause for inspection.
+// Idempotency-key unique violations are distinct from other unique violations.
+// Note: the normal Create path uses ON CONFLICT DO NOTHING, so idempotency
+// collisions usually surface as pgx.ErrNoRows rather than 23505.
+func classifyFinancialAdjustmentError(err error) error {
+	if err == nil {
+		return nil
 	}
-	amount, err := normalizeAdjustmentAmount(in.Amount)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+	switch pgErr.Code {
+	case "23503":
+		return fmt.Errorf("%w: %w", ErrFinancialAdjustmentForeignKey, err)
+	case "23514":
+		return fmt.Errorf("%w: %w", ErrFinancialAdjustmentCheck, err)
+	case "23505":
+		if isIdempotencyKeyConstraint(pgErr.ConstraintName) {
+			return fmt.Errorf("%w: %w", ErrFinancialAdjustmentIdempotencyConflict, err)
+		}
+		return fmt.Errorf("%w: %w", ErrFinancialAdjustmentUnique, err)
+	default:
+		return err
+	}
+}
+
+func scanFinancialAdjustment(row pgx.Row, dest *FinancialAdjustment) error {
+	return row.Scan(
+		&dest.ID, &dest.PurchaseID, &dest.AdjustmentType, &dest.Amount, &dest.Currency, &dest.EffectiveAt,
+		&dest.Reason, &dest.ExternalRef, &dest.CreatedBy, &dest.IdempotencyKey, &dest.CreatedAt,
+	)
+}
+
+func createFinancialAdjustment(ctx context.Context, q financialAdjustmentRowQuerier, in CreateFinancialAdjustmentInput) (*FinancialAdjustment, bool, error) {
+	amount, err := validateCreateFinancialAdjustmentInput(in)
 	if err != nil {
 		return nil, false, err
 	}
@@ -153,35 +211,31 @@ func (r *FinancialAdjustmentRepository) Create(ctx context.Context, in CreateFin
 	if currency == "" {
 		currency = "MMK"
 	}
+	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
 
 	row := &FinancialAdjustment{}
-	err = r.pool.QueryRow(ctx, buildCreateFinancialAdjustmentSQL(),
+	err = scanFinancialAdjustment(q.QueryRow(ctx, buildCreateFinancialAdjustmentSQL(),
 		in.PurchaseID, string(in.AdjustmentType), amount, currency, in.EffectiveAt,
-		in.Reason, in.ExternalRef, in.CreatedBy, strings.TrimSpace(in.IdempotencyKey),
-	).Scan(
-		&row.ID, &row.PurchaseID, &row.AdjustmentType, &row.Amount, &row.Currency, &row.EffectiveAt,
-		&row.Reason, &row.ExternalRef, &row.CreatedBy, &row.IdempotencyKey, &row.CreatedAt,
-	)
+		in.Reason, in.ExternalRef, in.CreatedBy, idempotencyKey,
+	), row)
 	if err == nil {
 		return row, true, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, false, fmt.Errorf("insert financial_adjustment: %w", err)
+		return nil, false, fmt.Errorf("insert financial_adjustment: %w", classifyFinancialAdjustmentError(err))
 	}
 
+	// ON CONFLICT DO NOTHING: reload the existing row for this idempotency key.
 	existing := &FinancialAdjustment{}
-	err = r.pool.QueryRow(ctx, `
-		SELECT id, purchase_id, adjustment_type, amount, currency, effective_at,
-		       reason, external_ref, created_by, idempotency_key, created_at
-		FROM financial_adjustment WHERE idempotency_key = $1`, strings.TrimSpace(in.IdempotencyKey),
-	).Scan(
-		&existing.ID, &existing.PurchaseID, &existing.AdjustmentType, &existing.Amount, &existing.Currency, &existing.EffectiveAt,
-		&existing.Reason, &existing.ExternalRef, &existing.CreatedBy, &existing.IdempotencyKey, &existing.CreatedAt,
-	)
+	err = scanFinancialAdjustment(q.QueryRow(ctx, buildLoadFinancialAdjustmentByIdempotencyKeySQL(), idempotencyKey), existing)
 	if err != nil {
-		return nil, false, fmt.Errorf("load existing financial_adjustment: %w", err)
+		return nil, false, fmt.Errorf("load existing financial_adjustment: %w", classifyFinancialAdjustmentError(err))
 	}
 	return existing, false, nil
+}
+
+func (r *FinancialAdjustmentRepository) Create(ctx context.Context, in CreateFinancialAdjustmentInput) (*FinancialAdjustment, bool, error) {
+	return createFinancialAdjustment(ctx, r.pool, in)
 }
 
 func (r *FinancialAdjustmentRepository) SumRefundsByPeriod(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod, adminTelegramID int64) ([]RefundPeriodRow, error) {
@@ -194,7 +248,7 @@ func (r *FinancialAdjustmentRepository) SumRefundsByPeriod(ctx context.Context, 
 	}
 	rows, err := r.pool.Query(ctx, query, start, end, adminTelegramID)
 	if err != nil {
-		return nil, fmt.Errorf("sum refunds by period: %w", err)
+		return nil, fmt.Errorf("sum refunds by period: %w", classifyFinancialAdjustmentError(err))
 	}
 	defer rows.Close()
 	var out []RefundPeriodRow
