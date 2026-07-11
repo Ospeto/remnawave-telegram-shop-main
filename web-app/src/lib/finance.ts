@@ -1,5 +1,36 @@
 export type FinancePeriod = 'day' | 'week' | 'month' | 'year' | 'custom';
 
+/** Fixed (non-custom) periods that may include a history `periods` count. */
+export type FixedFinancePeriod = 'day' | 'week' | 'month' | 'year';
+
+/**
+ * Discriminated revenue query options.
+ * - custom: both `from` and `to` required; `periods` not allowed
+ * - day|week|month|year: optional `periods`; `from`/`to` not allowed
+ */
+export type RevenueQueryOptions =
+  | {
+      period: 'custom';
+      from: string;
+      to: string;
+    }
+  | {
+      period: FixedFinancePeriod;
+      periods?: number;
+    };
+
+/** Stable error message for malformed revenue query options (runtime). */
+export const INVALID_REVENUE_QUERY = 'Invalid revenue query options';
+
+/** Stable error message when trend series contains non-finite numbers. */
+export const INVALID_TREND_VALUES = 'Invalid trend values';
+
+/**
+ * Stable error message when chart width/height/pad are non-finite,
+ * non-positive, or leave a non-positive drawable area.
+ */
+export const INVALID_TREND_DIMENSIONS = 'Invalid trend chart dimensions';
+
 export interface MoneyDelta {
   absolute: number;
   percentage: number | null;
@@ -83,40 +114,107 @@ export function formatDelta(d: MoneyDelta): string {
   return `${abs} (${pSign}${d.percentage.toFixed(1)}%)`;
 }
 
-export function buildRevenueQuery(opts: {
-  period: FinancePeriod;
-  periods?: number;
-  from?: string;
-  to?: string;
-}): string {
+const FIXED_PERIODS = new Set<string>(['day', 'week', 'month', 'year']);
+
+/**
+ * Runtime validation for JS callers that bypass TypeScript.
+ * Throws INVALID_REVENUE_QUERY for any malformed combination.
+ */
+function assertRevenueQueryOptions(opts: RevenueQueryOptions): void {
+  const raw = opts as {
+    period?: unknown;
+    from?: unknown;
+    to?: unknown;
+    periods?: unknown;
+  };
+
+  if (raw.period === 'custom') {
+    if (typeof raw.from !== 'string' || raw.from === '' || typeof raw.to !== 'string' || raw.to === '') {
+      throw new Error(INVALID_REVENUE_QUERY);
+    }
+    if (raw.periods !== undefined) {
+      throw new Error(INVALID_REVENUE_QUERY);
+    }
+    return;
+  }
+
+  if (typeof raw.period === 'string' && FIXED_PERIODS.has(raw.period)) {
+    if (raw.from !== undefined || raw.to !== undefined) {
+      throw new Error(INVALID_REVENUE_QUERY);
+    }
+    if (raw.periods !== undefined) {
+      if (typeof raw.periods !== 'number' || !Number.isFinite(raw.periods)) {
+        throw new Error(INVALID_REVENUE_QUERY);
+      }
+    }
+    return;
+  }
+
+  throw new Error(INVALID_REVENUE_QUERY);
+}
+
+/** Shared query-string construction for revenue JSON and CSV export endpoints. */
+function buildRevenueSearchParams(opts: RevenueQueryOptions): URLSearchParams {
+  assertRevenueQueryOptions(opts);
   const q = new URLSearchParams();
   q.set('period', opts.period);
   if (opts.period === 'custom') {
-    if (opts.from) q.set('from', opts.from);
-    if (opts.to) q.set('to', opts.to);
+    q.set('from', opts.from);
+    q.set('to', opts.to);
   } else if (opts.periods !== undefined) {
     q.set('periods', String(opts.periods));
   }
-  return `/api/revenue?${q.toString()}`;
+  return q;
 }
 
-export function buildRevenueExportQuery(opts: {
-  period: FinancePeriod;
-  periods?: number;
-  from?: string;
-  to?: string;
-}): string {
-  return buildRevenueQuery(opts).replace('/api/revenue?', '/api/revenue/export?');
+function buildRevenuePath(
+  basePath: '/api/revenue' | '/api/revenue/export',
+  opts: RevenueQueryOptions,
+): string {
+  return `${basePath}?${buildRevenueSearchParams(opts).toString()}`;
 }
 
-/** Map values to SVG polyline points string for a pure SVG chart. */
+export function buildRevenueQuery(opts: RevenueQueryOptions): string {
+  return buildRevenuePath('/api/revenue', opts);
+}
+
+export function buildRevenueExportQuery(opts: RevenueQueryOptions): string {
+  return buildRevenuePath('/api/revenue/export', opts);
+}
+
+/**
+ * Map values to SVG polyline points string for a pure SVG chart.
+ *
+ * Behavior (documented by tests):
+ * - empty series → ''
+ * - single value → one centered point
+ * - non-finite values → throw INVALID_TREND_VALUES
+ * - non-finite / non-positive dimensions, negative pad, or non-positive
+ *   drawable area (pad*2 >= width or height) → throw INVALID_TREND_DIMENSIONS
+ */
 export function buildTrendPolylinePoints(
   values: number[],
   width: number,
   height: number,
   pad: number,
 ): string {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    !Number.isFinite(pad) ||
+    width <= 0 ||
+    height <= 0 ||
+    pad < 0 ||
+    pad * 2 >= width ||
+    pad * 2 >= height
+  ) {
+    throw new Error(INVALID_TREND_DIMENSIONS);
+  }
   if (values.length === 0) return '';
+  if (values.some((v) => !Number.isFinite(v))) {
+    throw new Error(INVALID_TREND_VALUES);
+  }
+
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 0);
   const span = max - min || 1;
