@@ -1949,6 +1949,7 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
+		PricingTier:    pricingTierFromContext(ctx),
 	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating free purchase", "error", err)
@@ -2060,6 +2061,7 @@ func (s *PaymentService) createMobileBankingPurchase(ctx context.Context, amount
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    extendKeyID,
 		PromoCodeID:    promoID,
+		PricingTier:    pricingTierFromContext(ctx),
 	}, promoCode)
 	if err != nil {
 		slog.Error("Error creating mobile banking purchase", "error", err)
@@ -2152,6 +2154,7 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 		Days:           days,
 		TrafficLimitGB: trafficLimitGB,
 		PromoCodeID:    promoID,
+		PricingTier:    pricingTierFromContext(ctx),
 	}, customer.ID, amount, fmt.Sprintf("Purchase plan %d days", days), promoCode)
 	if err != nil {
 		slog.Error("Error creating wallet purchase", "error", err)
@@ -2266,6 +2269,7 @@ func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount fl
 		TrafficLimitGB: trafficLimitGB,
 		ExtendKeyID:    &keyID,
 		PromoCodeID:    promoID,
+		PricingTier:    pricingTierFromContext(ctx),
 	}, customer.ID, amount, fmt.Sprintf("Auto-renew key #%d (%d days)", keyID, days), promoCode)
 	if err != nil {
 		slog.Error("Error creating extend-key wallet purchase", "error", err)
@@ -3028,6 +3032,7 @@ func (s *PaymentService) createWalletTopUpInvoice(ctx context.Context, amount fl
 		Month:          0, // Not applicable for top-up
 		Days:           0, // Not applicable
 		TrafficLimitGB: 0, // Not applicable
+		PricingTier:    config.PricingTierRetail,
 	})
 	if err != nil {
 		slog.Error("Error creating wallet top-up", "error", err)
