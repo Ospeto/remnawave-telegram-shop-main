@@ -195,3 +195,36 @@ web-app/
 - The browser never aggregates money; it only renders server values.
 - Headline cards = **selected period** (today / this week / this month / this year / custom range) with deltas vs the preceding equivalent period; the trend chart = dense history buckets for the requested `periods` window.
 - Trend chart is pure SVG (no chart library).
+
+---
+
+## Admin Resellers & Wholesale Pricing
+
+### Admin Resellers page
+
+- Route: `/admin/resellers` (admin session required; Home card **Resellers**).
+- List current resellers via `GET /api/admin/resellers`.
+- Toggle by Telegram ID: `PATCH /api/admin/customers/{telegram_id}/reseller` with body `{ "is_reseller": true|false }`.
+- Only admins can set or clear the flag. Non-resellers never receive wholesale pricing.
+
+### Admin plan wholesale price
+
+- Route: `/admin/plans` (existing plan editor).
+- Optional field `wholesale_price` on create/update (`POST`/`PATCH /api/admin/plans…`).
+- Validation: if set, must be an integer **> 0** and **≤ retail `price`**. Null/omit clears wholesale.
+- Retail `price` remains the public list price.
+
+### Reseller Mini App experience
+
+- Authenticated identity (`/api/me`) includes `is_reseller`.
+- `GET /api/plans` for a reseller session returns **effective** charge amounts in `price` (wholesale when configured, else retail) and optional `pricing_tier` for a “Reseller price” badge. Public/non-reseller responses never expose `wholesale_price`.
+- Promo entry is hidden/disabled in Plans and Checkout for resellers; the server still rejects promo use (HTTP 400).
+- Payment methods unchanged: mobile banking + wallet. **Crypto Pay remains disabled.**
+
+### Purchase pricing (server-authoritative)
+
+- Charge amount comes from shared `ResolvePlanPrice(plan, customer)` on Mini App purchase, Telegram bot sell, and wallet service-buy — clients cannot supply the service amount.
+- Each purchase stores `pricing_tier` (`retail` | `wholesale`) at create for audit. Finance reporting continues to use **paid amounts**; there is no v1 Finance UI split by tier.
+- Wallet top-ups are never wholesale and never promo-discounted.
+- Keys fulfill to the **buyer** (reseller’s Telegram account). No gift/assign in v1.
+- No historical wholesale backfill: existing rows default `pricing_tier='retail'`.

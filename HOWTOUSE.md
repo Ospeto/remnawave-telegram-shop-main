@@ -199,3 +199,58 @@ Content-Type: application/json
 - This endpoint writes only the finance ledger. It does **not** change purchase fulfillment, Remnawave state, or wallet balances.
 - Wallet cleanup refunds (`wallet_transaction.type = refund`) are operational wallet corrections and must not be entered as service refunds.
 - Historical refunds are not auto-backfilled; enter explicit adjustments after reconciliation.
+
+---
+
+## Reseller wholesale pricing
+
+Admin-approved Telegram customers pay fixed per-plan wholesale prices in the same Mini App (and bot sell path). Pricing is server-authoritative; promos do not stack with wholesale.
+
+### Approve a reseller
+
+1. Open the Mini App as admin → **Resellers** card → `/admin/resellers`.
+2. Enter the customer’s Telegram ID and enable reseller (or disable to revoke).
+3. API equivalent:
+
+```http
+PATCH /api/admin/customers/{telegram_id}/reseller
+Authorization: <admin mini-app session>
+Content-Type: application/json
+
+{ "is_reseller": true }
+```
+
+- List: `GET /api/admin/resellers`.
+- Only admins can set/clear `is_reseller`. Removing the flag does not rewrite past purchases; new purchases use the current flag. A pending purchase keeps the amount frozen at create time.
+
+### Set plan wholesale prices
+
+1. Admin Mini App → **Plans** → `/admin/plans`.
+2. Set optional **wholesale price** per plan (integer MMK).
+3. Rules:
+   - If set: must be **> 0** and **≤ retail price** (save rejected otherwise).
+   - Clear the field to remove wholesale (reseller then pays retail for that plan).
+   - Reseller buying a plan with **no** wholesale configured: **falls back to retail** (sale is not blocked).
+
+### What resellers see and pay
+
+- Same Mini App purchase flow; effective price only (no retail strikethrough in v1). “Reseller price” badge when tier is wholesale.
+- Promo codes: UI hidden; server rejects promo on purchase create and promo validate (cannot combine with reseller pricing).
+- Payment methods: **mobile banking + wallet** only. Crypto Pay stays disabled.
+- Keys remain on the **reseller’s** Telegram account (offline resale/sharing). No gift/assign to another user in v1.
+
+### Purchase audit & finance
+
+- Each new purchase stores `pricing_tier` = `retail` | `wholesale` from `ResolvePlanPrice`.
+- Finance / revenue still uses **paid amounts** (gross, refunds, net). No v1 Finance page split by retail vs wholesale; the tier field is for later reporting.
+- **No historical backfill** as wholesale — migration defaults existing purchases to `retail`.
+
+### Ops checklist
+
+| Task | Where |
+|------|--------|
+| Mark/unmark reseller | `/admin/resellers` or `PATCH …/reseller` |
+| Set/clear wholesale price | `/admin/plans` (`wholesale_price`) |
+| Confirm effective prices | Log in as reseller → Plans / Checkout |
+| Confirm promo blocked | Reseller + promo → HTTP 400 |
+| Confirm keys on buyer | Fulfillment unchanged (buyer account only) |

@@ -404,13 +404,13 @@ The Go app serves the Mini App and these API routes:
 
 | Route | Purpose |
 | --- | --- |
-| `/api/me` | Current authenticated customer |
-| `/api/plans` | Available plans |
-| `/api/purchase` | Create a purchase |
+| `/api/me` | Current authenticated customer (includes `is_reseller`) |
+| `/api/plans` | Available plans. Public/non-reseller: retail only. Authenticated reseller: effective `price` + optional `pricing_tier` (never leaks raw `wholesale_price`) |
+| `/api/purchase` | Create a purchase (server resolves amount via `ResolvePlanPrice`; stores `pricing_tier`; resellers cannot use promos) |
 | `/api/purchase/cancel` | Cancel the authenticated customer's unfinished screenshot payment |
 | `/api/upload_screenshot` | Upload screenshot for mobile banking verification |
 | `/api/purchase/status` | Poll purchase state |
-| `/api/promo/validate` | Validate promo code |
+| `/api/promo/validate` | Validate promo code (rejected for resellers) |
 | `/api/trial` | Activate a trial |
 | `/api/wallet` | Wallet summary |
 | `/api/wallet/history` | Wallet transaction history |
@@ -419,6 +419,9 @@ The Go app serves the Mini App and these API routes:
 | `/api/keys/autorenew` | Per-key auto-renew settings |
 | `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. |
 | `/api/revenue/export` | CSV export of the same `FinanceReport` (same query params and totals as JSON). |
+| `/api/admin/resellers` | Admin list of customers with `is_reseller=true` |
+| `/api/admin/customers/{telegram_id}/reseller` | Admin `PATCH` body `{ "is_reseller": true\|false }` |
+| `/api/admin/plans` | Admin plan catalog CRUD (optional `wholesale_price`: >0 and ≤ retail) |
 | `/redirect` | Simple redirect helper |
 
 Notes:
@@ -426,6 +429,7 @@ Notes:
 - Mini App auth uses Telegram `initData`
 - CORS allows `Authorization`, `Content-Type`, and `Idempotency-Key`
 - the frontend is served from `web-app/dist` with SPA fallback
+- Reseller wholesale: admin sets plan `wholesale_price` and marks customers as resellers; keys stay on the buyer; no historical wholesale backfill. Ops detail: [HOWTOUSE.md](HOWTOUSE.md), Mini App: [docs/MINI_APP.md](docs/MINI_APP.md)
 
 ## Admin Commands
 
