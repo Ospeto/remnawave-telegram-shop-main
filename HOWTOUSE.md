@@ -254,3 +254,86 @@ Content-Type: application/json
 | Confirm effective prices | Log in as reseller → Plans / Checkout |
 | Confirm promo blocked | Reseller + promo → HTTP 400 |
 | Confirm keys on buyer | Fulfillment unchanged (buyer account only) |
+
+---
+
+## Reseller postpaid credit & sales ledger
+
+Approved resellers can optionally buy **on account** (postpaid) in the Mini App when they have remaining credit. AR is a **separate ledger from wallet** — wallet stays prepaid and non-negative. Bot postpaid and mobile-banking settlement are **not** in v1.
+
+### Enable reseller + set credit limit
+
+1. Approve the customer as reseller (same as wholesale): Mini App → **Resellers** → `/admin/resellers`, or `PATCH /api/admin/customers/{telegram_id}/reseller` with `{ "is_reseller": true }`.
+2. Set a **credit limit** on that reseller (required for postpaid; default is no credit):
+   - UI: `/admin/resellers` → edit credit limit for the row.
+   - API:
+
+```http
+PATCH /api/admin/customers/{telegram_id}/credit
+Authorization: <admin mini-app session>
+Content-Type: application/json
+
+{ "credit_limit": 100000 }
+```
+
+3. Env default for **new** reseller accounts:
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `RESELLER_DEFAULT_CREDIT_LIMIT` | `0` | Starting credit limit when an account is first ensured. **`0` = no postpaid credit until admin sets a limit.** |
+
+- List fields: `GET /api/admin/resellers` includes `credit_limit`, `balance_owed`, `remaining_credit` per reseller.
+- Remaining credit = `credit_limit − balance_owed`. Order amount must be `≤ remaining credit` (no partial fulfill).
+- Clearing `is_reseller` while balance is owed: **new postpaid blocked**; settlement still allowed; past ledger kept.
+
+### Postpaid checkout
+
+- Available only to `is_reseller` customers in the **Mini App** Checkout when remaining credit covers the order (or limit &gt; 0 with clear messaging). Prepaid (mobile banking / wallet) remains available.
+- Flow: credit check → create service purchase at `ResolvePlanPrice` amount → **fulfill immediately** → AR ledger **sale** increases `balance_owed`.
+- **No cash and no wallet movement** on postpaid create.
+- Promo codes stay blocked for resellers (UI + server HTTP 400).
+- Keys still fulfill to the **buyer** (reseller’s Telegram account).
+
+### Settlement (pay down AR)
+
+Two rails; both reduce `balance_owed` on the AR ledger:
+
+| Who | Endpoint | Effect |
+|-----|----------|--------|
+| Reseller self-pay | `POST /api/reseller/settlements` | Debits **wallet** for the settlement amount (wallet must cover it; **no negative wallet**). Body: `{ "amount", "payment_method": "wallet", "idempotency_key"? }`. |
+| Admin offline | `POST /api/admin/customers/{telegram_id}/settlements` | **Ledger-only** — records cash received offline; **does not** debit wallet. Body: `{ "amount", "note"?, "idempotency_key"? }`. |
+
+- Reseller surfaces: `/reseller/account` (balance, limit, remaining, ledger, pay-balance CTA).
+- Admin surfaces: `/admin/resellers` (limit / owed / remaining, set limit, record settlement, open ledger).
+- Admin ledger: `GET /api/admin/customers/{telegram_id}/ledger`. Reseller own ledger: `GET /api/reseller/ledger`.
+
+### Finance reporting
+
+| Metric | When counted |
+|--------|----------------|
+| **Service revenue (gross)** | Postpaid **sale / fulfill date** (paid service purchase amount) |
+| **Cash collected** | Settlement **`effective_at`** (self-pay or admin offline) |
+
+- Do **not** treat postpaid create as cash. Settling later must not double-count revenue.
+- Same `FinanceService` / `/admin/finance` / `/revenue` definitions as other sales.
+
+### Money-safety invariants
+
+- **AR ledger ≠ wallet.** Postpaid owed balance is not a negative wallet.
+- Wallet never goes negative; self-settlement fails if wallet balance is insufficient.
+- Admin settlement is **ledger-only** (no purchase/wallet mutation).
+- **No AR historical backfill** of past prepaid wholesale purchases into the credit ledger.
+- Promo still blocked on all reseller purchase paths (including postpaid).
+
+### Ops checklist
+
+| Task | Where |
+|------|--------|
+| Enable reseller | `/admin/resellers` or `PATCH …/reseller` |
+| Set credit limit | `/admin/resellers` or `PATCH …/credit` |
+| Default limit for new accounts | `RESELLER_DEFAULT_CREDIT_LIMIT` (default `0`) |
+| Postpaid buy | Reseller Mini App Checkout → Postpaid |
+| Reseller pay-down | `/reseller/account` or `POST /api/reseller/settlements` |
+| Admin offline settlement | `/admin/resellers` or `POST …/settlements` |
+| View ledger | Reseller: `/reseller/account`; Admin: ledger on resellers page |
+| Confirm revenue vs cash | Finance: sale date = revenue; settlement date = cash |

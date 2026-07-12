@@ -406,7 +406,7 @@ The Go app serves the Mini App and these API routes:
 | --- | --- |
 | `/api/me` | Current authenticated customer (includes `is_reseller`) |
 | `/api/plans` | Available plans. Public/non-reseller: retail only. Authenticated reseller: effective `price` + optional `pricing_tier` (never leaks raw `wholesale_price`) |
-| `/api/purchase` | Create a purchase (server resolves amount via `ResolvePlanPrice`; stores `pricing_tier`; resellers cannot use promos) |
+| `/api/purchase` | Create a purchase (server resolves amount via `ResolvePlanPrice`; stores `pricing_tier`; resellers cannot use promos; resellers may use `payment_method: "postpaid"` when credit allows — immediate fulfill + AR sale) |
 | `/api/purchase/cancel` | Cancel the authenticated customer's unfinished screenshot payment |
 | `/api/upload_screenshot` | Upload screenshot for mobile banking verification |
 | `/api/purchase/status` | Poll purchase state |
@@ -417,10 +417,16 @@ The Go app serves the Mini App and these API routes:
 | `/api/wallet/autorenew` | Legacy endpoint; returns `410 Gone`. Use `/api/keys/autorenew`. |
 | `/api/referrals` | Referral information |
 | `/api/keys/autorenew` | Per-key auto-renew settings |
-| `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. |
+| `/api/reseller/account` | Reseller: `credit_limit`, `balance_owed`, `remaining_credit` |
+| `/api/reseller/ledger` | Reseller: own paginated AR ledger |
+| `/api/reseller/settlements` | Reseller: self-pay settlement (`payment_method: "wallet"`; debits wallet; reduces AR) |
+| `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. Cash includes AR settlements on settlement date; postpaid sales count as service revenue on sale date (not cash). |
 | `/api/revenue/export` | CSV export of the same `FinanceReport` (same query params and totals as JSON). |
-| `/api/admin/resellers` | Admin list of customers with `is_reseller=true` |
+| `/api/admin/resellers` | Admin list of resellers with `credit_limit`, `balance_owed`, `remaining_credit` |
 | `/api/admin/customers/{telegram_id}/reseller` | Admin `PATCH` body `{ "is_reseller": true\|false }` |
+| `/api/admin/customers/{telegram_id}/credit` | Admin `PATCH` body `{ "credit_limit": N }` (set postpaid credit limit) |
+| `/api/admin/customers/{telegram_id}/settlements` | Admin offline AR settlement (ledger-only; no wallet debit) |
+| `/api/admin/customers/{telegram_id}/ledger` | Admin full AR ledger for one reseller |
 | `/api/admin/plans` | Admin plan catalog CRUD (optional `wholesale_price`: >0 and ≤ retail) |
 | `/redirect` | Simple redirect helper |
 
@@ -430,6 +436,7 @@ Notes:
 - CORS allows `Authorization`, `Content-Type`, and `Idempotency-Key`
 - the frontend is served from `web-app/dist` with SPA fallback
 - Reseller wholesale: admin sets plan `wholesale_price` and marks customers as resellers; keys stay on the buyer; no historical wholesale backfill. Ops detail: [HOWTOUSE.md](HOWTOUSE.md), Mini App: [docs/MINI_APP.md](docs/MINI_APP.md)
+- Reseller postpaid: AR ledger separate from wallet; `RESELLER_DEFAULT_CREDIT_LIMIT` default `0` (no credit until admin sets); self-settlement debits wallet; admin settlement is ledger-only. Ops: [HOWTOUSE.md](HOWTOUSE.md), Mini App: [docs/MINI_APP.md](docs/MINI_APP.md)
 
 ## Admin Commands
 

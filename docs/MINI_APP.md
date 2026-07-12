@@ -8,11 +8,12 @@ This guide covers the **Telegram Mini App** for the Remnawave Shop bot. The Mini
 
 The Mini App is a React/Vite web app that opens from the bot menu button. Current surfaces include:
 
-- **Home** — subscription status, key import, auto-renew toggles
+- **Home** — subscription status, key import, auto-renew toggles; resellers see an account card
 - **Plans** — browse plans and apply promo codes before checkout
-- **Checkout** — mobile banking payment instructions, screenshot upload, wallet pay
+- **Checkout** — mobile banking payment instructions, screenshot upload, wallet pay; resellers may choose postpaid when credit allows
 - **Wallet** — balance, history, top-up entry
-- **Admin** (authorized operators) — plan and promo management where enabled
+- **Reseller Account** (`/reseller/account`) — credit limit, balance owed, remaining credit, ledger, pay-down
+- **Admin** (authorized operators) — plans, promos, finance, resellers (wholesale + credit/settlement)
 
 ---
 
@@ -219,7 +220,7 @@ web-app/
 - Authenticated identity (`/api/me`) includes `is_reseller`.
 - `GET /api/plans` for a reseller session returns **effective** charge amounts in `price` (wholesale when configured, else retail) and optional `pricing_tier` for a “Reseller price” badge. Public/non-reseller responses never expose `wholesale_price`.
 - Promo entry is hidden/disabled in Plans and Checkout for resellers; the server still rejects promo use (HTTP 400).
-- Payment methods unchanged: mobile banking + wallet. **Crypto Pay remains disabled.**
+- Payment methods: mobile banking + wallet; resellers with remaining credit also see **Postpaid** (see below). **Crypto Pay remains disabled.**
 
 ### Purchase pricing (server-authoritative)
 
@@ -228,3 +229,37 @@ web-app/
 - Wallet top-ups are never wholesale and never promo-discounted.
 - Keys fulfill to the **buyer** (reseller’s Telegram account). No gift/assign in v1.
 - No historical wholesale backfill: existing rows default `pricing_tier='retail'`.
+
+---
+
+## Reseller postpaid (Mini App)
+
+Postpaid is **Mini App only** in v1 (no bot postpaid button). AR is separate from wallet; wallet stays non-negative.
+
+### Checkout — Postpaid option
+
+- For `is_reseller` sessions, Checkout may show **Postpaid** alongside mobile banking / wallet when remaining credit can cover the order.
+- Selecting postpaid: `POST /api/purchase` with `payment_method: "postpaid"` → server credit check → immediate fulfill → AR sale increases `balance_owed`. No cash/wallet movement on create.
+- Amount still from `ResolvePlanPrice`; promos remain blocked.
+- Non-resellers never see postpaid; insufficient remaining credit → clear HTTP 400.
+
+### Reseller Account page
+
+- Route: `/reseller/account` (reseller session; Home card for resellers).
+- Loads `GET /api/reseller/account` (`credit_limit`, `balance_owed`, `remaining_credit`) and `GET /api/reseller/ledger`.
+- **Pay balance** CTA: `POST /api/reseller/settlements` with wallet payment method — debits wallet, reduces AR. Insufficient wallet balance fails (no negative wallet).
+- Own ledger only; cannot read another reseller’s account.
+
+### Admin Resellers — credit, settlement, ledger
+
+- Route: `/admin/resellers` (extends wholesale toggle UI).
+- List shows per-reseller `credit_limit` / `balance_owed` / `remaining_credit` (`GET /api/admin/resellers`).
+- Set limit: `PATCH /api/admin/customers/{telegram_id}/credit` with `{ "credit_limit": N }`.
+- Record offline settlement: `POST /api/admin/customers/{telegram_id}/settlements` — **AR ledger only**, no wallet debit.
+- Open full ledger: `GET /api/admin/customers/{telegram_id}/ledger`.
+- New accounts may start from env `RESELLER_DEFAULT_CREDIT_LIMIT` (default **`0`** = no credit until admin sets a limit).
+
+### Finance (postpaid)
+
+- **Service revenue** on postpaid sale/fulfill date; **cash collected** on settlement `effective_at` only (not on postpaid create).
+- No AR backfill of historical prepaid wholesale purchases.
