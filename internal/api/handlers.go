@@ -55,6 +55,7 @@ type ValidationResponse struct {
 	Keys                     []KeyResponse `json:"keys"`
 	IsActive                 bool          `json:"is_active"`
 	IsAdmin                  bool          `json:"is_admin"`
+	IsReseller               bool          `json:"is_reseller"`
 	ExpireAt                 *time.Time    `json:"expire_at"`
 	DaysRemaining            int           `json:"days_remaining"`
 	TrialEligible            bool          `json:"trial_eligible"`
@@ -81,10 +82,11 @@ type PlanResponse struct {
 	ID             string `json:"id"`
 	Label          string `json:"label"`
 	Days           int    `json:"days"`
-	Price          int    `json:"price"`
+	Price          int    `json:"price"` // effective for reseller sessions
 	TrafficLimitGB int    `json:"traffic_limit_gb"`
 	SortOrder      int    `json:"sort_order"`
 	Currency       string `json:"currency"`
+	PricingTier    string `json:"pricing_tier,omitempty"` // only when authenticated reseller path sets it
 }
 
 type CreatePurchaseRequest struct {
@@ -109,6 +111,7 @@ type CreatePurchaseResponse struct {
 	BotURL           string                    `json:"bot_url"`
 	HappLink         string                    `json:"happ_link,omitempty"`
 	RedirectURL      string                    `json:"redirect_url,omitempty"`
+	PricingTier      string                    `json:"pricing_tier,omitempty"`
 }
 
 type PendingPurchaseConflictResponse struct {
@@ -434,6 +437,9 @@ type APIHandler struct {
 	now                        func() time.Time
 	findCustomerByTelegramID   func(context.Context, int64) (*database.Customer, error)
 	getPurchaseByID            func(context.Context, int64) (*database.Purchase, error)
+	findPromoByCode            func(context.Context, string) (*database.PromoCode, error)
+	createServicePurchase      func(context.Context, float64, int, int, *database.Customer, database.InvoiceType, string) (string, int64, error)
+	createServicePurchaseExtend func(context.Context, float64, int, int, *database.Customer, database.InvoiceType, string, int64) (string, int64, error)
 	listPromoCodes             func(context.Context) ([]database.PromoCode, error)
 	createPromoCode            func(context.Context, string, int, int, time.Time) error
 	deletePromoCode            func(context.Context, string) error
@@ -508,6 +514,41 @@ func (h *APIHandler) purchaseByID(ctx context.Context, purchaseID int64) (*datab
 		return nil, errors.New("payment service is unavailable")
 	}
 	return h.paymentService.GetPurchaseByID(ctx, purchaseID)
+}
+
+func (h *APIHandler) promoByCode(ctx context.Context, code string) (*database.PromoCode, error) {
+	if h.findPromoByCode != nil {
+		return h.findPromoByCode(ctx, code)
+	}
+	if h.promoCodeRepository == nil {
+		return nil, errors.New("promo repository is unavailable")
+	}
+	return h.promoCodeRepository.FindByCode(ctx, code)
+}
+
+func (h *APIHandler) createPurchaseRecord(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string) (string, int64, error) {
+	if h.createServicePurchase != nil {
+		return h.createServicePurchase(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode)
+	}
+	if h.paymentService == nil {
+		return "", 0, errors.New("payment service is unavailable")
+	}
+	return h.paymentService.CreatePurchase(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode)
+}
+
+func (h *APIHandler) createPurchaseRecordWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, keyID int64) (string, int64, error) {
+	if h.createServicePurchaseExtend != nil {
+		return h.createServicePurchaseExtend(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode, keyID)
+	}
+	if h.paymentService == nil {
+		return "", 0, errors.New("payment service is unavailable")
+	}
+	switch invoiceType {
+	case database.InvoiceTypeWalletPayment:
+		return h.paymentService.CreatePurchaseWithExtend(ctx, amount, days, trafficLimitGB, customer, keyID, promoCode)
+	default:
+		return h.paymentService.CreatePurchaseWithExtendForInvoice(ctx, amount, days, trafficLimitGB, customer, invoiceType, promoCode, keyID)
+	}
 }
 
 func (h *APIHandler) subscriptionKeysByCustomerID(ctx context.Context, customerID int64) ([]database.SubscriptionKey, error) {
@@ -897,13 +938,29 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer != nil && customer.IsReseller {
+		http.Error(w, "Reseller pricing cannot combine with promo codes", http.StatusBadRequest)
+		return
+	}
+
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Error(w, "Missing code", http.StatusBadRequest)
 		return
 	}
 
-	promo, err := h.promoCodeRepository.FindByCode(r.Context(), code)
+	promo, err := h.promoByCode(r.Context(), code)
 	switch promoValidationStatus(promo, err, time.Now()) {
 	case http.StatusServiceUnavailable:
 		http.Error(w, "Promo validation is temporarily unavailable", http.StatusServiceUnavailable)
@@ -957,10 +1014,21 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	customer, err := h.customerByTelegramID(ctx, telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
 	var price float64
 	var days int
 	var trafficLimit int
 	var label string
+	var pricingTier string
 
 	if invoiceType == database.InvoiceTypeWalletTopUp {
 		if req.Amount <= 0 {
@@ -971,31 +1039,29 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "promo_code is not valid for wallet top-up", http.StatusBadRequest)
 			return
 		}
-		// For top-up, we use the explicit amount
+		// For top-up, we use the explicit amount (never wholesale / never promo).
 		price = float64(req.Amount)
 		days = 0
 		trafficLimit = 0
 		label = fmt.Sprintf("Wallet Top-up: %d %s", req.Amount, config.Currency())
+		pricingTier = config.PricingTierRetail
 	} else {
 		plan, err := resolvePurchasePlan(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		price = float64(plan.Price)
+		if customer.IsReseller && strings.TrimSpace(req.PromoCode) != "" {
+			http.Error(w, "Reseller pricing cannot combine with promo codes", http.StatusBadRequest)
+			return
+		}
+		amount, tier := config.ResolvePlanPrice(*plan, customer.IsReseller)
+		price = float64(amount)
+		pricingTier = tier
 		days = plan.Days
 		trafficLimit = plan.TrafficLimitGB
 		label = plan.Label
-	}
-
-	customer, err := h.customerRepo.FindByTelegramId(ctx, telegramID)
-	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
-		return
-	}
-	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
+		ctx = payment.WithPricingTier(ctx, tier)
 	}
 
 	if req.ExtendKeyID != nil {
@@ -1026,16 +1092,14 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	var purchaseID int64
 	if req.ExtendKeyID != nil {
 		switch invoiceType {
-		case database.InvoiceTypeWalletPayment:
-			_, purchaseID, err = h.paymentService.CreatePurchaseWithExtend(ctx, price, days, trafficLimit, customer, *req.ExtendKeyID, req.PromoCode)
 		case database.InvoiceTypeWalletTopUp:
 			http.Error(w, "extend_key_id is not valid for wallet top-up", http.StatusBadRequest)
 			return
 		default:
-			_, purchaseID, err = h.paymentService.CreatePurchaseWithExtendForInvoice(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode, *req.ExtendKeyID)
+			_, purchaseID, err = h.createPurchaseRecordWithExtend(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode, *req.ExtendKeyID)
 		}
 	} else {
-		_, purchaseID, err = h.paymentService.CreatePurchase(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
+		_, purchaseID, err = h.createPurchaseRecord(ctx, price, days, trafficLimit, customer, invoiceType, req.PromoCode)
 	}
 	if err != nil {
 		if status, message, ok := mapCreatePurchaseIdempotencyError(err); ok {
@@ -1062,7 +1126,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the actual purchase to get the final amount (which might be discounted)
-	purchase, err := h.paymentService.GetPurchaseByID(ctx, purchaseID)
+	purchase, err := h.purchaseByID(ctx, purchaseID)
 	if err != nil || purchase == nil {
 		slog.Error("Failed to retrieve purchase after creation", "purchase_id", purchaseID, "error", err)
 		http.Error(w, "Failed to retrieve purchase details", http.StatusInternalServerError)
@@ -1072,7 +1136,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	// Only stamp plan_label/payment_phone when unset. Idempotent resumes must not
 	// rewrite the original purchase (especially after a body-mismatched attempt is
 	// rejected at the payment layer; same-body retries keep original fields).
-	if shouldUpdatePurchaseFieldsAfterCreate(purchase) {
+	if shouldUpdatePurchaseFieldsAfterCreate(purchase) && h.paymentService != nil {
 		updateFields := map[string]interface{}{
 			"plan_label":    label,
 			"payment_phone": payment.GetFirstPaymentPhone(),
@@ -1127,6 +1191,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		BotURL:           config.BotURL(),
 		HappLink:         happLink,
 		RedirectURL:      signedRedirectURLForTarget(happLink),
+		PricingTier:      pricingTier,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1256,6 +1321,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		Keys:                     keys,
 		IsActive:                 isActive,
 		IsAdmin:                  h.isAdminUser(telegramID),
+		IsReseller:               customer.IsReseller,
 		ExpireAt:                 customer.ExpireAt,
 		DaysRemaining:            daysRemaining,
 		TrialEligible:            trialEligible,
@@ -1615,20 +1681,59 @@ func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {
 	var response []PlanResponse
 	currency := config.Currency()
 
+	// Soft-auth: keep /api/plans public for retail, but when telegram session is
+	// already present (or optional bearer auth succeeds), resellers get effective prices.
+	isReseller := false
+	if telegramID, ok := r.Context().Value(telegramIDKey).(int64); ok {
+		if c, err := h.customerByTelegramID(r.Context(), telegramID); err == nil && c != nil {
+			isReseller = c.IsReseller
+		}
+	} else if telegramID, ok := h.optionalTelegramID(r); ok {
+		if c, err := h.customerByTelegramID(r.Context(), telegramID); err == nil && c != nil {
+			isReseller = c.IsReseller
+		}
+	}
+
 	for _, p := range plans {
+		price := p.Price
+		pricingTier := ""
+		if isReseller {
+			amount, tier := config.ResolvePlanPrice(p, true)
+			price = amount
+			pricingTier = tier
+		}
 		response = append(response, PlanResponse{
 			ID:             p.ID,
 			Label:          p.Label,
 			Days:           p.Days,
-			Price:          p.Price,
+			Price:          price,
 			TrafficLimitGB: p.TrafficLimitGB,
 			SortOrder:      p.SortOrder,
 			Currency:       currency,
+			PricingTier:    pricingTier,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// optionalTelegramID attempts the same bearer session extraction used by authMiddleware
+// without failing the request when auth is absent or invalid (public soft-auth).
+func (h *APIHandler) optionalTelegramID(r *http.Request) (int64, bool) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		return 0, false
+	}
+	token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+	if token == "" {
+		return 0, false
+	}
+	session, err := authSessions.authenticate(r.Context(), token, requestFingerprint(r))
+	if err != nil {
+		return 0, false
+	}
+	return session.TelegramID, true
 }
 
 func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {

@@ -26,3 +26,9 @@ func pricingTierFromContext(ctx context.Context) string {
 	}
 	return config.PricingTierRetail
 }
+
+// PricingTierFromContext exposes the pricing tier attached via WithPricingTier
+// for tests and API soft-inspection. Defaults to retail when unset.
+func PricingTierFromContext(ctx context.Context) string {
+	return pricingTierFromContext(ctx)
+}
