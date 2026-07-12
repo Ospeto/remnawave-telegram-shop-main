@@ -83,6 +83,10 @@ describe('AdminFinance', () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
+    telegramState.tg.BackButton.show.mockReset();
+    telegramState.tg.BackButton.hide.mockReset();
+    telegramState.tg.BackButton.onClick.mockReset();
+    telegramState.tg.BackButton.offClick.mockReset();
     vi.stubGlobal('fetch', fetchMock);
     seedTelegramSession();
   });
@@ -372,5 +376,42 @@ describe('AdminFinance', () => {
       expect(revenueCalls).toBeGreaterThan(1);
     });
     expect(screen.getByTestId('headline-net')).toBeTruthy();
+  });
+
+  it('navigates to /admin on Telegram BackButton', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/me') {
+        return jsonResponse({
+          user: { id: 1, telegram_id: 42 },
+          keys: [],
+          is_active: false,
+          expire_at: null,
+          days_remaining: 0,
+          trial_eligible: false,
+          trial_days: 0,
+          is_admin: true,
+        });
+      }
+      if (url.startsWith('/api/revenue?')) {
+        return jsonResponse(sampleReport);
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+
+    renderWithAppProviders([
+      { path: '/admin/finance', element: <AdminFinance /> },
+      { path: '/admin', element: <div>Admin Hub</div> },
+    ], ['/admin/finance']);
+
+    await waitFor(() => {
+      expect(telegramState.tg.BackButton.onClick).toHaveBeenCalled();
+    });
+
+    const calls = telegramState.tg.BackButton.onClick.mock.calls;
+    const handler = calls[calls.length - 1][0] as () => void;
+    handler();
+
+    expect(await screen.findByText('Admin Hub')).toBeTruthy();
   });
 });

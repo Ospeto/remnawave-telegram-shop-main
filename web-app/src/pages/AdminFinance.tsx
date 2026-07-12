@@ -188,7 +188,7 @@ export function AdminFinance() {
   useEffect(() => {
     if (!tg?.BackButton) return;
     tg.BackButton.show();
-    const handler = () => navigate('/');
+    const handler = () => navigate('/admin');
     tg.BackButton.onClick(handler);
     return () => {
       tg.BackButton.offClick(handler);

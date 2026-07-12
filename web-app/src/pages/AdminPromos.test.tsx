@@ -38,6 +38,10 @@ describe('AdminPromos', () => {
         fetchMock.mockReset();
         confirmMock.mockReset();
         confirmMock.mockReturnValue(true);
+        telegramState.tg.BackButton.show.mockReset();
+        telegramState.tg.BackButton.hide.mockReset();
+        telegramState.tg.BackButton.onClick.mockReset();
+        telegramState.tg.BackButton.offClick.mockReset();
         vi.stubGlobal('fetch', fetchMock);
         vi.stubGlobal('confirm', confirmMock);
         seedTelegramSession();
@@ -192,5 +196,42 @@ describe('AdminPromos', () => {
         ], ['/admin/promos']);
 
         expect(await screen.findByRole('heading', { name: 'Session expired' })).toBeTruthy();
+    });
+
+    it('navigates to /admin on Telegram BackButton', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_admin: true,
+                });
+            }
+            if (url === '/api/admin/promos') {
+                return jsonResponse([]);
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/admin/promos', element: <AdminPromos /> },
+            { path: '/admin', element: <div>Admin Hub</div> },
+        ], ['/admin/promos']);
+
+        await waitFor(() => {
+            expect(telegramState.tg.BackButton.onClick).toHaveBeenCalled();
+        });
+
+        const calls = telegramState.tg.BackButton.onClick.mock.calls;
+        const handler = calls[calls.length - 1][0] as () => void;
+        handler();
+
+        expect(await screen.findByText('Admin Hub')).toBeTruthy();
     });
 });

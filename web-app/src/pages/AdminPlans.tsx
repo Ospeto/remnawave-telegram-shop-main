@@ -66,7 +66,7 @@ export function AdminPlans() {
     const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
     const handleBack = useCallback(() => {
-        navigate('/');
+        navigate('/admin');
     }, [navigate]);
 
     const loadPlans = useCallback(async () => {
