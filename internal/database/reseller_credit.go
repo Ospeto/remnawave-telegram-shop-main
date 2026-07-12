@@ -525,3 +525,67 @@ func (r *ResellerCreditRepository) ListLedger(ctx context.Context, customerID in
 	}
 	return out, rows.Err()
 }
+
+// SettlementPeriodRow is a Yangon-bucketed sum of AR settlement ledger entries.
+// Currency is always MMK for AR v1 (ledger has no currency column).
+type SettlementPeriodRow struct {
+	PeriodStart     string  // YYYY-MM-DD Yangon
+	Currency        string  // always "MMK" for AR v1
+	SettlementTotal float64
+	SettlementCount int
+}
+
+// buildSumSettlementsByPeriodSQL groups settlement ledger entries by Yangon period buckets.
+// Half-open [start, end). entry_type = 'settlement' only. Currency hardcoded to MMK.
+func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
+	var bucket string
+	switch period {
+	case RevenuePeriodDay, RevenuePeriodCustom:
+		bucket = `(rle.effective_at AT TIME ZONE 'Asia/Yangon')::date`
+	case RevenuePeriodWeek:
+		bucket = `DATE_TRUNC('week', rle.effective_at AT TIME ZONE 'Asia/Yangon')::date`
+	case RevenuePeriodMonth:
+		bucket = `DATE_TRUNC('month', rle.effective_at AT TIME ZONE 'Asia/Yangon')::date`
+	case RevenuePeriodYear:
+		bucket = `DATE_TRUNC('year', rle.effective_at AT TIME ZONE 'Asia/Yangon')::date`
+	default:
+		return "", fmt.Errorf("unsupported revenue period: %s", period)
+	}
+	return fmt.Sprintf(`
+		SELECT
+			%s AS period_start,
+			'MMK' AS currency,
+			COALESCE(SUM(rle.amount), 0) AS settlement_total,
+			COUNT(*) AS settlement_count
+		FROM reseller_ledger_entry rle
+		WHERE rle.entry_type = 'settlement'
+		  AND rle.effective_at >= $1
+		  AND rle.effective_at < $2
+		GROUP BY 1, 2
+		ORDER BY 1 ASC`, bucket), nil
+}
+
+// SumSettlementsByPeriod groups settlement ledger entries by Yangon period buckets.
+// Half-open [start, end). entry_type = 'settlement' only.
+func (r *ResellerCreditRepository) SumSettlementsByPeriod(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]SettlementPeriodRow, error) {
+	query, err := buildSumSettlementsByPeriodSQL(period)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.pool.Query(ctx, query, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("sum settlements by period: %w", err)
+	}
+	defer rows.Close()
+	var out []SettlementPeriodRow
+	for rows.Next() {
+		var sr SettlementPeriodRow
+		var periodStart time.Time
+		if err := rows.Scan(&periodStart, &sr.Currency, &sr.SettlementTotal, &sr.SettlementCount); err != nil {
+			return nil, err
+		}
+		sr.PeriodStart = periodStart.Format("2006-01-02")
+		out = append(out, sr)
+	}
+	return out, rows.Err()
+}

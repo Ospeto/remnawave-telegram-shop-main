@@ -533,6 +533,76 @@ func TestBuildFinanceReport_UniqueCustomersFromRangeInput(t *testing.T) {
 	}
 }
 
+func TestBuildFinanceReport_SettlementCashOnlyNotGross(t *testing.T) {
+	// Postpaid sale: service revenue without cash; settlement later adds cash only.
+	loc := YangonLocation()
+	now := time.Date(2026, 7, 12, 15, 0, 0, 0, loc)
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          now,
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		PurchaseRows: []database.RevenueSummaryRow{{
+			PeriodStart:            "2026-07-12",
+			Currency:               "MMK",
+			PeriodServiceRevenue:   4000,
+			PeriodCashCollected:    0, // postpaid: excluded from cash CASE
+			PeriodServicePurchases: 1,
+			PeriodNewKeyPurchases:  1,
+			ServiceRevenue:         4000,
+			CashCollected:          0,
+			TotalPurchases:         1,
+			PaymentMethod:          "postpaid",
+			RevenueCategory:        "new_key",
+		}},
+		SettlementRows: []database.SettlementPeriodRow{{
+			PeriodStart:     "2026-07-12",
+			Currency:        "MMK",
+			SettlementTotal: 1000,
+			SettlementCount: 1,
+		}},
+		RangeUniqueCustomers: 1,
+	}
+	report, err := BuildFinanceReport(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Current.GrossServiceRevenue != 4000 {
+		t.Fatalf("gross=%v want 4000", report.Current.GrossServiceRevenue)
+	}
+	if report.Current.CashCollected != 1000 {
+		t.Fatalf("cash=%v want 1000 (settlement only, not double-counting sale)", report.Current.CashCollected)
+	}
+	if report.Current.NetServiceRevenue != 4000 {
+		t.Fatalf("net=%v want 4000 (no refunds)", report.Current.NetServiceRevenue)
+	}
+	if report.Current.Refunds != 0 {
+		t.Fatalf("refunds=%v want 0", report.Current.Refunds)
+	}
+	if report.Current.SuccessfulOrders != 1 {
+		t.Fatalf("orders=%d want 1", report.Current.SuccessfulOrders)
+	}
+}
+
+func TestBuildFinanceReport_MalformedSettlementPeriodStart(t *testing.T) {
+	loc := YangonLocation()
+	in := BuildFinanceReportInput{
+		Period:       database.RevenuePeriodDay,
+		Now:          time.Date(2026, 7, 12, 12, 0, 0, 0, loc),
+		CurrentStart: time.Date(2026, 7, 12, 0, 0, 0, 0, loc),
+		CurrentEnd:   time.Date(2026, 7, 13, 0, 0, 0, 0, loc),
+		SettlementRows: []database.SettlementPeriodRow{{
+			PeriodStart:     "not-a-date",
+			Currency:        "MMK",
+			SettlementTotal: 100,
+		}},
+	}
+	_, err := BuildFinanceReport(in)
+	if !errors.Is(err, ErrInvalidPeriodStart) {
+		t.Fatalf("err=%v want ErrInvalidPeriodStart", err)
+	}
+}
+
 func TestBuildFinanceReport_TwoDecimalNormalization(t *testing.T) {
 	loc := YangonLocation()
 	in := BuildFinanceReportInput{

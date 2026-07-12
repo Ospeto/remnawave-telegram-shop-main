@@ -92,8 +92,10 @@ type BuildFinanceReportInput struct {
 	CustomTo             *time.Time
 	PurchaseRows         []database.RevenueSummaryRow
 	RefundRows           []database.RefundPeriodRow
+	SettlementRows       []database.SettlementPeriodRow
 	PriorPurchaseRows    []database.RevenueSummaryRow
 	PriorRefundRows      []database.RefundPeriodRow
+	PriorSettlementRows  []database.SettlementPeriodRow
 	RangeUniqueCustomers int
 	PriorUniqueCustomers int
 	// Window fields filled by FinanceService before BuildFinanceReport:
@@ -144,13 +146,15 @@ func normalizeCurrency(currency string) string {
 	return firstNonEmpty(currency, "MMK")
 }
 
-// resolveReportCurrency requires a single currency across all purchase and refund rows.
+// resolveReportCurrency requires a single currency across all purchase, refund, and settlement rows.
 // Empty currency values normalize to MMK. Mixed currencies return ErrMixedCurrency.
 func resolveReportCurrency(
 	purchaseRows []database.RevenueSummaryRow,
 	refundRows []database.RefundPeriodRow,
+	settlementRows []database.SettlementPeriodRow,
 	priorPurchaseRows []database.RevenueSummaryRow,
 	priorRefundRows []database.RefundPeriodRow,
+	priorSettlementRows []database.SettlementPeriodRow,
 ) (string, error) {
 	seen := map[string]struct{}{}
 	addPurchase := func(rows []database.RevenueSummaryRow) {
@@ -163,10 +167,17 @@ func resolveReportCurrency(
 			seen[normalizeCurrency(row.Currency)] = struct{}{}
 		}
 	}
+	addSettlement := func(rows []database.SettlementPeriodRow) {
+		for _, row := range rows {
+			seen[normalizeCurrency(row.Currency)] = struct{}{}
+		}
+	}
 	addPurchase(purchaseRows)
 	addPurchase(priorPurchaseRows)
 	addRefund(refundRows)
 	addRefund(priorRefundRows)
+	addSettlement(settlementRows)
+	addSettlement(priorSettlementRows)
 
 	if len(seen) == 0 {
 		return "MMK", nil
@@ -208,6 +219,17 @@ func applyRefunds(buckets map[bucketKey]FinanceMetrics, refunds []database.Refun
 		key := bucketKey{start: rr.PeriodStart, currency: normalizeCurrency(rr.Currency)}
 		m := buckets[key]
 		m.Refunds += rr.RefundTotal
+		buckets[key] = m
+	}
+}
+
+// applySettlements adds AR settlement totals into CashCollected only.
+// Does not touch GrossServiceRevenue, Refunds, WalletTopUps, or order counts.
+func applySettlements(buckets map[bucketKey]FinanceMetrics, rows []database.SettlementPeriodRow) {
+	for _, sr := range rows {
+		key := bucketKey{start: sr.PeriodStart, currency: normalizeCurrency(sr.Currency)}
+		m := buckets[key]
+		m.CashCollected += sr.SettlementTotal
 		buckets[key] = m
 	}
 }
@@ -254,8 +276,10 @@ func validatePeriodStarts(
 	loc *time.Location,
 	purchaseRows []database.RevenueSummaryRow,
 	refundRows []database.RefundPeriodRow,
+	settlementRows []database.SettlementPeriodRow,
 	priorPurchaseRows []database.RevenueSummaryRow,
 	priorRefundRows []database.RefundPeriodRow,
+	priorSettlementRows []database.SettlementPeriodRow,
 ) error {
 	checkPurchase := func(rows []database.RevenueSummaryRow) error {
 		for _, row := range rows {
@@ -274,16 +298,30 @@ func validatePeriodStarts(
 		}
 		return nil
 	}
+	checkSettlement := func(rows []database.SettlementPeriodRow) error {
+		for _, row := range rows {
+			if _, err := parsePeriodStart(row.PeriodStart, loc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if err := checkPurchase(purchaseRows); err != nil {
 		return err
 	}
 	if err := checkRefund(refundRows); err != nil {
 		return err
 	}
+	if err := checkSettlement(settlementRows); err != nil {
+		return err
+	}
 	if err := checkPurchase(priorPurchaseRows); err != nil {
 		return err
 	}
-	return checkRefund(priorRefundRows)
+	if err := checkRefund(priorRefundRows); err != nil {
+		return err
+	}
+	return checkSettlement(priorSettlementRows)
 }
 
 func filterRowsByPeriodStart(rows []database.RevenueSummaryRow, startKey string) []database.RevenueSummaryRow {
@@ -307,13 +345,20 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 	if in.CurrentStart.IsZero() || in.CurrentEnd.IsZero() || !in.CurrentEnd.After(in.CurrentStart) {
 		return FinanceReport{}, fmt.Errorf("current window is required")
 	}
-	currency, err := resolveReportCurrency(in.PurchaseRows, in.RefundRows, in.PriorPurchaseRows, in.PriorRefundRows)
+	currency, err := resolveReportCurrency(
+		in.PurchaseRows, in.RefundRows, in.SettlementRows,
+		in.PriorPurchaseRows, in.PriorRefundRows, in.PriorSettlementRows,
+	)
 	if err != nil {
 		return FinanceReport{}, err
 	}
 
 	loc := YangonLocation()
-	if err := validatePeriodStarts(loc, in.PurchaseRows, in.RefundRows, in.PriorPurchaseRows, in.PriorRefundRows); err != nil {
+	if err := validatePeriodStarts(
+		loc,
+		in.PurchaseRows, in.RefundRows, in.SettlementRows,
+		in.PriorPurchaseRows, in.PriorRefundRows, in.PriorSettlementRows,
+	); err != nil {
 		return FinanceReport{}, err
 	}
 
@@ -331,8 +376,10 @@ func BuildFinanceReport(in BuildFinanceReportInput) (FinanceReport, error) {
 
 	allBuckets := aggregatePurchaseBuckets(in.PurchaseRows)
 	applyRefunds(allBuckets, in.RefundRows)
+	applySettlements(allBuckets, in.SettlementRows)
 	priorBuckets := aggregatePurchaseBuckets(in.PriorPurchaseRows)
 	applyRefunds(priorBuckets, in.PriorRefundRows)
+	applySettlements(priorBuckets, in.PriorSettlementRows)
 
 	// Headline Current = selected period only (not full history window sum).
 	// Custom: selected range is the whole custom window → sum all buckets in PurchaseRows

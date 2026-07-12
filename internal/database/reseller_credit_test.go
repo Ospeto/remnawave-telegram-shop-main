@@ -286,3 +286,43 @@ func TestValidateCreateLedgerEntryInput_AdjustmentEitherDirection(t *testing.T) 
 		t.Fatal("expected entry type mismatch")
 	}
 }
+
+func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
+	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodDay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Asia/Yangon",
+		"entry_type = 'settlement'",
+		"effective_at >= $1",
+		"effective_at < $2",
+		"'MMK'",
+		"reseller_ledger_entry",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("missing %q in %s", want, sql)
+		}
+	}
+	// Must not count sales or adjustments as cash.
+	if strings.Contains(sql, "entry_type = 'sale'") || strings.Contains(sql, "adjustment") {
+		t.Fatalf("settlement SQL must not include sale/adjustment filters: %s", sql)
+	}
+}
+
+func TestBuildSumSettlementsByPeriodSQL_WeekBucket(t *testing.T) {
+	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodWeek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sql, "DATE_TRUNC('week'") {
+		t.Fatalf("week bucket missing: %s", sql)
+	}
+}
+
+func TestBuildSumSettlementsByPeriodSQL_UnsupportedPeriod(t *testing.T) {
+	_, err := buildSumSettlementsByPeriodSQL(RevenueSummaryPeriod("quarter"))
+	if err == nil {
+		t.Fatal("expected unsupported period error")
+	}
+}

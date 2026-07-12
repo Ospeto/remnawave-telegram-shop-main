@@ -202,7 +202,7 @@ func TestExportRevenue_NilService500(t *testing.T) {
 
 func TestGetRevenueSummary_ExcessiveHistory400(t *testing.T) {
 	// Real FinanceService validates bounds in ResolveReportWindow before repo access.
-	svc := reporting.NewFinanceService(nil, nil)
+	svc := reporting.NewFinanceService(nil, nil, nil)
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, svc, nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=day&periods=367", nil)
 	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
@@ -214,7 +214,7 @@ func TestGetRevenueSummary_ExcessiveHistory400(t *testing.T) {
 }
 
 func TestGetRevenueSummary_CustomRangeOver366Days400(t *testing.T) {
-	svc := reporting.NewFinanceService(nil, nil)
+	svc := reporting.NewFinanceService(nil, nil, nil)
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, svc, nil)
 	// Inclusive span > 366 days (2025-01-01 .. 2026-01-03).
 	req := httptest.NewRequest(http.MethodGet, "/api/revenue?period=custom&from=2025-01-01&to=2026-01-03", nil)

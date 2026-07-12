@@ -18,19 +18,25 @@ type refundPeriodReader interface {
 	SumRefundsByPeriod(ctx context.Context, start, end time.Time, period database.RevenueSummaryPeriod, adminTelegramID int64) ([]database.RefundPeriodRow, error)
 }
 
-type FinanceService struct {
-	purchases purchaseRevenueReader
-	refunds   refundPeriodReader
-	adminID   func() int64
-	now       func() time.Time
+type settlementPeriodReader interface {
+	SumSettlementsByPeriod(ctx context.Context, start, end time.Time, period database.RevenueSummaryPeriod) ([]database.SettlementPeriodRow, error)
 }
 
-func NewFinanceService(purchases purchaseRevenueReader, refunds refundPeriodReader) *FinanceService {
+type FinanceService struct {
+	purchases   purchaseRevenueReader
+	refunds     refundPeriodReader
+	settlements settlementPeriodReader
+	adminID     func() int64
+	now         func() time.Time
+}
+
+func NewFinanceService(purchases purchaseRevenueReader, refunds refundPeriodReader, settlements settlementPeriodReader) *FinanceService {
 	return &FinanceService{
-		purchases: purchases,
-		refunds:   refunds,
-		adminID:   config.GetAdminTelegramId,
-		now:       time.Now,
+		purchases:   purchases,
+		refunds:     refunds,
+		settlements: settlements,
+		adminID:     config.GetAdminTelegramId,
+		now:         time.Now,
 	}
 }
 
@@ -87,6 +93,17 @@ func (s *FinanceService) GetReport(ctx context.Context, q ReportQuery) (FinanceR
 	if err != nil {
 		return FinanceReport{}, fmt.Errorf("load prior refunds: %w", err)
 	}
+	var settlementRows, priorSettlementRows []database.SettlementPeriodRow
+	if s.settlements != nil {
+		settlementRows, err = s.settlements.SumSettlementsByPeriod(ctx, windows.TrendStart, windows.TrendEnd, bucketPeriod)
+		if err != nil {
+			return FinanceReport{}, fmt.Errorf("load settlements: %w", err)
+		}
+		priorSettlementRows, err = s.settlements.SumSettlementsByPeriod(ctx, windows.PriorStart, windows.PriorEnd, bucketPeriod)
+		if err != nil {
+			return FinanceReport{}, fmt.Errorf("load prior settlements: %w", err)
+		}
+	}
 	// Unique customers for selected period only (headline cards), not full history window.
 	uniq, err := s.purchases.CountDistinctServiceCustomers(ctx, windows.SelectedStart, windows.SelectedEnd)
 	if err != nil {
@@ -105,8 +122,10 @@ func (s *FinanceService) GetReport(ctx context.Context, q ReportQuery) (FinanceR
 		CustomTo:             q.CustomTo,
 		PurchaseRows:         purchaseRows,
 		RefundRows:           refundRows,
+		SettlementRows:       settlementRows,
 		PriorPurchaseRows:    priorPurchaseRows,
 		PriorRefundRows:      priorRefundRows,
+		PriorSettlementRows:  priorSettlementRows,
 		RangeUniqueCustomers: uniq,
 		PriorUniqueCustomers: priorUniq,
 		// CurrentStart/End describe the selected period for cards/metadata.

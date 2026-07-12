@@ -197,7 +197,7 @@ func main() {
 	walletTxRepo := database.NewWalletTransactionRepository(pool)
 	resellerCreditRepo := database.NewResellerCreditRepository(pool)
 	financialAdjustmentRepository := database.NewFinancialAdjustmentRepository(pool)
-	financeService := reporting.NewFinanceService(purchaseRepository, financialAdjustmentRepository)
+	financeService := reporting.NewFinanceService(purchaseRepository, financialAdjustmentRepository, resellerCreditRepo)
 
 	// Initialize repositories first
 	// walletTxRepo is already Init at line 68
