@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { LoadingScreen } from '../components/LoadingScreen';
@@ -64,6 +64,8 @@ export function ResellerAccount() {
     const [paying, setPaying] = useState(false);
     const [payError, setPayError] = useState<string | null>(null);
     const [paySuccess, setPaySuccess] = useState<string | null>(null);
+    // Reuse one key per settlement intent until success so retries never double-charge.
+    const settlementIntentKeyRef = useRef<string | null>(null);
 
     const handleBack = useCallback(() => navigate('/'), [navigate]);
 
@@ -149,7 +151,10 @@ export function ResellerAccount() {
         setPayError(null);
         setPaySuccess(null);
 
-        const idempotencyKey = createIdempotencyKey();
+        if (!settlementIntentKeyRef.current) {
+            settlementIntentKeyRef.current = createIdempotencyKey();
+        }
+        const idempotencyKey = settlementIntentKeyRef.current;
 
         try {
             const result = await fetchJSONWithTelegramAuth<ResellerSettlementResponse>(
@@ -168,6 +173,9 @@ export function ResellerAccount() {
                     }),
                 },
             );
+
+            // Success (created or idempotent replay): clear intent so next pay gets a new key.
+            settlementIntentKeyRef.current = null;
 
             setAccount((prev) =>
                 prev
@@ -191,6 +199,7 @@ export function ResellerAccount() {
                 // Keep updated balances even if ledger refresh fails.
             }
         } catch (err) {
+            // Keep settlementIntentKeyRef so a retry reuses the same key.
             if (isAPIStatus(err, 401)) {
                 clearTelegramSession();
                 setAuthExpired(true);

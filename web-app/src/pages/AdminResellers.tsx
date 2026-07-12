@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { LoadingScreen } from '../components/LoadingScreen';
@@ -73,6 +73,8 @@ export function AdminResellers() {
     const [ledgerLoadingId, setLedgerLoadingId] = useState<number | null>(null);
     const [ledgerOpenId, setLedgerOpenId] = useState<number | null>(null);
     const [rowBusyId, setRowBusyId] = useState<number | null>(null);
+    // Per-reseller settlement intent keys: reuse until success to avoid double AR decrease.
+    const settlementIntentKeysRef = useRef<Record<number, string>>({});
 
     const handleBack = useCallback(() => {
         navigate('/');
@@ -319,7 +321,10 @@ export function AdminResellers() {
         }
 
         const note = (settlementNotes[telegramIdNum] ?? '').trim();
-        const idempotencyKey = createIdempotencyKey();
+        if (!settlementIntentKeysRef.current[telegramIdNum]) {
+            settlementIntentKeysRef.current[telegramIdNum] = createIdempotencyKey();
+        }
+        const idempotencyKey = settlementIntentKeysRef.current[telegramIdNum];
 
         setRowBusyId(telegramIdNum);
         setActionError(null);
@@ -344,6 +349,9 @@ export function AdminResellers() {
                 },
             );
 
+            // Success: clear intent key so the next settlement for this reseller is fresh.
+            delete settlementIntentKeysRef.current[telegramIdNum];
+
             setResellers((prev) =>
                 prev.map((item) =>
                     item.telegram_id === telegramIdNum
@@ -360,6 +368,7 @@ export function AdminResellers() {
             setActionSuccess(t('admin_resellers_settlement_success'));
             await refreshListAndMaybeLedger(telegramIdNum);
         } catch (err) {
+            // Keep settlementIntentKeysRef[telegramIdNum] so retries reuse the same key.
             if (isAPIStatus(err, 401)) {
                 clearTelegramSession();
                 setAuthExpired(true);

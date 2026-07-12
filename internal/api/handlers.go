@@ -3111,7 +3111,11 @@ func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Req
 		http.Error(w, `payment_method must be "wallet"`, http.StatusBadRequest)
 		return
 	}
-	if req.Amount <= 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) {
+
+	// Normalize once before wallet debit, wallet_tx, and AR settlement so all
+	// three legs use the same rounded amount (reject non-positive after round).
+	amount, err := database.NormalizeResellerAmount(req.Amount)
+	if err != nil {
 		http.Error(w, "amount must be a finite positive number", http.StatusBadRequest)
 		return
 	}
@@ -3121,7 +3125,8 @@ func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Req
 		idempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
 	if idempotencyKey == "" {
-		idempotencyKey = uuid.NewString()
+		http.Error(w, "Idempotency-Key header or idempotency_key body field is required", http.StatusBadRequest)
+		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
@@ -3152,7 +3157,7 @@ func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Req
 	}
 	defer func() { _ = dbTx.Rollback(ctx) }()
 
-	if err := h.customerRepo.DeductBalanceTx(ctx, dbTx, customer.ID, req.Amount); err != nil {
+	if err := h.customerRepo.DeductBalanceTx(ctx, dbTx, customer.ID, amount); err != nil {
 		if strings.Contains(err.Error(), "insufficient balance") {
 			http.Error(w, "Insufficient wallet balance", http.StatusBadRequest)
 			return
@@ -3164,7 +3169,7 @@ func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Req
 	// Match wallet purchase logging: type=purchase, amount negative (debit).
 	if _, err := h.walletTxRepo.CreateTx(ctx, dbTx, &database.WalletTransaction{
 		CustomerID:  customer.ID,
-		Amount:      -req.Amount,
+		Amount:      -amount,
 		Type:        database.WalletTransactionTypePurchase,
 		PurchaseID:  nil,
 		Description: "AR settlement",
@@ -3177,7 +3182,7 @@ func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Req
 		CustomerID:     customer.ID,
 		EntryType:      database.ResellerLedgerEntryTypeSettlement,
 		Direction:      database.ResellerLedgerDirectionDecrease,
-		Amount:         req.Amount,
+		Amount:         amount,
 		EffectiveAt:    h.currentTime().UTC(),
 		Note:           strings.TrimSpace(req.Note),
 		CreatedBy:      fmt.Sprintf("customer:%d", telegramID),

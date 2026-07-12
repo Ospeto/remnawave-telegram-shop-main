@@ -304,3 +304,96 @@ func TestMapCreatePurchasePostpaidError(t *testing.T) {
 		}
 	}
 }
+
+// selfSettlementHandlerWithNilPoolDeps returns a handler whose repo pointers are
+// non-nil so CreateResellerSettlement can exercise early validation (amount /
+// idempotency) without a live Postgres pool.
+func selfSettlementHandlerWithNilPoolDeps() *APIHandler {
+	handler := NewAPIHandler(
+		database.NewCustomerRepository(nil),
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	handler.SetResellerCreditDeps(
+		database.NewResellerCreditRepository(nil),
+		database.NewWalletTransactionRepository(nil),
+	)
+	return handler
+}
+
+func TestCreateResellerSettlementRequiresIdempotencyKey(t *testing.T) {
+	handler := selfSettlementHandlerWithNilPoolDeps()
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/reseller/settlements",
+		bytes.NewBufferString(`{"amount":1000,"payment_method":"wallet"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+
+	handler.CreateResellerSettlement(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Idempotency-Key") && !strings.Contains(rec.Body.String(), "idempotency_key") {
+		t.Fatalf("body = %q, want idempotency key required message", rec.Body.String())
+	}
+}
+
+func TestCreateResellerSettlementRejectsNonPositiveAmount(t *testing.T) {
+	handler := selfSettlementHandlerWithNilPoolDeps()
+
+	for _, body := range []string{
+		`{"amount":0,"payment_method":"wallet","idempotency_key":"k"}`,
+		`{"amount":-1,"payment_method":"wallet","idempotency_key":"k"}`,
+		`{"amount":0.001,"payment_method":"wallet","idempotency_key":"k"}`, // rounds to 0
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/reseller/settlements", bytes.NewBufferString(body))
+		req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+		rec := httptest.NewRecorder()
+		handler.CreateResellerSettlement(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body=%s status=%d want 400 body=%q", body, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestCreateResellerSettlementRejectsNonWalletMethod(t *testing.T) {
+	handler := selfSettlementHandlerWithNilPoolDeps()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/reseller/settlements",
+		bytes.NewBufferString(`{"amount":1000,"payment_method":"cash","idempotency_key":"k"}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(42)))
+	rec := httptest.NewRecorder()
+	handler.CreateResellerSettlement(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPostAdminCustomerSettlementRequiresIdempotencyKey(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.findCustomerByTelegramID = func(_ context.Context, telegramID int64) (*database.Customer, error) {
+		return &database.Customer{ID: 7, TelegramID: telegramID, IsReseller: true}, nil
+	}
+	handler.recordAdminSettlementFn = func(context.Context, int64, float64, string, string, string) (*database.ResellerLedgerEntry, *database.ResellerCreditAccount, bool, error) {
+		t.Fatal("recordAdminSettlementFn must not be called without idempotency key")
+		return nil, nil, false, nil
+	}
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/admin/customers/12345/settlements",
+		bytes.NewBufferString(`{"amount": 1000}`),
+	)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(999)))
+	rec := httptest.NewRecorder()
+	handler.AdminCustomerByTelegramID(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}

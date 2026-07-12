@@ -2359,6 +2359,8 @@ func postpaidSaleReverseIdempotencyKey(purchaseID int64) string {
 // reversePostpaidSaleAfterProcessFailure cancels an unpaid postpaid purchase and
 // decreases balance_owed via adjustment so orphan AR is not left after a failed
 // ProcessPurchaseById on a newly created sale.
+// amount is a fallback only; the re-loaded purchase amount is preferred so reverse
+// matches the sale that was actually recorded.
 func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Context, customerID, purchaseID int64, amount float64, processErr error) error {
 	if s.resellerCreditRepo == nil || s.customerRepository == nil || s.purchaseRepository == nil {
 		return fmt.Errorf("repositories not configured for postpaid reverse")
@@ -2374,6 +2376,16 @@ func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Cont
 	}
 	if purchase.Status == database.PurchaseStatusPaid {
 		return nil
+	}
+
+	// Prefer the persisted purchase amount over the create-arg so reverse matches
+	// the sale ledger even if callers pass a stale/mismatched amount.
+	reverseAmount := amount
+	if purchase.Amount > 0 {
+		reverseAmount = purchase.Amount
+	}
+	if reverseAmount <= 0 {
+		return fmt.Errorf("postpaid reverse amount must be positive for purchase %d", purchaseID)
 	}
 
 	dbTx, err := s.customerRepository.BeginTx(ctx)
@@ -2406,6 +2418,10 @@ func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Cont
 			return nil
 		}
 		// Already cancelled: still attempt idempotent reverse adjustment below.
+		// Prefer re-loaded amount if available.
+		if current != nil && current.Amount > 0 {
+			reverseAmount = current.Amount
+		}
 	}
 
 	now := time.Now().UTC()
@@ -2417,7 +2433,7 @@ func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Cont
 		CustomerID:     customerID,
 		EntryType:      database.ResellerLedgerEntryTypeAdjustment,
 		Direction:      database.ResellerLedgerDirectionDecrease,
-		Amount:         amount,
+		Amount:         reverseAmount,
 		PurchaseID:     &purchaseID,
 		EffectiveAt:    now,
 		Note:           note,
