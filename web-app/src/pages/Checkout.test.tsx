@@ -687,6 +687,9 @@ describe('Checkout', () => {
             if (url === '/api/wallet') {
                 return jsonResponse({ balance: 0, currency: 'MMK' });
             }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 0, balance_owed: 0, remaining_credit: 0 });
+            }
             if (url === '/api/purchase') {
                 return jsonResponse({
                     purchase_id: 44,
@@ -767,6 +770,9 @@ describe('Checkout', () => {
                 // Between wholesale (4000) and retail (5000): eligible only if wholesale is used.
                 return jsonResponse({ balance: 4500, currency: 'MMK' });
             }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 0, balance_owed: 0, remaining_credit: 0 });
+            }
 
             throw new Error(`Unhandled fetch: ${url}`);
         });
@@ -824,6 +830,9 @@ describe('Checkout', () => {
             if (url === '/api/wallet') {
                 return jsonResponse({ balance: 0, currency: 'MMK' });
             }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 0, balance_owed: 0, remaining_credit: 0 });
+            }
 
             throw new Error(`Unhandled fetch: ${url}`);
         });
@@ -836,5 +845,287 @@ describe('Checkout', () => {
 
         expect(await screen.findByText('1 Month')).toBeTruthy();
         expect(screen.queryByText('Reseller price')).toBeNull();
+    });
+
+    it('shows postpaid button for reseller when remaining credit covers plan price', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 50000, balance_owed: 10000, remaining_credit: 40000 });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByRole('button', { name: 'Buy on credit (4,000 MMK)' })).toBeTruthy();
+    });
+
+    it('does not show postpaid button for non-reseller', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 5000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: false,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByRole('button', { name: 'Pay via mobile banking' })).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /Buy on credit/i })).toBeNull();
+        expect(fetchMock.mock.calls.find(([url]) => String(url) === '/api/reseller/account')).toBeUndefined();
+    });
+
+    it('sends payment_method postpaid when reseller clicks postpaid button', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 50000, balance_owed: 0, remaining_credit: 50000 });
+            }
+            if (url === '/api/purchase') {
+                const body = JSON.parse(String(init?.body ?? '{}'));
+                expect(body.payment_method).toBe('postpaid');
+                return jsonResponse({
+                    purchase_id: 77,
+                    amount: 4000,
+                    currency: 'MMK',
+                    invoice_type: 'postpaid',
+                    happ_link: 'https://happ.example/key',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        const postpaidButton = await screen.findByRole('button', { name: 'Buy on credit (4,000 MMK)' });
+        fireEvent.click(postpaidButton);
+
+        expect(await screen.findByText('✅ Payment Verified!')).toBeTruthy();
+        expect(screen.queryByText('How to pay')).toBeNull();
+
+        await waitFor(() => {
+            const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
+            expect(purchaseCall).toBeTruthy();
+            const [, options] = purchaseCall as [string, RequestInit];
+            const body = JSON.parse(String(options.body));
+            expect(body.payment_method).toBe('postpaid');
+            expect(body.plan_id).toBe('plan-30');
+            expect(body.promo_code).toBeUndefined();
+        });
+    });
+
+    it('hides postpaid button when remaining credit is below plan price', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 50000, balance_owed: 48000, remaining_credit: 2000 });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByRole('button', { name: 'Pay via mobile banking' })).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /Buy on credit/i })).toBeNull();
+    });
+
+    it('does not show postpaid button on wallet top-up flow', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/reseller/account') {
+                return jsonResponse({ credit_limit: 50000, balance_owed: 0, remaining_credit: 50000 });
+            }
+            if (url === '/api/purchase') {
+                const body = JSON.parse(String(init?.body ?? '{}'));
+                if (body.payment_method !== 'wallet_topup') {
+                    throw new Error(`Unexpected purchase body: ${JSON.stringify(body)}`);
+                }
+                return jsonResponse({
+                    purchase_id: 99,
+                    payment_phone: '09123456789',
+                    amount: 5000,
+                    currency: 'MMK',
+                    instructions: 'Pay now',
+                    invoice_type: 'wallet_topup',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout?walletTopup=true&amount=5000']);
+
+        expect(await screen.findByRole('button', { name: 'Create payment request' })).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /Buy on credit/i })).toBeNull();
+        expect(fetchMock.mock.calls.find(([url]) => String(url) === '/api/reseller/account')).toBeUndefined();
     });
 });

@@ -7,7 +7,7 @@ import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
-import { Plan, UserData } from '../lib/types';
+import { Plan, ResellerAccount, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { buildTelegramStartUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
@@ -51,7 +51,7 @@ interface VerificationResponse {
     shadow_passed?: boolean;
 }
 
-type CheckoutAction = 'manual' | 'wallet' | 'topup';
+type CheckoutAction = 'manual' | 'wallet' | 'topup' | 'postpaid';
 
 export function Checkout() {
     const { planIndex } = useParams();
@@ -86,6 +86,10 @@ export function Checkout() {
     const [walletBalance, setWalletBalance] = useState<number | null>(null);
     const [walletBalanceLoading, setWalletBalanceLoading] = useState(false);
     const [walletBalanceError, setWalletBalanceError] = useState<string | null>(null);
+    // Reseller postpaid credit state
+    const [resellerAccount, setResellerAccount] = useState<ResellerAccount | null>(null);
+    const [resellerAccountLoading, setResellerAccountLoading] = useState(false);
+    const [resellerAccountError, setResellerAccountError] = useState<string | null>(null);
     const [creatingPurchase, setCreatingPurchase] = useState(false);
     const [selectedAction, setSelectedAction] = useState<CheckoutAction | null>(null);
     const [walletPayError, setWalletPayError] = useState<string | null>(null);
@@ -174,6 +178,36 @@ export function Checkout() {
         }
     }, [initData, isWalletTopup, t]);
 
+    const loadResellerAccount = useCallback(async () => {
+        if (!initData || isWalletTopup) return;
+
+        setResellerAccountLoading(true);
+        setResellerAccountError(null);
+        try {
+            const data = await fetchJSONWithTelegramAuth<ResellerAccount>('/api/reseller/account', initData);
+            if (
+                typeof data.credit_limit === 'number' &&
+                typeof data.balance_owed === 'number' &&
+                typeof data.remaining_credit === 'number'
+            ) {
+                setResellerAccount(data);
+            } else {
+                setResellerAccount(null);
+                setResellerAccountError(t('postpaid_credit_unavailable'));
+            }
+        } catch (err) {
+            if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
+                setAuthExpired(true);
+                return;
+            }
+            setResellerAccount(null);
+            setResellerAccountError(t('postpaid_credit_unavailable'));
+        } finally {
+            setResellerAccountLoading(false);
+        }
+    }, [initData, isWalletTopup, t]);
+
     const loadCheckoutData = useCallback(async () => {
         if (!initData) {
             setLoading(false);
@@ -203,6 +237,9 @@ export function Checkout() {
         setWalletPayError(null);
         setWalletBalanceError(null);
         setWalletBalance(null);
+        setResellerAccount(null);
+        setResellerAccountError(null);
+        setResellerAccountLoading(false);
         setCancelPaymentError(null);
         setCancellingPayment(false);
         setAuthExpired(false);
@@ -232,6 +269,9 @@ export function Checkout() {
             );
             setUserData(meData);
             await loadWalletBalance();
+            if (meData.is_reseller) {
+                await loadResellerAccount();
+            }
         } catch (err) {
             console.warn('Checkout load error:', err);
             if (isAPIStatus(err, 401)) {
@@ -247,7 +287,7 @@ export function Checkout() {
         } finally {
             setLoading(false);
         }
-    }, [hasValidTopUpAmount, initData, isWalletTopup, loadWalletBalance, planIndex, t, tg]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, loadResellerAccount, loadWalletBalance, planIndex, t, tg]);
 
     useEffect(() => {
         void loadCheckoutData();
@@ -283,6 +323,9 @@ export function Checkout() {
             }
             if (action === 'wallet') {
                 body.payment_method = 'wallet';
+            }
+            if (action === 'postpaid') {
+                body.payment_method = 'postpaid';
             }
             if (action === 'topup') {
                 body.payment_method = 'wallet_topup';
@@ -350,9 +393,17 @@ export function Checkout() {
                     redirect_url: data.redirect_url,
                 });
             }
+            if (action === 'postpaid') {
+                setVerificationResult({
+                    status: 'success',
+                    message: t('postpaid_pay_success'),
+                    happ_link: data.happ_link,
+                    redirect_url: data.redirect_url,
+                });
+            }
         } catch (err: unknown) {
             const message = err instanceof Error && err.message ? err.message : t('creating_purchase');
-            if (action === 'wallet') {
+            if (action === 'wallet' || action === 'postpaid') {
                 setWalletPayError(message);
             } else {
                 setPurchaseError(message);
@@ -570,7 +621,14 @@ export function Checkout() {
     const targetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;
     const canShowWalletOption = !isWalletTopup && selectedPlan !== undefined;
-    const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment';
+    const canShowPostpaidOption =
+        !isWalletTopup &&
+        !!userData?.is_reseller &&
+        selectedPlan !== undefined &&
+        resellerAccount !== null &&
+        resellerAccount.credit_limit > 0 &&
+        resellerAccount.remaining_credit >= targetAmount;
+    const isManualPurchaseReady = !!purchase && purchase.invoice_type !== 'wallet_payment' && purchase.invoice_type !== 'postpaid';
     const displayAmount = pendingPaymentNotice && purchase ? purchase.amount : targetAmount;
     const displayCurrency = pendingPaymentNotice && purchase ? (purchase.currency || selectedPlan?.currency || 'MMK') : (selectedPlan?.currency || 'MMK');
     const displayLabel = pendingPaymentNotice && purchase
@@ -726,6 +784,25 @@ export function Checkout() {
                         {canShowWalletOption && !walletBalanceLoading && !walletBalanceError && walletBalance !== null && !canPayWithWallet && (
                             <div className="text-hint" style={{ fontSize: 12 }}>
                                 {t('wallet_balance_low')}
+                            </div>
+                        )}
+
+                        {canShowPostpaidOption && (
+                            <button
+                                className="btn-primary"
+                                onClick={() => { playClick(); void createPurchase('postpaid'); }}
+                                disabled={creatingPurchase || resellerAccountLoading}
+                                style={{ width: '100%', background: 'var(--color-success)', opacity: creatingPurchase && selectedAction === 'postpaid' ? 0.7 : 1 }}
+                            >
+                                {creatingPurchase && selectedAction === 'postpaid'
+                                    ? <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />{t('postpaid_pay_processing')}</>
+                                    : t('postpaid_pay_btn', { amount: targetAmount.toLocaleString(), currency: selectedPlan?.currency || 'MMK' })}
+                            </button>
+                        )}
+
+                        {!isWalletTopup && !!userData?.is_reseller && !resellerAccountLoading && resellerAccountError && (
+                            <div className="text-hint" style={{ fontSize: 12 }}>
+                                {resellerAccountError}
                             </div>
                         )}
 

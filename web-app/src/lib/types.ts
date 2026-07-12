@@ -53,6 +53,12 @@ export interface UserData {
     is_reseller?: boolean;
 }
 
+export interface ResellerAccount {
+    credit_limit: number;
+    balance_owed: number;
+    remaining_credit: number;
+}
+
 export interface AdminPromo {
     code: string;
     discount_percent: number;

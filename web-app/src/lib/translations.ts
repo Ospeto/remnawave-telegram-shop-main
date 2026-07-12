@@ -206,6 +206,11 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_pay_processing': 'Processing...',
         'wallet_pay_btn': 'Pay {{amount}} {{currency}} from Wallet',
         'wallet_pay_error': 'Wallet payment failed. Please check your balance and try again.',
+        'postpaid_pay_btn': 'Buy on credit ({{amount}} {{currency}})',
+        'postpaid_pay_processing': 'Processing credit purchase...',
+        'postpaid_pay_success': 'Purchase completed on credit',
+        'postpaid_credit_unavailable': 'Credit account unavailable',
+        'postpaid_insufficient_credit': 'Not enough credit remaining',
 
         // ── Wallet Top-up Success ──
         'success_topup_desc': 'Funds have been added to your wallet balance.',
@@ -568,6 +573,11 @@ export const translations: Record<Language, Record<string, string>> = {
         'wallet_pay_processing': 'ဆောင်ရွက်နေပါသည်...',
         'wallet_pay_btn': 'Wallet မှ {{amount}} {{currency}} ဖြတ်တောက်ရန်',
         'wallet_pay_error': 'Wallet မှ ငွေပေးချေမှု မအောင်မြင်ပါ။ ကျေးဇူးပြု၍ လက်ကျန်ငွေကို စစ်ဆေးပြီး ထပ်မံကြိုးစားပါ။',
+        'postpaid_pay_btn': 'အကြွေးဖြင့် ဝယ်မည် ({{amount}} {{currency}})',
+        'postpaid_pay_processing': 'အကြွေးဖြင့် ဝယ်ယူမှု ဆောင်ရွက်နေပါသည်...',
+        'postpaid_pay_success': 'အကြွေးဖြင့် ဝယ်ယူမှု ပြီးမြောက်ပါပြီ',
+        'postpaid_credit_unavailable': 'အကြွေးအကောင့် မရရှိနိုင်ပါ',
+        'postpaid_insufficient_credit': 'ကျန်ရှိသော အကြွေး မလုံလောက်ပါ',
 
         // ── Wallet Top-up Success ──
         'success_topup_desc': 'Wallet အတွင်းသို့ ငွေဖြည့်သွင်းခြင်း အောင်မြင်ပါသည်။',
