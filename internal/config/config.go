@@ -80,6 +80,7 @@ type config struct {
 	backupConfirmTTLMinutes                                   int
 	backupJobTimeoutSeconds                                   int
 	backupRestoreTimeoutSeconds                               int
+	resellerDefaultCreditLimit                                float64
 	botURLMu                                                  sync.RWMutex
 }
 
@@ -105,6 +106,10 @@ func DefaultLanguage() string {
 
 func GetReferralDays() int {
 	return conf.referralDays
+}
+
+func ResellerDefaultCreditLimit() float64 {
+	return conf.resellerDefaultCreditLimit
 }
 
 func GetMiniAppURL() string {
@@ -796,6 +801,13 @@ func InitConfig() (err error) {
 	}
 
 	conf.currency = envStringDefault("CURRENCY", "MMK")
+	conf.resellerDefaultCreditLimit, err = envFloatDefault("RESELLER_DEFAULT_CREDIT_LIMIT", 0)
+	if err != nil {
+		return err
+	}
+	if conf.resellerDefaultCreditLimit < 0 {
+		return fmt.Errorf("RESELLER_DEFAULT_CREDIT_LIMIT must be >= 0")
+	}
 	conf.backupEnabled = envBool("BACKUP_ENABLED")
 	conf.backupScheduleCron = envStringDefault("BACKUP_SCHEDULE_CRON", "10 0 * * *")
 	conf.backupTimezone = envStringDefault("BACKUP_TIMEZONE", "Asia/Rangoon")

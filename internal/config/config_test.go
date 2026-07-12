@@ -59,6 +59,7 @@ func setBaseConfigEnv(t *testing.T) {
 		"BACKUP_CONFIRM_TTL_MINUTES",
 		"BACKUP_JOB_TIMEOUT_SECONDS",
 		"BACKUP_RESTORE_TIMEOUT_SECONDS",
+		"RESELLER_DEFAULT_CREDIT_LIMIT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -126,6 +127,36 @@ func TestInitConfigLoadsMinimalValidEnvironment(t *testing.T) {
 	if got := RemnawaveMode(); got != "remote" {
 		t.Fatalf("RemnawaveMode() = %q, want remote", got)
 	}
+}
+
+func TestResellerDefaultCreditLimitDefaultZero(t *testing.T) {
+	setBaseConfigEnv(t)
+
+	if err := InitConfig(); err != nil {
+		t.Fatalf("InitConfig() error = %v", err)
+	}
+	if got := ResellerDefaultCreditLimit(); got != 0 {
+		t.Fatalf("ResellerDefaultCreditLimit() = %v, want 0", got)
+	}
+}
+
+func TestResellerDefaultCreditLimitPositiveValue(t *testing.T) {
+	setBaseConfigEnv(t)
+	t.Setenv("RESELLER_DEFAULT_CREDIT_LIMIT", "50000.5")
+
+	if err := InitConfig(); err != nil {
+		t.Fatalf("InitConfig() error = %v", err)
+	}
+	if got := ResellerDefaultCreditLimit(); got != 50000.5 {
+		t.Fatalf("ResellerDefaultCreditLimit() = %v, want 50000.5", got)
+	}
+}
+
+func TestResellerDefaultCreditLimitNegativeFails(t *testing.T) {
+	setBaseConfigEnv(t)
+	t.Setenv("RESELLER_DEFAULT_CREDIT_LIMIT", "-1")
+
+	requireInitConfigError(t, "RESELLER_DEFAULT_CREDIT_LIMIT must be >= 0")
 }
 
 func TestDefaultLanguageFallback(t *testing.T) {
