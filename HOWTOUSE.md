@@ -284,11 +284,11 @@ Content-Type: application/json
 
 - List fields: `GET /api/admin/resellers` includes `credit_limit`, `balance_owed`, `remaining_credit` per reseller.
 - Remaining credit = `credit_limit − balance_owed`. Order amount must be `≤ remaining credit` (no partial fulfill).
-- Clearing `is_reseller` while balance is owed: **new postpaid blocked**; settlement still allowed; past ledger kept.
+- Clearing `is_reseller` while balance is owed: **new postpaid blocked**; **admin offline settlement still allowed**; **reseller self-pay and `/reseller/account` require `is_reseller`** (HTTP 403 after demote); past ledger kept.
 
 ### Postpaid checkout
 
-- Available only to `is_reseller` customers in the **Mini App** Checkout when remaining credit covers the order (or limit &gt; 0 with clear messaging). Prepaid (mobile banking / wallet) remains available.
+- Available only to `is_reseller` customers in the **Mini App** Checkout when `credit_limit > 0` and `remaining_credit >= order amount`. Prepaid (mobile banking / wallet) remains available.
 - Flow: credit check → create service purchase at `ResolvePlanPrice` amount → **fulfill immediately** → AR ledger **sale** increases `balance_owed`.
 - **No cash and no wallet movement** on postpaid create.
 - Promo codes stay blocked for resellers (UI + server HTTP 400).
@@ -300,8 +300,8 @@ Two rails; both reduce `balance_owed` on the AR ledger:
 
 | Who | Endpoint | Effect |
 |-----|----------|--------|
-| Reseller self-pay | `POST /api/reseller/settlements` | Debits **wallet** for the settlement amount (wallet must cover it; **no negative wallet**). Body: `{ "amount", "payment_method": "wallet", "idempotency_key"? }`. |
-| Admin offline | `POST /api/admin/customers/{telegram_id}/settlements` | **Ledger-only** — records cash received offline; **does not** debit wallet. Body: `{ "amount", "note"?, "idempotency_key"? }`. |
+| Reseller self-pay | `POST /api/reseller/settlements` | Debits **wallet** for the settlement amount (wallet must cover it; **no negative wallet**). Body: `{ "amount", "payment_method": "wallet", "idempotency_key"? }` — if omitted, server may auto-generate a UUID. |
+| Admin offline | `POST /api/admin/customers/{telegram_id}/settlements` | **Ledger-only** — records cash received offline; **does not** debit wallet. Body: `{ "amount", "note"?, "idempotency_key" }`. **`idempotency_key` is required** (header `Idempotency-Key` or body `idempotency_key`). |
 
 - Reseller surfaces: `/reseller/account` (balance, limit, remaining, ledger, pay-balance CTA).
 - Admin surfaces: `/admin/resellers` (limit / owed / remaining, set limit, record settlement, open ledger).
