@@ -103,6 +103,8 @@ func RegisterHandlers(
 	mux.HandleFunc("/api/admin/promos", withAdmin(handler.AdminPromos))
 	mux.HandleFunc("/api/admin/promos/", withAdmin(handler.DeleteAdminPromo))
 	mux.HandleFunc("/api/admin/financial-adjustments", withAdmin(handler.CreateFinancialAdjustment))
+	mux.HandleFunc("/api/admin/resellers", withAdmin(handler.ListResellers))
+	mux.HandleFunc("/api/admin/customers/", withAdmin(handler.AdminCustomerByTelegramID))
 	mux.HandleFunc("/api/trial", withAuth(handler.ActivateTrial))
 
 	// Wallet endpoints

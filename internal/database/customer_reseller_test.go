@@ -33,3 +33,9 @@ func TestFindByTelegramIdSelectMentionsIsReseller(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+func TestListResellersMethodExists(t *testing.T) {
+	// Compile-time / structural guard: ListResellers is required for admin GET /api/admin/resellers.
+	var cr *CustomerRepository
+	_ = cr.ListResellers
+}

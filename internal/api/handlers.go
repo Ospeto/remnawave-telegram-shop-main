@@ -149,6 +149,8 @@ type AdminPlanResponse struct {
 	SortOrder      int    `json:"sort_order"`
 	Active         bool   `json:"active"`
 	Currency       string `json:"currency"`
+	// WholesalePrice: omitempty so null/absent clears do not force a zero field in list responses.
+	WholesalePrice *int `json:"wholesale_price,omitempty"`
 }
 
 type AdminPlanRequest struct {
@@ -157,6 +159,17 @@ type AdminPlanRequest struct {
 	Price          int    `json:"price"`
 	TrafficLimitGB int    `json:"traffic_limit_gb"`
 	SortOrder      int    `json:"sort_order"`
+	// WholesalePrice: omit or null clears; pointer distinguishes unset vs zero.
+	WholesalePrice *int `json:"wholesale_price"`
+}
+
+type AdminResellerRequest struct {
+	IsReseller bool `json:"is_reseller"`
+}
+
+type AdminResellerResponse struct {
+	TelegramID int64 `json:"telegram_id"`
+	IsReseller bool  `json:"is_reseller"`
 }
 
 type syncKeyStats = payment.KeyStats
@@ -273,6 +286,7 @@ func adminPlanResponse(plan config.Plan) AdminPlanResponse {
 		SortOrder:      plan.SortOrder,
 		Active:         plan.Active,
 		Currency:       config.Currency(),
+		WholesalePrice: plan.WholesalePrice,
 	}
 }
 
@@ -291,6 +305,14 @@ func validateAdminPlanRequest(req AdminPlanRequest) error {
 	}
 	if req.SortOrder < 0 {
 		return errors.New("Plan sort order cannot be negative")
+	}
+	if req.WholesalePrice != nil {
+		if *req.WholesalePrice <= 0 {
+			return errors.New("Plan wholesale price must be greater than zero")
+		}
+		if *req.WholesalePrice > req.Price {
+			return errors.New("Plan wholesale price cannot exceed price")
+		}
 	}
 	return nil
 }
@@ -450,6 +472,8 @@ type APIHandler struct {
 	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys            func(context.Context, int64, int64)
 	isAdminTelegramID          func(int64) bool
+	updateCustomerFields       func(context.Context, int64, map[string]interface{}) error
+	listResellersFn            func(context.Context) ([]database.Customer, error)
 }
 
 func NewAPIHandler(
@@ -586,6 +610,26 @@ func (h *APIHandler) persistPlans(ctx context.Context, plans []config.Plan) erro
 		return h.savePlansCatalog(ctx, plans)
 	}
 	return config.SavePlansCatalog(ctx, h.appConfigRepo, plans)
+}
+
+func (h *APIHandler) customerUpdateFields(ctx context.Context, id int64, updates map[string]interface{}) error {
+	if h.updateCustomerFields != nil {
+		return h.updateCustomerFields(ctx, id, updates)
+	}
+	if h.customerRepo == nil {
+		return errors.New("customer repository is unavailable")
+	}
+	return h.customerRepo.UpdateFields(ctx, id, updates)
+}
+
+func (h *APIHandler) resellers(ctx context.Context) ([]database.Customer, error) {
+	if h.listResellersFn != nil {
+		return h.listResellersFn(ctx)
+	}
+	if h.customerRepo == nil {
+		return nil, errors.New("customer repository is unavailable")
+	}
+	return h.customerRepo.ListResellers(ctx)
 }
 
 func (h *APIHandler) savePromoCode(ctx context.Context, code string, discount, maxUses int, validUntil time.Time) error {
@@ -1523,6 +1567,7 @@ func (h *APIHandler) CreateAdminPlan(w http.ResponseWriter, r *http.Request) {
 		TrafficLimitGB: req.TrafficLimitGB,
 		SortOrder:      nextSortOrder,
 		Active:         true,
+		WholesalePrice: req.WholesalePrice,
 	}
 	plans = append(plans, plan)
 	if err := h.persistPlans(r.Context(), plans); err != nil {
@@ -1572,6 +1617,7 @@ func (h *APIHandler) UpdateAdminPlan(w http.ResponseWriter, r *http.Request) {
 		plans[i].Price = req.Price
 		plans[i].TrafficLimitGB = req.TrafficLimitGB
 		plans[i].SortOrder = req.SortOrder
+		plans[i].WholesalePrice = req.WholesalePrice
 		updatedPlan = plans[i]
 		updated = true
 		break
@@ -1590,6 +1636,79 @@ func (h *APIHandler) UpdateAdminPlan(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(adminPlanResponse(updatedPlan))
+}
+
+func (h *APIHandler) ListResellers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	customers, err := h.resellers(r.Context())
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to list resellers", err)
+		return
+	}
+
+	resp := make([]AdminResellerResponse, 0, len(customers))
+	for _, c := range customers {
+		resp = append(resp, AdminResellerResponse{
+			TelegramID: c.TelegramID,
+			IsReseller: c.IsReseller,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) AdminCustomerByTelegramID(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/admin/customers/")
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[1] != "reseller" {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || telegramID == 0 {
+		http.Error(w, "Invalid telegram id", http.StatusBadRequest)
+		return
+	}
+
+	var req AdminResellerRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load customer", err)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "Customer not found", http.StatusNotFound)
+		return
+	}
+
+	if err := h.customerUpdateFields(r.Context(), customer.ID, map[string]interface{}{
+		"is_reseller": req.IsReseller,
+	}); err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to update reseller flag", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(AdminResellerResponse{
+		TelegramID: customer.TelegramID,
+		IsReseller: req.IsReseller,
+	})
 }
 
 func (h *APIHandler) DeleteAdminPlan(w http.ResponseWriter, r *http.Request) {

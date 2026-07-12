@@ -595,6 +595,56 @@ func (cr *CustomerRepository) FindByAutoRenewExpiring(ctx context.Context, befor
 	return customers, nil
 }
 
+// ListResellers returns customers with is_reseller=true.
+func (cr *CustomerRepository) ListResellers(ctx context.Context) ([]Customer, error) {
+	buildSelect := sq.Select("id", "telegram_id", "expire_at", "created_at", "subscription_link", "trial_used_at", "language", "balance", "auto_renew", "auto_renew_duration", "auto_renew_traffic_gb", "last_auto_renewed_at", "auto_renew_notified_at", "is_reseller").
+		From("customer").
+		Where(sq.Eq{"is_reseller": true}).
+		OrderBy("telegram_id ASC").
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build select query: %w", err)
+	}
+
+	rows, err := cr.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query resellers: %w", err)
+	}
+	defer rows.Close()
+
+	var customers []Customer
+	for rows.Next() {
+		var customer Customer
+		err := rows.Scan(
+			&customer.ID,
+			&customer.TelegramID,
+			&customer.ExpireAt,
+			&customer.CreatedAt,
+			&customer.SubscriptionLink,
+			&customer.TrialUsedAt,
+			&customer.Language,
+			&customer.Balance,
+			&customer.AutoRenew,
+			&customer.AutoRenewDuration,
+			&customer.AutoRenewTrafficGB,
+			&customer.LastAutoRenewedAt,
+			&customer.AutoRenewNotifiedAt,
+			&customer.IsReseller,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan reseller row: %w", err)
+		}
+		customers = append(customers, customer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating over reseller rows: %w", err)
+	}
+
+	return customers, nil
+}
+
 // MarkAutoRenewed stamps last_auto_renewed_at = now so the same expiry cycle
 // cannot trigger a second charge even if the cron fires twice.
 func (cr *CustomerRepository) MarkAutoRenewed(ctx context.Context, customerID int64) error {

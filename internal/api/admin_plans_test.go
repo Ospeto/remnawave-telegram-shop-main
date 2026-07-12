@@ -208,6 +208,123 @@ func TestUpdateAdminPlanPreservesIDAndUpdatesFields(t *testing.T) {
 	}
 }
 
+func TestCreateAdminPlanWithWholesalePrice(t *testing.T) {
+	original := config.AllPlans()
+	t.Cleanup(func() {
+		config.SetPlans(original)
+	})
+
+	config.SetPlans([]config.Plan{
+		{ID: "existing", Label: "Existing", Days: 30, Price: 10000, TrafficLimitGB: 0, SortOrder: 0, Active: true},
+	})
+
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
+		config.SetPlans(plans)
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/plans", bytes.NewBufferString(
+		`{"label":"Wholesale Starter","days":45,"price":5000,"traffic_limit_gb":0,"sort_order":1,"wholesale_price":4000}`,
+	))
+	rec := httptest.NewRecorder()
+
+	handler.CreateAdminPlan(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("CreateAdminPlan() status = %d, want %d body=%q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var payload AdminPlanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.WholesalePrice == nil || *payload.WholesalePrice != 4000 {
+		t.Fatalf("CreateAdminPlan() wholesale_price = %v, want 4000", payload.WholesalePrice)
+	}
+	if payload.Price != 5000 {
+		t.Fatalf("CreateAdminPlan() price = %d, want 5000", payload.Price)
+	}
+
+	created := config.PlanByID(payload.ID)
+	if created == nil || created.WholesalePrice == nil || *created.WholesalePrice != 4000 {
+		t.Fatalf("persisted plan wholesale = %+v, want 4000", created)
+	}
+}
+
+func TestCreateAdminPlanRejectsWholesaleAboveRetail(t *testing.T) {
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
+		config.SetPlans(plans)
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/plans", bytes.NewBufferString(
+		`{"label":"Bad Wholesale","days":30,"price":5000,"traffic_limit_gb":0,"sort_order":0,"wholesale_price":6000}`,
+	))
+	rec := httptest.NewRecorder()
+
+	handler.CreateAdminPlan(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("CreateAdminPlan() status = %d, want %d body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestUpdateAdminPlanClearsWholesalePrice(t *testing.T) {
+	original := config.AllPlans()
+	t.Cleanup(func() {
+		config.SetPlans(original)
+	})
+
+	wholesale := 4000
+	config.SetPlans([]config.Plan{
+		{
+			ID:             "plan-1",
+			Label:          "Starter",
+			Days:           30,
+			Price:          5000,
+			TrafficLimitGB: 0,
+			SortOrder:      0,
+			Active:         true,
+			WholesalePrice: &wholesale,
+		},
+	})
+
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.savePlansCatalog = func(_ context.Context, plans []config.Plan) error {
+		config.SetPlans(plans)
+		return nil
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/plans/plan-1", bytes.NewBufferString(
+		`{"label":"Starter","days":30,"price":5000,"traffic_limit_gb":0,"sort_order":0,"wholesale_price":null}`,
+	))
+	rec := httptest.NewRecorder()
+
+	handler.UpdateAdminPlan(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("UpdateAdminPlan() status = %d, want %d body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var payload AdminPlanResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.WholesalePrice != nil {
+		t.Fatalf("UpdateAdminPlan() wholesale_price = %v, want nil/cleared", payload.WholesalePrice)
+	}
+
+	updated := config.PlanByID("plan-1")
+	if updated == nil {
+		t.Fatal("PlanByID(plan-1) = nil")
+	}
+	if updated.WholesalePrice != nil {
+		t.Fatalf("persisted wholesale_price = %v, want nil", updated.WholesalePrice)
+	}
+}
+
 func TestDeleteAdminPlanRejectsArchivingLastActivePlan(t *testing.T) {
 	original := config.AllPlans()
 	t.Cleanup(func() {
