@@ -260,7 +260,7 @@ func TestExportRevenue_MixedCurrency400(t *testing.T) {
 
 func TestRegisterHandlersProtectsRevenueRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	for _, path := range []string{"/api/revenue?period=day", "/api/revenue/export?period=day"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

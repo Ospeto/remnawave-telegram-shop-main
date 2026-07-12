@@ -241,7 +241,7 @@ func TestCreateFinancialAdjustment_SentinelStatuses(t *testing.T) {
 
 func TestRegisterHandlersProtectsFinancialAdjustmentRoute(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/financial-adjustments", bytes.NewBufferString(`{}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

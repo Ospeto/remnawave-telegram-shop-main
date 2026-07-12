@@ -71,8 +71,11 @@ func RegisterHandlers(
 	appConfigRepo *database.AppConfigRepository,
 	financeService *reporting.FinanceService,
 	financialAdjustmentRepo *database.FinancialAdjustmentRepository,
+	resellerCreditRepo *database.ResellerCreditRepository,
+	walletTxRepo *database.WalletTransactionRepository,
 ) {
 	handler := NewAPIHandler(customerRepo, paymentService, telegramBot, tm, subKeyRepo, promoCodeRepository, walletService, referralRepo, appConfigRepo, financeService, financialAdjustmentRepo)
+	handler.SetResellerCreditDeps(resellerCreditRepo, walletTxRepo)
 
 	// Middleware chain
 	withAuth := func(next http.HandlerFunc) http.HandlerFunc {
@@ -111,6 +114,11 @@ func RegisterHandlers(
 	mux.HandleFunc("/api/wallet", withAuth(handler.GetWallet))
 	mux.HandleFunc("/api/wallet/history", withAuth(handler.GetWalletHistory))
 	mux.HandleFunc("/api/wallet/autorenew", withAuth(handler.UpdateAutoRenew))
+
+	// Reseller AR credit endpoints (Mini App)
+	mux.HandleFunc("/api/reseller/account", withAuth(handler.GetResellerAccount))
+	mux.HandleFunc("/api/reseller/ledger", withAuth(handler.GetResellerLedger))
+	mux.HandleFunc("/api/reseller/settlements", withAuth(handler.CreateResellerSettlement))
 
 	// Referral endpoint
 	mux.HandleFunc("/api/referrals", withAuth(handler.GetReferrals))

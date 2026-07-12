@@ -547,7 +547,7 @@ func main() {
 	})
 	mux.Handle("/readyz", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
 	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
-	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo, financeService, financialAdjustmentRepository)
+	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo, financeService, financialAdjustmentRepository, resellerCreditRepo, walletTxRepo)
 
 	// Rate Limiter: 10 req/s, burst 20
 	// This prevents abuse while allowing normal usage patterns.

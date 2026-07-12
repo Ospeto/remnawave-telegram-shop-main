@@ -311,7 +311,7 @@ func TestRegisterHandlersReturns404ForUnknownAPIPaths(t *testing.T) {
 	})
 
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/api/does-not-exist", nil)
 	rec := httptest.NewRecorder()

@@ -27,7 +27,7 @@ func (s inMemoryPlanConfigStore) Set(_ context.Context, key string, value string
 
 func TestRegisterHandlersProtectsAdminPlanRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name   string

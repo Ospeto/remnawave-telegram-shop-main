@@ -66,7 +66,7 @@ func TestPatchAdminCustomerResellerTrue(t *testing.T) {
 
 func TestRegisterHandlersProtectsAdminResellerRoutes(t *testing.T) {
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	tests := []struct {
 		name   string

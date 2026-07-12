@@ -114,6 +114,44 @@ type CreatePurchaseResponse struct {
 	PricingTier      string                    `json:"pricing_tier,omitempty"`
 }
 
+// ResellerAccountResponse is the Mini App AR credit snapshot for a reseller.
+type ResellerAccountResponse struct {
+	CreditLimit     float64 `json:"credit_limit"`
+	BalanceOwed     float64 `json:"balance_owed"`
+	RemainingCredit float64 `json:"remaining_credit"`
+	IsReseller      bool    `json:"is_reseller"`
+}
+
+// ResellerLedgerItem is one AR ledger row returned to the Mini App.
+type ResellerLedgerItem struct {
+	ID          int64   `json:"id"`
+	EntryType   string  `json:"entry_type"`
+	Direction   string  `json:"direction"`
+	Amount      float64 `json:"amount"`
+	PurchaseID  *int64  `json:"purchase_id,omitempty"`
+	EffectiveAt string  `json:"effective_at"`
+	Note        string  `json:"note,omitempty"`
+	CreatedBy   string  `json:"created_by"`
+}
+
+// CreateSettlementRequest is the body for POST /api/reseller/settlements.
+type CreateSettlementRequest struct {
+	Amount         float64 `json:"amount"`
+	PaymentMethod  string  `json:"payment_method"` // "wallet" only in v1
+	IdempotencyKey string  `json:"idempotency_key,omitempty"`
+	Note           string  `json:"note,omitempty"`
+}
+
+// CreateSettlementResponse is returned after a wallet AR settlement (or idempotent replay).
+type CreateSettlementResponse struct {
+	Created         bool    `json:"created"`
+	Amount          float64 `json:"amount"`
+	BalanceOwed     float64 `json:"balance_owed"`
+	RemainingCredit float64 `json:"remaining_credit"`
+	IdempotencyKey  string  `json:"idempotency_key"`
+	LedgerEntryID   int64   `json:"ledger_entry_id"`
+}
+
 type PendingPurchaseConflictResponse struct {
 	Code            string                 `json:"code"`
 	Message         string                 `json:"message"`
@@ -249,6 +287,26 @@ func mapCreatePurchaseIdempotencyError(err error) (status int, message string, o
 		return http.StatusForbidden, "Idempotency key conflict", true
 	case errors.Is(err, payment.ErrIdempotencyRequestMismatch):
 		return http.StatusConflict, "Idempotency key already used with a different request", true
+	default:
+		return 0, "", false
+	}
+}
+
+// mapCreatePurchasePostpaidError maps expected postpaid/AR failures to 400 responses.
+// Unexpected errors (nil repo, DB, etc.) return ok=false so callers sanitize as 500.
+func mapCreatePurchasePostpaidError(err error) (status int, message string, ok bool) {
+	if err == nil {
+		return 0, "", false
+	}
+	if errors.Is(err, database.ErrResellerInsufficientCredit) {
+		return http.StatusBadRequest, "Insufficient reseller credit", true
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "postpaid is only available for resellers"):
+		return http.StatusBadRequest, "postpaid is only available for resellers", true
+	case strings.Contains(msg, "postpaid amount must be positive"):
+		return http.StatusBadRequest, "postpaid amount must be positive", true
 	default:
 		return 0, "", false
 	}
@@ -424,6 +482,8 @@ func parsePaymentMethod(method string) (database.InvoiceType, error) {
 		return database.InvoiceTypeWalletPayment, nil
 	case "wallet_topup":
 		return database.InvoiceTypeWalletTopUp, nil
+	case "postpaid":
+		return database.InvoiceTypePostpaid, nil
 	default:
 		return "", fmt.Errorf("unsupported payment_method %q", method)
 	}
@@ -441,39 +501,49 @@ type financeReporter interface {
 }
 
 type APIHandler struct {
-	customerRepo               *database.CustomerRepository
-	paymentService             *payment.PaymentService
-	telegramBot                *bot.Bot
-	translation                *translation.Manager
-	subKeyRepo                 *database.SubscriptionKeyRepository
-	promoCodeRepository        *database.PromoCodeRepository
-	appConfigRepo              *database.AppConfigRepository
-	walletService              *walletsvc.WalletService
-	referralRepo               *database.ReferralRepository
-	financeService             financeReporter
-	financialAdjustmentRepo    financialAdjustmentCreator
-	screenshotMu               sync.Mutex
-	screenshotAttempts         map[int64]time.Time
-	customerScreenshotAttempts map[int64][]time.Time
-	screenshotInFlight         map[int64]struct{}
-	now                        func() time.Time
-	findCustomerByTelegramID   func(context.Context, int64) (*database.Customer, error)
-	getPurchaseByID            func(context.Context, int64) (*database.Purchase, error)
-	findPromoByCode            func(context.Context, string) (*database.PromoCode, error)
-	createServicePurchase      func(context.Context, float64, int, int, *database.Customer, database.InvoiceType, string) (string, int64, error)
+	customerRepo                *database.CustomerRepository
+	paymentService              *payment.PaymentService
+	telegramBot                 *bot.Bot
+	translation                 *translation.Manager
+	subKeyRepo                  *database.SubscriptionKeyRepository
+	promoCodeRepository         *database.PromoCodeRepository
+	appConfigRepo               *database.AppConfigRepository
+	walletService               *walletsvc.WalletService
+	referralRepo                *database.ReferralRepository
+	financeService              financeReporter
+	financialAdjustmentRepo     financialAdjustmentCreator
+	resellerCreditRepo          *database.ResellerCreditRepository
+	walletTxRepo                *database.WalletTransactionRepository
+	screenshotMu                sync.Mutex
+	screenshotAttempts          map[int64]time.Time
+	customerScreenshotAttempts  map[int64][]time.Time
+	screenshotInFlight          map[int64]struct{}
+	now                         func() time.Time
+	findCustomerByTelegramID    func(context.Context, int64) (*database.Customer, error)
+	getPurchaseByID             func(context.Context, int64) (*database.Purchase, error)
+	findPromoByCode             func(context.Context, string) (*database.PromoCode, error)
+	createServicePurchase       func(context.Context, float64, int, int, *database.Customer, database.InvoiceType, string) (string, int64, error)
 	createServicePurchaseExtend func(context.Context, float64, int, int, *database.Customer, database.InvoiceType, string, int64) (string, int64, error)
-	listPromoCodes             func(context.Context) ([]database.PromoCode, error)
-	createPromoCode            func(context.Context, string, int, int, time.Time) error
-	deletePromoCode            func(context.Context, string) error
-	retirePromoCode            func(context.Context, string, time.Time) error
-	savePlansCatalog           func(context.Context, []config.Plan) error
-	findSubscriptionKeys       func(context.Context, int64) ([]database.SubscriptionKey, error)
-	activateCustomerTrial      func(context.Context, int64) (string, error)
-	getCachedSyncKeys          func(int64) ([]syncKeyStats, bool)
-	triggerSyncKeys            func(context.Context, int64, int64)
-	isAdminTelegramID          func(int64) bool
-	updateCustomerFields       func(context.Context, int64, map[string]interface{}) error
-	listResellersFn            func(context.Context) ([]database.Customer, error)
+	listPromoCodes              func(context.Context) ([]database.PromoCode, error)
+	createPromoCode             func(context.Context, string, int, int, time.Time) error
+	deletePromoCode             func(context.Context, string) error
+	retirePromoCode             func(context.Context, string, time.Time) error
+	savePlansCatalog            func(context.Context, []config.Plan) error
+	findSubscriptionKeys        func(context.Context, int64) ([]database.SubscriptionKey, error)
+	activateCustomerTrial       func(context.Context, int64) (string, error)
+	getCachedSyncKeys           func(int64) ([]syncKeyStats, bool)
+	triggerSyncKeys             func(context.Context, int64, int64)
+	isAdminTelegramID           func(int64) bool
+	updateCustomerFields        func(context.Context, int64, map[string]interface{}) error
+	listResellersFn             func(context.Context) ([]database.Customer, error)
+}
+
+// SetResellerCreditDeps wires AR credit + wallet transaction repos used by
+// reseller account/ledger/settlement endpoints. Optional for unit tests that
+// only exercise purchase parsing.
+func (h *APIHandler) SetResellerCreditDeps(credit *database.ResellerCreditRepository, walletTx *database.WalletTransactionRepository) {
+	h.resellerCreditRepo = credit
+	h.walletTxRepo = walletTx
 }
 
 func NewAPIHandler(
@@ -1108,6 +1178,12 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		ctx = payment.WithPricingTier(ctx, tier)
 	}
 
+	// Defense in depth: reject non-reseller postpaid before payment layer.
+	if invoiceType == database.InvoiceTypePostpaid && !customer.IsReseller {
+		http.Error(w, "postpaid is only available for resellers", http.StatusBadRequest)
+		return
+	}
+
 	if req.ExtendKeyID != nil {
 		if invoiceType == database.InvoiceTypeWalletTopUp {
 			http.Error(w, "extend_key_id is not valid for wallet top-up", http.StatusBadRequest)
@@ -1147,6 +1223,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if status, message, ok := mapCreatePurchaseIdempotencyError(err); ok {
+			http.Error(w, message, status)
+			return
+		}
+		if status, message, ok := mapCreatePurchasePostpaidError(err); ok {
 			http.Error(w, message, status)
 			return
 		}
@@ -1206,7 +1286,8 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 
 	happLink := ""
-	if purchase.InvoiceType == database.InvoiceTypeWalletPayment {
+	// Wallet and postpaid fulfill immediately — include happ deep link when available.
+	if purchase.InvoiceType == database.InvoiceTypeWalletPayment || purchase.InvoiceType == database.InvoiceTypePostpaid {
 		if h.subKeyRepo != nil {
 			if req.ExtendKeyID != nil {
 				if extendKey, kErr := h.subKeyRepo.FindByID(ctx, *req.ExtendKeyID); kErr == nil && extendKey != nil && extendKey.SubscriptionURL != "" {
@@ -2516,6 +2597,287 @@ type createFinancialAdjustmentRequest struct {
 	Reason         string  `json:"reason"`
 	ExternalRef    string  `json:"external_ref"`
 	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+// GetResellerAccount returns the authenticated reseller's AR credit snapshot.
+func (h *APIHandler) GetResellerAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.resellerCreditRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller credit unavailable", fmt.Errorf("reseller credit repo nil"))
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	if !customer.IsReseller {
+		http.Error(w, "Reseller access required", http.StatusForbidden)
+		return
+	}
+
+	acct, err := h.resellerCreditRepo.EnsureAccount(r.Context(), customer.ID, config.ResellerDefaultCreditLimit())
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load reseller account", err)
+		return
+	}
+
+	resp := ResellerAccountResponse{
+		CreditLimit:     acct.CreditLimit,
+		BalanceOwed:     acct.BalanceOwed,
+		RemainingCredit: acct.RemainingCredit(),
+		IsReseller:      true,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// GetResellerLedger returns paginated AR ledger entries for the authenticated reseller.
+func (h *APIHandler) GetResellerLedger(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.resellerCreditRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller credit unavailable", fmt.Errorf("reseller credit repo nil"))
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	if !customer.IsReseller {
+		http.Error(w, "Reseller access required", http.StatusForbidden)
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "offset must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		offset = n
+	}
+
+	entries, err := h.resellerCreditRepo.ListLedger(r.Context(), customer.ID, limit, offset)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load reseller ledger", err)
+		return
+	}
+
+	items := make([]ResellerLedgerItem, 0, len(entries))
+	for _, e := range entries {
+		item := ResellerLedgerItem{
+			ID:          e.ID,
+			EntryType:   string(e.EntryType),
+			Direction:   string(e.Direction),
+			Amount:      e.Amount,
+			PurchaseID:  e.PurchaseID,
+			EffectiveAt: e.EffectiveAt.UTC().Format(time.RFC3339),
+			CreatedBy:   e.CreatedBy,
+		}
+		if note := strings.TrimSpace(e.Note); note != "" {
+			item.Note = note
+		}
+		items = append(items, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(items)
+}
+
+// CreateResellerSettlement pays down AR balance_owed from wallet in one DB transaction.
+// Money-safety: wallet debit + wallet_tx log + RecordSettlementTx commit together or not at all.
+func (h *APIHandler) CreateResellerSettlement(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.resellerCreditRepo == nil || h.walletTxRepo == nil || h.customerRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller settlement unavailable", fmt.Errorf("reseller settlement deps nil"))
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req CreateSettlementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if strings.ToLower(strings.TrimSpace(req.PaymentMethod)) != "wallet" {
+		http.Error(w, `payment_method must be "wallet"`, http.StatusBadRequest)
+		return
+	}
+	if req.Amount <= 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) {
+		http.Error(w, "amount must be a finite positive number", http.StatusBadRequest)
+		return
+	}
+
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if idempotencyKey == "" {
+		idempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if idempotencyKey == "" {
+		idempotencyKey = uuid.NewString()
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+	if !customer.IsReseller {
+		http.Error(w, "Reseller access required", http.StatusForbidden)
+		return
+	}
+
+	// Ensure AR account exists before settlement lock.
+	if _, err := h.resellerCreditRepo.EnsureAccount(r.Context(), customer.ID, config.ResellerDefaultCreditLimit()); err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to ensure reseller account", err)
+		return
+	}
+
+	ctx := r.Context()
+	dbTx, err := h.customerRepo.BeginTx(ctx)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to begin settlement transaction", err)
+		return
+	}
+	defer func() { _ = dbTx.Rollback(ctx) }()
+
+	if err := h.customerRepo.DeductBalanceTx(ctx, dbTx, customer.ID, req.Amount); err != nil {
+		if strings.Contains(err.Error(), "insufficient balance") {
+			http.Error(w, "Insufficient wallet balance", http.StatusBadRequest)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to deduct wallet balance", err)
+		return
+	}
+
+	// Match wallet purchase logging: type=purchase, amount negative (debit).
+	if _, err := h.walletTxRepo.CreateTx(ctx, dbTx, &database.WalletTransaction{
+		CustomerID:  customer.ID,
+		Amount:      -req.Amount,
+		Type:        database.WalletTransactionTypePurchase,
+		PurchaseID:  nil,
+		Description: "AR settlement",
+	}); err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to log wallet settlement", err)
+		return
+	}
+
+	entry, acct, created, err := h.resellerCreditRepo.RecordSettlementTx(ctx, dbTx, database.CreateLedgerEntryInput{
+		CustomerID:     customer.ID,
+		EntryType:      database.ResellerLedgerEntryTypeSettlement,
+		Direction:      database.ResellerLedgerDirectionDecrease,
+		Amount:         req.Amount,
+		EffectiveAt:    h.currentTime().UTC(),
+		Note:           strings.TrimSpace(req.Note),
+		CreatedBy:      fmt.Sprintf("customer:%d", telegramID),
+		IdempotencyKey: idempotencyKey,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, database.ErrResellerOverSettlement):
+			http.Error(w, "Settlement amount exceeds balance owed", http.StatusBadRequest)
+			return
+		case errors.Is(err, database.ErrResellerLedgerIdempotencyMismatch):
+			http.Error(w, "Idempotency key already used with a different settlement", http.StatusConflict)
+			return
+		default:
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to record AR settlement", err)
+			return
+		}
+	}
+
+	// Idempotent replay: AR was not mutated. Roll back the provisional wallet
+	// debit so a retry never double-charges the wallet.
+	if !created {
+		_ = dbTx.Rollback(ctx)
+		// Prefer live account snapshot after rollback for remaining credit.
+		if live, getErr := h.resellerCreditRepo.GetAccount(ctx, customer.ID); getErr == nil && live != nil {
+			acct = live
+		}
+		resp := CreateSettlementResponse{
+			Created:         false,
+			Amount:          entry.Amount,
+			BalanceOwed:     acct.BalanceOwed,
+			RemainingCredit: acct.RemainingCredit(),
+			IdempotencyKey:  idempotencyKey,
+			LedgerEntryID:   entry.ID,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to commit settlement", err)
+		return
+	}
+
+	resp := CreateSettlementResponse{
+		Created:         true,
+		Amount:          entry.Amount,
+		BalanceOwed:     acct.BalanceOwed,
+		RemainingCredit: acct.RemainingCredit(),
+		IdempotencyKey:  idempotencyKey,
+		LedgerEntryID:   entry.ID,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *APIHandler) CreateFinancialAdjustment(w http.ResponseWriter, r *http.Request) {
