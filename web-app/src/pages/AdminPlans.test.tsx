@@ -83,6 +83,7 @@ describe('AdminPlans', () => {
                 currency: 'MMK',
                 sort_order: 0,
                 active: true,
+                wholesale_price: 4000,
             },
             {
                 id: 'legacy-7',
@@ -126,6 +127,7 @@ describe('AdminPlans', () => {
                     price: body.price,
                     traffic_limit_gb: body.traffic_limit_gb,
                     sort_order: body.sort_order,
+                    wholesale_price: body.wholesale_price ?? null,
                     active: true,
                     currency: 'MMK',
                 };
@@ -142,6 +144,7 @@ describe('AdminPlans', () => {
                     price: body.price,
                     traffic_limit_gb: body.traffic_limit_gb,
                     sort_order: body.sort_order,
+                    wholesale_price: body.wholesale_price ?? null,
                     active: true,
                     currency: 'MMK',
                 };
@@ -170,6 +173,7 @@ describe('AdminPlans', () => {
         expect(screen.getByText('2')).toBeTruthy();
         expect(screen.getAllByText('Archived').length).toBeGreaterThan(0);
         expect(screen.getByText('1 Month')).toBeTruthy();
+        expect(screen.getByText(/4,000/)).toBeTruthy();
 
         const createSection = screen.getByRole('button', { name: 'Create Plan' }).closest('section');
         if (!createSection) throw new Error('Create section not found');
@@ -178,16 +182,33 @@ describe('AdminPlans', () => {
         fireEvent.change(within(createSection).getByLabelText('Duration days'), { target: { value: '90' } });
         fireEvent.change(within(createSection).getByLabelText('Price'), { target: { value: '12000' } });
         fireEvent.change(within(createSection).getByLabelText('Traffic limit GB'), { target: { value: '0' } });
+        fireEvent.change(within(createSection).getByLabelText('Wholesale price'), { target: { value: '10000' } });
         fireEvent.click(screen.getByRole('button', { name: 'Create Plan' }));
+
+        await waitFor(() => {
+            const createCall = fetchMock.mock.calls.find(
+                ([input, init]) => String(input) === '/api/admin/plans' && (init as RequestInit | undefined)?.method === 'POST',
+            );
+            expect(createCall).toBeTruthy();
+            const body = JSON.parse(String((createCall?.[1] as RequestInit).body));
+            expect(body.wholesale_price).toBe(10000);
+        });
 
         expect(await screen.findByText('3 Months')).toBeTruthy();
 
         const planCard = screen.getByTestId('admin-plan-basic-30');
         fireEvent.change(within(planCard).getByLabelText('Plan label'), { target: { value: '1 Month Plus' } });
         fireEvent.change(within(planCard).getByLabelText('Price'), { target: { value: '5500' } });
+        fireEvent.change(within(planCard).getByLabelText('Wholesale price'), { target: { value: '' } });
         fireEvent.click(within(planCard).getByRole('button', { name: 'Save Changes' }));
 
         await waitFor(() => {
+            const patchCall = fetchMock.mock.calls.find(
+                ([input, init]) => String(input) === '/api/admin/plans/basic-30' && (init as RequestInit | undefined)?.method === 'PATCH',
+            );
+            expect(patchCall).toBeTruthy();
+            const body = JSON.parse(String((patchCall?.[1] as RequestInit).body));
+            expect(body.wholesale_price).toBeNull();
             expect(screen.getByText('1 Month Plus')).toBeTruthy();
         });
 
@@ -196,6 +217,73 @@ describe('AdminPlans', () => {
 
         await waitFor(() => {
             expect(screen.getAllByText('Archived').length).toBeGreaterThan(1);
+        });
+    });
+
+    it('submits wholesale_price as null when the wholesale field is cleared on save', async () => {
+        const plans = [
+            {
+                id: 'basic-30',
+                label: '1 Month',
+                days: 30,
+                price: 5000,
+                traffic_limit_gb: 0,
+                currency: 'MMK',
+                sort_order: 0,
+                active: true,
+                wholesale_price: 4000,
+            },
+        ];
+
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            const method = init?.method ?? 'GET';
+
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_admin: true,
+                });
+            }
+
+            if (url === '/api/admin/plans' && method === 'GET') {
+                return jsonResponse(plans);
+            }
+
+            if (url === '/api/admin/plans/basic-30' && method === 'PATCH') {
+                const body = JSON.parse(String(init?.body ?? '{}'));
+                return jsonResponse({
+                    ...plans[0],
+                    ...body,
+                    wholesale_price: body.wholesale_price,
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${method} ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/admin/plans', element: <AdminPlans /> },
+            { path: '/', element: <div>Home</div> },
+        ], ['/admin/plans']);
+
+        const planCard = await screen.findByTestId('admin-plan-basic-30');
+        fireEvent.change(within(planCard).getByLabelText('Wholesale price'), { target: { value: '' } });
+        fireEvent.click(within(planCard).getByRole('button', { name: 'Save Changes' }));
+
+        await waitFor(() => {
+            const patchCall = fetchMock.mock.calls.find(
+                ([input, init]) => String(input) === '/api/admin/plans/basic-30' && (init as RequestInit | undefined)?.method === 'PATCH',
+            );
+            expect(patchCall).toBeTruthy();
+            const body = JSON.parse(String((patchCall?.[1] as RequestInit).body));
+            expect(body).toHaveProperty('wholesale_price', null);
         });
     });
 });

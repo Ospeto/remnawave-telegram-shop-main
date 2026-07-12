@@ -106,6 +106,7 @@ describe('Home', () => {
             { path: '/admin/plans', element: <div>Plan Admin</div> },
             { path: '/admin/promos', element: <div>Promo Admin</div> },
             { path: '/admin/finance', element: <div>Finance Admin</div> },
+            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
@@ -113,6 +114,7 @@ describe('Home', () => {
         expect(screen.getByRole('link', { name: /Promo Codes/i })).toBeTruthy();
         expect(screen.getByRole('link', { name: /Plans/i })).toBeTruthy();
         expect(screen.getByRole('link', { name: /Finance/i })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /Resellers/i })).toBeTruthy();
     });
 
     it('hides the admin promo card for non-admin users', async () => {
@@ -133,6 +135,7 @@ describe('Home', () => {
             { path: '/admin/plans', element: <div>Plan Admin</div> },
             { path: '/admin/promos', element: <div>Promo Admin</div> },
             { path: '/admin/finance', element: <div>Finance Admin</div> },
+            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
@@ -140,6 +143,51 @@ describe('Home', () => {
         expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
         expect(screen.queryByRole('link', { name: /Plans/i })).toBeNull();
         expect(screen.queryByRole('link', { name: /Finance/i })).toBeNull();
+        expect(screen.queryByRole('link', { name: /Resellers/i })).toBeNull();
+    });
+
+    it('shows Resellers admin card only for admins', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: true,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.getByRole('link', { name: /Resellers Toggle wholesale access by Telegram ID/i })).toBeTruthy();
+    });
+
+    it('hides Resellers admin card for non-admin users', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: false,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.queryByRole('link', { name: /Resellers/i })).toBeNull();
     });
 
     it('shows Finance admin card for admins', async () => {

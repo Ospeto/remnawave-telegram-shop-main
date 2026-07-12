@@ -15,6 +15,7 @@ interface PlanFormState {
     days: string;
     price: string;
     trafficLimitGB: string;
+    wholesalePrice: string;
 }
 
 const INITIAL_FORM: PlanFormState = {
@@ -22,6 +23,7 @@ const INITIAL_FORM: PlanFormState = {
     days: '',
     price: '',
     trafficLimitGB: '0',
+    wholesalePrice: '',
 };
 
 function formFromPlan(plan: AdminPlan): PlanFormState {
@@ -30,7 +32,14 @@ function formFromPlan(plan: AdminPlan): PlanFormState {
         days: String(plan.days),
         price: String(plan.price),
         trafficLimitGB: String(plan.traffic_limit_gb),
+        wholesalePrice: plan.wholesale_price != null ? String(plan.wholesale_price) : '',
     };
+}
+
+function parseWholesalePrice(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    return Number(trimmed);
 }
 
 function isWholeNumber(value: string): boolean {
@@ -139,6 +148,15 @@ export function AdminPlans() {
         if (!isWholeNumber(draft.trafficLimitGB)) {
             return t('admin_plans_validation_traffic');
         }
+        const wholesaleTrimmed = draft.wholesalePrice.trim();
+        if (wholesaleTrimmed) {
+            if (!isWholeNumber(wholesaleTrimmed) || Number(wholesaleTrimmed) <= 0) {
+                return t('admin_plans_validation_wholesale');
+            }
+            if (Number(wholesaleTrimmed) > Number(draft.price)) {
+                return t('admin_plans_validation_wholesale_max');
+            }
+        }
         return null;
     }, [t]);
     const createValidationError = validatePlanForm(form);
@@ -169,6 +187,7 @@ export function AdminPlans() {
                     price: Number(form.price),
                     traffic_limit_gb: Number(form.trafficLimitGB),
                     sort_order: nextSortOrder,
+                    wholesale_price: parseWholesalePrice(form.wholesalePrice),
                 }),
             });
 
@@ -225,6 +244,7 @@ export function AdminPlans() {
                     price: Number(draft.price),
                     traffic_limit_gb: Number(draft.trafficLimitGB),
                     sort_order: plan.sort_order,
+                    wholesale_price: parseWholesalePrice(draft.wholesalePrice),
                 }),
             });
 
@@ -407,6 +427,18 @@ export function AdminPlans() {
                             required
                         />
                     </label>
+                    <label className="admin-promo-field admin-promo-field-full">
+                        <span className="admin-promo-label">{t('admin_plans_wholesale_label')}</span>
+                        <input
+                            className="admin-promo-input"
+                            type="number"
+                            min="1"
+                            value={form.wholesalePrice}
+                            onChange={(event) => setForm((prev) => ({ ...prev, wholesalePrice: event.target.value }))}
+                            aria-label={t('admin_plans_wholesale_label')}
+                            placeholder={t('admin_plans_wholesale_placeholder')}
+                        />
+                    </label>
                     <button className="btn-primary admin-promo-submit" type="submit" disabled={submitting || createValidationError !== null}>
                         {submitting ? t('admin_plans_creating') : t('admin_plans_create')}
                     </button>
@@ -514,6 +546,18 @@ export function AdminPlans() {
                                                 required
                                             />
                                         </label>
+                                        <label className="admin-promo-field admin-promo-field-full">
+                                            <span className="admin-promo-label">{t('admin_plans_wholesale_label')}</span>
+                                            <input
+                                                className="admin-promo-input"
+                                                type="number"
+                                                min="1"
+                                                aria-label={t('admin_plans_wholesale_label')}
+                                                value={draft.wholesalePrice}
+                                                onChange={(event) => setEditForms((prev) => ({ ...prev, [plan.id]: { ...draft, wholesalePrice: event.target.value } }))}
+                                                placeholder={t('admin_plans_wholesale_placeholder')}
+                                            />
+                                        </label>
                                     </div>
 
                                     <div className="admin-promo-metrics" style={{ marginTop: 16 }}>
@@ -524,6 +568,14 @@ export function AdminPlans() {
                                         <div className="admin-promo-metric-card">
                                             <span className="admin-promo-metric-label">{t('admin_plans_price_metric')}</span>
                                             <strong className="admin-promo-metric-value">{plan.price.toLocaleString()} {plan.currency}</strong>
+                                        </div>
+                                        <div className="admin-promo-metric-card">
+                                            <span className="admin-promo-metric-label">{t('admin_plans_wholesale_metric')}</span>
+                                            <strong className="admin-promo-metric-value">
+                                                {plan.wholesale_price != null
+                                                    ? `${plan.wholesale_price.toLocaleString()} ${plan.currency}`
+                                                    : t('admin_plans_wholesale_none')}
+                                            </strong>
                                         </div>
                                         <div className="admin-promo-metric-card">
                                             <span className="admin-promo-metric-label">{t('admin_plans_traffic_metric')}</span>
