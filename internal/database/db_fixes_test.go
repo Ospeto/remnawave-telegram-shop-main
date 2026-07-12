@@ -55,6 +55,7 @@ func TestInvoiceTypeConstants(t *testing.T) {
 		database.InvoiceTypeMobileBanking: "mobile_banking",
 		database.InvoiceTypeWalletTopUp:   "wallet_topup",
 		database.InvoiceTypeWalletPayment: "wallet_payment",
+		database.InvoiceTypePostpaid:      "postpaid",
 	}
 
 	for constant, want := range wantValues {

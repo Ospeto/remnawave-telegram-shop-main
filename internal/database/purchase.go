@@ -21,6 +21,7 @@ const (
 	InvoiceTypeMobileBanking InvoiceType = "mobile_banking"
 	InvoiceTypeWalletTopUp   InvoiceType = "wallet_topup"
 	InvoiceTypeWalletPayment InvoiceType = "wallet_payment"
+	InvoiceTypePostpaid      InvoiceType = "postpaid"
 )
 
 type PurchaseStatus string
