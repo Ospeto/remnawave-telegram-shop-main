@@ -58,6 +58,7 @@ type Purchase struct {
 	TransactionID     string         `db:"transaction_id"`
 	PromoCodeID       *int64         `db:"promo_code_id"`
 	IdempotencyKey    *uuid.UUID     `db:"idempotency_key"`
+	PricingTier       string         `db:"pricing_tier"`
 }
 
 type PurchaseRepository struct {
@@ -73,9 +74,13 @@ func NewPurchaseRepository(pool *pgxpool.Pool) *PurchaseRepository {
 }
 
 func buildPurchaseInsert(purchase *Purchase) sq.InsertBuilder {
+	tier := purchase.PricingTier
+	if tier == "" {
+		tier = "retail"
+	}
 	return sq.Insert("purchase").
-		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id", "promo_code_id", "idempotency_key").
-		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID, purchase.PromoCodeID, purchase.IdempotencyKey).
+		Columns("amount", "customer_id", "month", "currency", "expire_at", "status", "invoice_type", "crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id", "traffic_limit_gb", "days", "extend_key_id", "promo_code_id", "idempotency_key", "pricing_tier").
+		Values(purchase.Amount, purchase.CustomerID, purchase.Month, purchase.Currency, purchase.ExpireAt, purchase.Status, purchase.InvoiceType, purchase.CryptoInvoiceID, purchase.CryptoInvoiceLink, purchase.YookasaURL, purchase.YookasaID, purchase.TrafficLimitGB, purchase.Days, purchase.ExtendKeyID, purchase.PromoCodeID, purchase.IdempotencyKey, tier).
 		Suffix("RETURNING id").
 		PlaceholderFormat(sq.Dollar)
 }
@@ -116,6 +121,7 @@ var purchaseColumns = []string{
 	"crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id",
 	"traffic_limit_gb", "days", "extend_key_id",
 	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id", "idempotency_key",
+	"pricing_tier",
 }
 
 // scanPurchaseRow scans a single pgx.Row into a Purchase.
@@ -127,6 +133,7 @@ func scanPurchase(row pgx.Row) (*Purchase, error) {
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
 		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
+		&p.PricingTier,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -147,6 +154,7 @@ func scanPurchaseRow(rows pgx.Rows) (*Purchase, error) {
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
 		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
+		&p.PricingTier,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan purchase row: %w", err)
