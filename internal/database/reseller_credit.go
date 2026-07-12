@@ -92,9 +92,9 @@ func NewResellerCreditRepository(pool *pgxpool.Pool) *ResellerCreditRepository {
 	return &ResellerCreditRepository{pool: pool}
 }
 
-// normalizeResellerAmount requires a positive amount and rounds to two decimals
+// NormalizeResellerAmount requires a positive amount and rounds to two decimals
 // (half away from zero), matching financial_adjustment money handling.
-func normalizeResellerAmount(amount float64) (float64, error) {
+func NormalizeResellerAmount(amount float64) (float64, error) {
 	if amount <= 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return 0, fmt.Errorf("amount must be positive")
 	}
@@ -165,7 +165,7 @@ func validateCreateLedgerEntryInput(
 	if in.EffectiveAt.IsZero() {
 		return 0, fmt.Errorf("effective_at is required")
 	}
-	return normalizeResellerAmount(in.Amount)
+	return NormalizeResellerAmount(in.Amount)
 }
 
 func buildEnsureAccountSQL() string {
@@ -183,10 +183,11 @@ func buildGetAccountSQL() string {
 }
 
 func buildSetCreditLimitSQL() string {
+	// Atomic guard: reject limit < balance_owed without a separate read/TOCTOU window.
 	return `
 		UPDATE reseller_credit_account
 		SET credit_limit = $2, updated_at = NOW()
-		WHERE customer_id = $1
+		WHERE customer_id = $1 AND balance_owed <= $2
 		RETURNING customer_id, credit_limit, balance_owed, created_at, updated_at`
 }
 
@@ -262,6 +263,8 @@ func scanResellerLedgerEntry(row pgx.Row, dest *ResellerLedgerEntry) error {
 }
 
 // resellerLedgerPayloadMatches compares identity fields for idempotent replay.
+// EffectiveAt is intentionally excluded: handlers stamp now() on each attempt, so
+// retries with the same idempotency key must still match (first-write-wins on insert).
 func resellerLedgerPayloadMatches(existing *ResellerLedgerEntry, in CreateLedgerEntryInput, amount float64) bool {
 	if existing == nil {
 		return false
@@ -279,9 +282,6 @@ func resellerLedgerPayloadMatches(existing *ResellerLedgerEntry, in CreateLedger
 		return false
 	}
 	if !purchaseIDEqual(existing.PurchaseID, in.PurchaseID) {
-		return false
-	}
-	if !effectiveAtEqual(existing.EffectiveAt, in.EffectiveAt) {
 		return false
 	}
 	return true
@@ -326,7 +326,7 @@ func (r *ResellerCreditRepository) GetAccount(ctx context.Context, customerID in
 }
 
 // SetCreditLimit ensures the account exists, then sets credit_limit.
-// Rejects limit < 0 or limit < balance_owed.
+// Rejects limit < 0 or limit < balance_owed (atomic WHERE balance_owed <= limit).
 func (r *ResellerCreditRepository) SetCreditLimit(ctx context.Context, customerID int64, limit float64) (*ResellerCreditAccount, error) {
 	if customerID <= 0 {
 		return nil, fmt.Errorf("customer_id is required")
@@ -341,22 +341,14 @@ func (r *ResellerCreditRepository) SetCreditLimit(ctx context.Context, customerI
 		return nil, err
 	}
 
-	// Re-read to validate against current balance_owed (race-safe enough for admin path;
-	// concurrent sales use FOR UPDATE on ledger paths).
-	acct, err := r.GetAccount(ctx, customerID)
-	if err != nil {
-		return nil, err
-	}
-	if acct == nil {
-		return nil, fmt.Errorf("set credit limit: account missing")
-	}
-	if err := validateCreditLimit(limit, acct.BalanceOwed); err != nil {
-		return nil, err
-	}
-
 	out := &ResellerCreditAccount{}
-	err = scanResellerCreditAccount(r.pool.QueryRow(ctx, buildSetCreditLimitSQL(), customerID, limit), out)
+	err := scanResellerCreditAccount(r.pool.QueryRow(ctx, buildSetCreditLimitSQL(), customerID, limit), out)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// No row updated: either missing (should not happen after EnsureAccount)
+			// or balance_owed > limit under concurrent sales.
+			return nil, ErrResellerCreditLimitBelowOwed
+		}
 		return nil, fmt.Errorf("set credit limit: %w", err)
 	}
 	return out, nil

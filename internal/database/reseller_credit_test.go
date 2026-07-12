@@ -8,16 +8,16 @@ import (
 )
 
 func TestNormalizeResellerAmountRejectsNonPositive(t *testing.T) {
-	if _, err := normalizeResellerAmount(0); err == nil {
+	if _, err := NormalizeResellerAmount(0); err == nil {
 		t.Fatal("expected error")
 	}
-	if _, err := normalizeResellerAmount(-1); err == nil {
+	if _, err := NormalizeResellerAmount(-1); err == nil {
 		t.Fatal("expected error")
 	}
 }
 
 func TestNormalizeResellerAmount_TwoDecimals(t *testing.T) {
-	got, err := normalizeResellerAmount(10.005)
+	got, err := NormalizeResellerAmount(10.005)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -174,11 +174,44 @@ func TestResellerLedgerPayloadMatches(t *testing.T) {
 	if resellerLedgerPayloadMatches(existing, in2, 100.01) {
 		t.Fatal("expected purchase_id mismatch")
 	}
-	// Different effective_at → mismatch
+	// Different effective_at → still match (first-write-wins; retry stamps now())
 	in3 := in
 	in3.EffectiveAt = eff.Add(time.Hour)
-	if resellerLedgerPayloadMatches(existing, in3, 100.01) {
-		t.Fatal("expected effective_at mismatch")
+	if !resellerLedgerPayloadMatches(existing, in3, 100.01) {
+		t.Fatal("expected match when only EffectiveAt differs")
+	}
+}
+
+func TestResellerLedgerPayloadMatches_IgnoresEffectiveAtForSettlementReplay(t *testing.T) {
+	// Same key + same amount/type/direction/customer, different EffectiveAt → match.
+	// This is the settlement retry path that previously returned 409 and caused
+	// clients to mint a new key (double wallet debit + double AR decrease).
+	existing := &ResellerLedgerEntry{
+		CustomerID:  7,
+		EntryType:   ResellerLedgerEntryTypeSettlement,
+		Direction:   ResellerLedgerDirectionDecrease,
+		Amount:      1000,
+		EffectiveAt: time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC),
+	}
+	in := CreateLedgerEntryInput{
+		CustomerID:  7,
+		EntryType:   ResellerLedgerEntryTypeSettlement,
+		Direction:   ResellerLedgerDirectionDecrease,
+		Amount:      1000,
+		EffectiveAt: time.Date(2026, 7, 12, 10, 5, 0, 0, time.UTC), // retry later
+	}
+	if !resellerLedgerPayloadMatches(existing, in, 1000) {
+		t.Fatal("settlement replay with different EffectiveAt must match")
+	}
+	// Amount still matters.
+	if resellerLedgerPayloadMatches(existing, in, 999) {
+		t.Fatal("expected amount mismatch")
+	}
+	// Customer still matters.
+	inBad := in
+	inBad.CustomerID = 8
+	if resellerLedgerPayloadMatches(existing, inBad, 1000) {
+		t.Fatal("expected customer mismatch")
 	}
 }
 
@@ -202,6 +235,22 @@ func TestBuildLockResellerAccountSQL_ForUpdate(t *testing.T) {
 	}
 	if !strings.Contains(sql, "FOR UPDATE") {
 		t.Fatalf("missing FOR UPDATE: %s", sql)
+	}
+}
+
+func TestBuildSetCreditLimitSQL_AtomicBalanceGuard(t *testing.T) {
+	sql := buildSetCreditLimitSQL()
+	if !strings.Contains(sql, "UPDATE reseller_credit_account") {
+		t.Fatalf("missing update: %s", sql)
+	}
+	if !strings.Contains(sql, "balance_owed <= $2") {
+		t.Fatalf("missing atomic balance_owed guard: %s", sql)
+	}
+	if !strings.Contains(sql, "WHERE customer_id = $1") {
+		t.Fatalf("missing customer_id predicate: %s", sql)
+	}
+	if !strings.Contains(sql, "RETURNING") {
+		t.Fatalf("missing RETURNING: %s", sql)
 	}
 }
 
