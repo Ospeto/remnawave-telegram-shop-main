@@ -88,7 +88,7 @@ describe('Home', () => {
         expect(screen.queryByText(/Referrals/)).toBeNull();
     });
 
-    it('shows an admin promo card only for admins', async () => {
+    it('shows a single Admin card linking to /admin for admins', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse({
             user: { id: 1, telegram_id: 42 },
             keys: [],
@@ -103,21 +103,19 @@ describe('Home', () => {
         renderWithAppProviders([
             { path: '/', element: <Home /> },
             { path: '/wallet', element: <div>Wallet</div> },
-            { path: '/admin/plans', element: <div>Plan Admin</div> },
-            { path: '/admin/promos', element: <div>Promo Admin</div> },
-            { path: '/admin/finance', element: <div>Finance Admin</div> },
-            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
+            { path: '/admin', element: <div>Admin Hub</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Promo Codes/i })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Plans/i })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Finance/i })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Resellers/i })).toBeTruthy();
+        const adminLink = screen.getByRole('link', { name: /Admin Finance, plans, and promos/i });
+        expect(adminLink).toHaveAttribute('href', '/admin');
+        expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
+        expect(screen.queryByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeNull();
+        // Finance tool card title must not appear as its own Home link
+        expect(screen.queryByRole('link', { name: /^Finance Income/i })).toBeNull();
     });
 
-    it('hides the admin promo card for non-admin users', async () => {
+    it('hides the Admin card for non-admin users', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse({
             user: { id: 1, telegram_id: 42 },
             keys: [],
@@ -132,18 +130,13 @@ describe('Home', () => {
         renderWithAppProviders([
             { path: '/', element: <Home /> },
             { path: '/wallet', element: <div>Wallet</div> },
-            { path: '/admin/plans', element: <div>Plan Admin</div> },
-            { path: '/admin/promos', element: <div>Promo Admin</div> },
-            { path: '/admin/finance', element: <div>Finance Admin</div> },
-            { path: '/admin/resellers', element: <div>Reseller Admin</div> },
+            { path: '/admin', element: <div>Admin Hub</div> },
         ], ['/']);
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
-        expect(screen.queryByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeNull();
+        expect(screen.queryByRole('link', { name: /Admin Finance, plans, and promos/i })).toBeNull();
         expect(screen.queryByRole('link', { name: /Promo Codes/i })).toBeNull();
-        expect(screen.queryByRole('link', { name: /Plans/i })).toBeNull();
-        expect(screen.queryByRole('link', { name: /Finance/i })).toBeNull();
-        expect(screen.queryByRole('link', { name: /Resellers/i })).toBeNull();
+        expect(screen.queryByRole('link', { name: /Plans Add, edit, and archive plan pricing/i })).toBeNull();
     });
 
     it('shows Resellers admin card only for admins', async () => {
@@ -188,54 +181,6 @@ describe('Home', () => {
 
         expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
         expect(screen.queryByRole('link', { name: /Resellers/i })).toBeNull();
-    });
-
-    it('shows Finance admin card for admins', async () => {
-        fetchMock.mockResolvedValueOnce(jsonResponse({
-            user: { id: 1, telegram_id: 42 },
-            keys: [],
-            is_active: false,
-            expire_at: null,
-            days_remaining: 0,
-            trial_eligible: false,
-            trial_days: 0,
-            is_admin: true,
-        }));
-
-        renderWithAppProviders([
-            { path: '/', element: <Home /> },
-            { path: '/wallet', element: <div>Wallet</div> },
-            { path: '/admin/plans', element: <div>Plan Admin</div> },
-            { path: '/admin/promos', element: <div>Promo Admin</div> },
-            { path: '/admin/finance', element: <div>Finance Admin</div> },
-        ], ['/']);
-
-        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
-        expect(screen.getByRole('link', { name: /Finance/i })).toBeTruthy();
-    });
-
-    it('hides Finance admin card for non-admin users', async () => {
-        fetchMock.mockResolvedValueOnce(jsonResponse({
-            user: { id: 1, telegram_id: 42 },
-            keys: [],
-            is_active: false,
-            expire_at: null,
-            days_remaining: 0,
-            trial_eligible: false,
-            trial_days: 0,
-            is_admin: false,
-        }));
-
-        renderWithAppProviders([
-            { path: '/', element: <Home /> },
-            { path: '/wallet', element: <div>Wallet</div> },
-            { path: '/admin/plans', element: <div>Plan Admin</div> },
-            { path: '/admin/promos', element: <div>Promo Admin</div> },
-            { path: '/admin/finance', element: <div>Finance Admin</div> },
-        ], ['/']);
-
-        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
-        expect(screen.queryByRole('link', { name: /Finance/i })).toBeNull();
     });
 
     it('shows a trial error when activation returns conflict', async () => {
