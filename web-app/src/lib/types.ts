@@ -2,16 +2,18 @@ export interface Plan {
     id: string;
     label: string;
     days: number;
-    price: number;
+    price: number; // effective from API
     traffic_limit_gb: number;
     currency: string;
     active?: boolean;
     sort_order?: number;
+    pricing_tier?: 'retail' | 'wholesale';
 }
 
 export interface AdminPlan extends Plan {
     active: boolean;
     sort_order: number;
+    wholesale_price?: number | null;
 }
 
 export interface SubscriptionKey {
@@ -48,6 +50,7 @@ export interface UserData {
     bot_url?: string;
     support_url?: string;
     is_admin?: boolean;
+    is_reseller?: boolean;
 }
 
 export interface AdminPromo {

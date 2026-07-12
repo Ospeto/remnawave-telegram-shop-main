@@ -62,7 +62,7 @@ export function Checkout() {
     const [searchParams] = useSearchParams();
 
     const extendKeyId = searchParams.get('extend');
-    const promoCode = searchParams.get('promo');
+    const promoCodeFromUrl = searchParams.get('promo');
     // URL `discount` is navigation/display metadata only; backend owns promo pricing.
     // Do not use it for wallet eligibility or button amounts before purchase creation.
     const isWalletTopup = searchParams.get('walletTopup') === 'true';
@@ -269,8 +269,10 @@ export function Checkout() {
             if (extendKeyId) {
                 body.extend_key_id = Number(extendKeyId);
             }
-            if (promoCode) {
-                body.promo_code = promoCode;
+            // Resellers cannot combine promo with wholesale; never send promo_code for them.
+            const isResellerBuyer = !!userData?.is_reseller;
+            if (promoCodeFromUrl && !isResellerBuyer) {
+                body.promo_code = promoCodeFromUrl;
             }
             if (!isWalletTopup) {
                 if (resolvedPlan.legacyIndex !== null) {
@@ -359,7 +361,7 @@ export function Checkout() {
         } finally {
             setCreatingPurchase(false);
         }
-    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCode, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t]);
+    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCodeFromUrl, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t, userData?.is_reseller]);
 
     const cancelPendingPayment = useCallback(async () => {
         if (!initData || !purchase || cancellingPayment) return;
@@ -563,6 +565,8 @@ export function Checkout() {
 
     // Pre-purchase wallet eligibility uses full server plan price only.
     // URL discount is not trusted; promo is applied server-side via promo_code.
+    const isReseller = !!userData?.is_reseller;
+    const showResellerBadge = !isWalletTopup && (selectedPlan?.pricing_tier === 'wholesale' || isReseller);
     const topUpAmount = isWalletTopup && hasValidTopUpAmount ? parsedTopUpAmount : 0;
     const targetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;
@@ -596,7 +600,27 @@ export function Checkout() {
                 </h2>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 12 }}>
-                    <span className="text-hint">{displayLabel}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        <span className="text-hint">{displayLabel}</span>
+                        {showResellerBadge && (
+                            <span
+                                style={{
+                                    display: 'inline-block',
+                                    alignSelf: 'flex-start',
+                                    background: 'rgba(0, 122, 255, 0.12)',
+                                    color: 'var(--tg-link, #007AFF)',
+                                    border: '1px solid rgba(0, 122, 255, 0.22)',
+                                    borderRadius: 999,
+                                    padding: '2px 8px',
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    letterSpacing: 0.2,
+                                }}
+                            >
+                                {t('reseller_price_badge')}
+                            </span>
+                        )}
+                    </div>
                     <strong>{displayAmount.toLocaleString()} {displayCurrency}</strong>
                 </div>
 

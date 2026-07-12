@@ -652,4 +652,75 @@ describe('Checkout', () => {
         expect(await screen.findByText('Invalid plan selected')).toBeTruthy();
         expect(fetchMock.mock.calls.find(([url]) => url === '/api/purchase')).toBeUndefined();
     });
+
+    it('does not send promo_code for reseller even if URL has promo', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+            if (url === '/api/purchase') {
+                return jsonResponse({
+                    purchase_id: 44,
+                    payment_phone: '09123456789',
+                    amount: 4000,
+                    currency: 'MMK',
+                    instructions: 'Pay now',
+                    invoice_type: 'mobile_banking',
+                    pricing_tier: 'wholesale',
+                    bot_url: 'https://t.me/WavyVpnBot',
+                });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30?promo=SAVE20&discount=20']);
+
+        expect(await screen.findByText('Reseller price')).toBeTruthy();
+        fireEvent.click(await screen.findByRole('button', { name: 'Pay via mobile banking' }));
+
+        await screen.findByText('How to pay');
+        await waitFor(() => {
+            const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
+            expect(purchaseCall).toBeTruthy();
+
+            const [, options] = purchaseCall as [string, RequestInit];
+            const body = JSON.parse(String(options.body));
+            expect(body.promo_code).toBeUndefined();
+            expect(body.plan_id).toBe('plan-30');
+        });
+    });
 });

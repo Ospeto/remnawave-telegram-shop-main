@@ -251,4 +251,49 @@ describe('Plans', () => {
 
         expect(await screen.findByText('No plans available right now')).toBeTruthy();
     });
+
+    it('hides promo section for resellers', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/plans', element: <Plans /> },
+            { path: '/checkout/:planIndex', element: <div>Checkout with plan</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/plans']);
+
+        expect(await screen.findByText('1 Month')).toBeTruthy();
+        expect(screen.queryByText('Have a promo code?')).toBeNull();
+        expect(screen.getByText('Reseller price')).toBeTruthy();
+        expect(screen.getByText('4,000')).toBeTruthy();
+    });
 });

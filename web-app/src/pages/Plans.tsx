@@ -226,8 +226,11 @@ export function Plans() {
         }))
         : filteredPlans;
 
+    const isReseller = !!userData?.is_reseller;
+    const showPromoSection = !isWalletTopup && !isReseller;
     const displayItems = itemsToDisplay.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }) => {
-        if (!isWalletTopup && discountPercent > 0) {
+        // Resellers never get promo discounts client-side (server rejects reseller+promo).
+        if (!isWalletTopup && !isReseller && discountPercent > 0) {
             return { ...item, discountedPrice: Math.round(item.price * (1 - discountPercent / 100)) };
         }
         return item;
@@ -264,8 +267,8 @@ export function Plans() {
                 )}
             </div>
 
-            {/* Promo Code Input */}
-            {!isWalletTopup && (
+            {/* Promo Code Input — hidden for resellers (server rejects reseller+promo) */}
+            {showPromoSection && (
                 <div className="glass-card" style={{ padding: 14, display: 'grid', gap: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
                         <div>
@@ -361,17 +364,17 @@ export function Plans() {
                     )}
                 </div>
             )}
-            {!isWalletTopup && promoStatus === 'valid' && (
+            {showPromoSection && promoStatus === 'valid' && (
                 <div id="promo-feedback" role="status" style={{ color: 'var(--color-success)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_valid', { percent: String(discountPercent) })}
                 </div>
             )}
-            {!isWalletTopup && promoStatus === 'invalid' && (
+            {showPromoSection && promoStatus === 'invalid' && (
                 <div id="promo-feedback" role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {t('promo_invalid')}
                 </div>
             )}
-            {!isWalletTopup && promoError && (
+            {showPromoSection && promoError && (
                 <div id="promo-feedback" role="alert" style={{ color: 'var(--color-danger)', fontSize: 12, marginTop: -8, marginLeft: 4 }}>
                     {promoError}
                 </div>
@@ -409,7 +412,7 @@ export function Plans() {
                         checkoutParams.set('walletTopup', 'true');
                         checkoutParams.set('amount', String(item.price));
                     }
-                    if (!isWalletTopup && appliedPromoCode) {
+                    if (!isWalletTopup && !isReseller && appliedPromoCode) {
                         checkoutParams.set('promo', appliedPromoCode);
                         checkoutParams.set('discount', String(discountPercent));
                     }
@@ -469,6 +472,24 @@ export function Plans() {
                                         {hasDiscount && (
                                             <div style={{ fontSize: 13, textDecoration: 'line-through', opacity: 0.5 }}>
                                                 {item.price.toLocaleString()}
+                                            </div>
+                                        )}
+                                        {!isWalletTopup && item.pricing_tier === 'wholesale' && (
+                                            <div
+                                                style={{
+                                                    display: 'inline-block',
+                                                    marginTop: 4,
+                                                    background: 'rgba(0, 122, 255, 0.12)',
+                                                    color: 'var(--tg-link, #007AFF)',
+                                                    border: '1px solid rgba(0, 122, 255, 0.22)',
+                                                    borderRadius: 999,
+                                                    padding: '2px 8px',
+                                                    fontSize: 10,
+                                                    fontWeight: 700,
+                                                    letterSpacing: 0.2,
+                                                }}
+                                            >
+                                                {t('reseller_price_badge')}
                                             </div>
                                         )}
                                         <div className="text-hint" style={{ fontSize: 11 }}>{item.currency}</div>
