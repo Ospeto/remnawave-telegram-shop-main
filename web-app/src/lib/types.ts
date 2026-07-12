@@ -57,6 +57,27 @@ export interface ResellerAccount {
     credit_limit: number;
     balance_owed: number;
     remaining_credit: number;
+    is_reseller?: boolean;
+}
+
+export interface ResellerLedgerEntry {
+    id: number;
+    entry_type: string;
+    direction: string;
+    amount: number;
+    purchase_id?: number | null;
+    effective_at: string;
+    note?: string | null;
+    created_by: string;
+}
+
+export interface ResellerSettlementResponse {
+    created: boolean;
+    amount: number;
+    balance_owed: number;
+    remaining_credit: number;
+    idempotency_key: string;
+    ledger_entry_id: number;
 }
 
 export interface AdminPromo {

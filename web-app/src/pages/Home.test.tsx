@@ -183,6 +183,53 @@ describe('Home', () => {
         expect(screen.queryByRole('link', { name: /Resellers/i })).toBeNull();
     });
 
+    it('shows reseller account card when is_reseller is true', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: false,
+            is_reseller: true,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/reseller/account', element: <div>Reseller Account</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        const link = screen.getByRole('link', { name: /Reseller account Credit, balance owed, and pay/i });
+        expect(link).toHaveAttribute('href', '/reseller/account');
+    });
+
+    it('hides reseller account card when is_reseller is false', async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({
+            user: { id: 1, telegram_id: 42 },
+            keys: [],
+            is_active: false,
+            expire_at: null,
+            days_remaining: 0,
+            trial_eligible: false,
+            trial_days: 0,
+            is_admin: false,
+            is_reseller: false,
+        }));
+
+        renderWithAppProviders([
+            { path: '/', element: <Home /> },
+            { path: '/wallet', element: <div>Wallet</div> },
+            { path: '/reseller/account', element: <div>Reseller Account</div> },
+        ], ['/']);
+
+        expect(await screen.findByRole('heading', { name: 'Wavy Private Server' })).toBeTruthy();
+        expect(screen.queryByRole('link', { name: /Reseller account/i })).toBeNull();
+    });
+
     it('shows a trial error when activation returns conflict', async () => {
         fetchMock
             .mockResolvedValueOnce(jsonResponse({

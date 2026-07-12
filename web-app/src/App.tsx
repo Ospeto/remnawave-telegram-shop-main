@@ -9,6 +9,7 @@ import { AdminPromos } from './pages/AdminPromos';
 import { AdminPlans } from './pages/AdminPlans';
 import { AdminFinance } from './pages/AdminFinance';
 import { AdminResellers } from './pages/AdminResellers';
+import { ResellerAccount } from './pages/ResellerAccount';
 
 import { ThemeProvider } from './lib/ThemeProvider';
 
@@ -25,6 +26,7 @@ function App() {
                         <Route path="promos" element={<AdminPromos />} />
                     </Route>
                     <Route path="/admin/resellers" element={<AdminResellers />} />
+                    <Route path="/reseller/account" element={<ResellerAccount />} />
                     <Route path="/plans" element={<Plans />} />
                     <Route path="/wallet" element={<Wallet />} />
                     <Route path="/checkout" element={<Checkout />} />

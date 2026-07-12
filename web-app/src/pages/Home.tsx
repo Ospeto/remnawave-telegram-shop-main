@@ -262,6 +262,54 @@ export function Home() {
                     }} aria-hidden="true">→</div>
                 </Link>
 
+                {data?.is_reseller && (
+                    <Link
+                        to="/reseller/account"
+                        className="digital-card animate-slide-up"
+                        style={{
+                            padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
+                            textDecoration: 'none', color: 'var(--digital-card-text)',
+                            transition: 'transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                            cursor: 'pointer',
+                        }}
+                        onClick={() => playClick()}
+                        onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(0.98)'; }}
+                        onMouseUp={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                        onTouchStart={(e) => { e.currentTarget.style.transform = 'scale(0.98)'; }}
+                        onTouchEnd={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                    >
+                        <div style={{
+                            width: 44, height: 44, borderRadius: 12,
+                            background: 'var(--digital-card-inner-bg)',
+                            backdropFilter: 'blur(10px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'var(--digital-card-text)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                        }} aria-hidden="true">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="2" y="5" width="20" height="14" rx="2" />
+                                <path d="M2 10h20" />
+                                <path d="M6 15h4" />
+                            </svg>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 'var(--weight-bold)', fontSize: '15px', color: 'var(--digital-card-text)', letterSpacing: '0.2px' }}>
+                                {t('reseller_account_card_title')}
+                            </div>
+                            <div style={{ fontSize: '13px', color: 'var(--digital-card-hint)', marginTop: 1 }}>
+                                {t('reseller_account_card_subtitle')}
+                            </div>
+                        </div>
+                        <div style={{
+                            width: 28, height: 28, borderRadius: 14,
+                            background: 'var(--digital-card-inner-bg)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 14, color: 'var(--digital-card-text)',
+                        }} aria-hidden="true">→</div>
+                    </Link>
+                )}
+
                 {data?.is_admin && (
                     <Link
                         to="/admin"
