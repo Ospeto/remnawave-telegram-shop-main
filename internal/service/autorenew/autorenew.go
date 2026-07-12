@@ -37,6 +37,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/service/wallet"
 	"remnawave-tg-shop-bot/internal/translation"
 )
@@ -216,19 +217,22 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 		j.handleBlockedRenewal(ctx, customer, &key, j.blockedRenewalMessage(customer.Language, err))
 		return
 	}
-	if customer.Balance < float64(plan.Price) {
+	amount, tier := config.ResolvePlanPrice(*plan, customer.IsReseller)
+	charge := float64(amount)
+	if customer.Balance < charge {
 		log.Warn("Auto-renew: insufficient balance for configured plan",
 			"balance", customer.Balance,
-			"plan_price", plan.Price,
+			"plan_price", amount,
+			"pricing_tier", tier,
 			"key_traffic_gb", key.TrafficLimitGB,
 			"renewal_days", plan.Days)
-		j.handleInsufficientFunds(ctx, customer, &key, plan)
+		j.handleInsufficientFunds(ctx, customer, &key, amount)
 		return
 	}
 
 	log.Info("Auto-renew: selected plan",
 		"plan_label", plan.Label, "plan_days", plan.Days,
-		"plan_price", plan.Price, "plan_traffic_gb", plan.TrafficLimitGB)
+		"plan_price", amount, "pricing_tier", tier, "plan_traffic_gb", plan.TrafficLimitGB)
 
 	// Durable cycle lock BEFORE wallet/Remnawave side effects. If mark/stamp
 	// both fail after a successful extend, last_auto_renewed_at still blocks
@@ -240,7 +244,8 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 	}
 
 	// ── Extend the specific key ───────────────────────────────────────────────
-	err = j.walletService.ExtendKeyWithBalance(ctx, key.ID, customer.ID, float64(plan.Price), plan.Days, plan.TrafficLimitGB)
+	extendCtx := payment.WithPricingTier(ctx, tier)
+	err = j.walletService.ExtendKeyWithBalance(extendCtx, key.ID, customer.ID, charge, plan.Days, plan.TrafficLimitGB)
 	if err != nil {
 		log.Error("Auto-renew: key extension failed", "error", err)
 		// Undo optimistic cycle lock so a later run may retry this cycle.
@@ -272,14 +277,14 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 
 	msg := fmt.Sprintf(
 		j.tm.GetText(customer.Language, "auto_renew_success_detail"),
-		plan.Label, plan.Days, plan.Price,
+		plan.Label, plan.Days, amount,
 	)
 	j.sendMessage(ctx, customer.TelegramID, customer.Language, msg)
 }
 
 // handleInsufficientFunds sends a low-balance notification at most once per 24h.
-// plan may be nil when no plan of any price is affordable.
-func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, plan *config.Plan) {
+// neededPrice is the resolved charge amount (retail or wholesale).
+func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, neededPrice int) {
 	log := slog.With("key_id", key.ID, "customer_id", customer.ID)
 
 	if key.AutoRenewNotifiedAt != nil && j.nowFn().Sub(*key.AutoRenewNotifiedAt) < 24*time.Hour {
@@ -287,7 +292,6 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 		return
 	}
 
-	neededPrice := plan.Price
 	shortfall := 0
 	if deficit := float64(neededPrice) - customer.Balance; deficit > 0 {
 		shortfall = int(math.Ceil(deficit))

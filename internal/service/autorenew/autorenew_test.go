@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/translation"
 	"strings"
 	"testing"
@@ -177,11 +178,12 @@ func (f *fakeAutoRenewCustomerRepo) FindById(_ context.Context, id int64) (*data
 }
 
 type walletExtendCall struct {
-	keyID      int64
-	customerID int64
-	planPrice  float64
-	days       int
-	trafficGB  int
+	keyID       int64
+	customerID  int64
+	planPrice   float64
+	days        int
+	trafficGB   int
+	pricingTier string
 }
 
 type fakeAutoRenewWallet struct {
@@ -189,13 +191,14 @@ type fakeAutoRenewWallet struct {
 	err   error
 }
 
-func (f *fakeAutoRenewWallet) ExtendKeyWithBalance(_ context.Context, keyID int64, customerID int64, planPrice float64, days int, trafficGB int) error {
+func (f *fakeAutoRenewWallet) ExtendKeyWithBalance(ctx context.Context, keyID int64, customerID int64, planPrice float64, days int, trafficGB int) error {
 	f.calls = append(f.calls, walletExtendCall{
-		keyID:      keyID,
-		customerID: customerID,
-		planPrice:  planPrice,
-		days:       days,
-		trafficGB:  trafficGB,
+		keyID:       keyID,
+		customerID:  customerID,
+		planPrice:   planPrice,
+		days:        days,
+		trafficGB:   trafficGB,
+		pricingTier: payment.PricingTierFromContext(ctx),
 	})
 	return f.err
 }
@@ -276,6 +279,12 @@ func TestJobRunRenewsEligibleKeyAndMarksSuccess(t *testing.T) {
 	if len(walletSvc.calls) != 1 {
 		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 1", len(walletSvc.calls))
 	}
+	if walletSvc.calls[0].planPrice != 5000 {
+		t.Fatalf("ExtendKeyWithBalance() planPrice = %v, want 5000", walletSvc.calls[0].planPrice)
+	}
+	if walletSvc.calls[0].pricingTier != config.PricingTierRetail {
+		t.Fatalf("ExtendKeyWithBalance() pricingTier = %q, want %q", walletSvc.calls[0].pricingTier, config.PricingTierRetail)
+	}
 	if keyRepo.claimCalls != 1 || keyRepo.lastClaimKeyID != 7 {
 		t.Fatalf("TryClaimAutoRenew() calls = %d for key %d, want 1 for key 7", keyRepo.claimCalls, keyRepo.lastClaimKeyID)
 	}
@@ -299,6 +308,119 @@ func TestJobRunRenewsEligibleKeyAndMarksSuccess(t *testing.T) {
 	}
 	if !strings.Contains(telegram.messages[0].Text, "Auto-renewal complete") {
 		t.Fatalf("SendMessage() text = %q, want success notification", telegram.messages[0].Text)
+	}
+	if !strings.Contains(telegram.messages[0].Text, "5000") {
+		t.Fatalf("SendMessage() text = %q, want retail amount 5000", telegram.messages[0].Text)
+	}
+}
+
+func TestJobRunChargesResellerWholesalePrice(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(48 * time.Hour)
+	wholesale := 4000
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 8, CustomerID: 43, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
+		},
+	}
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			// Balance covers wholesale but not retail — must charge wholesale.
+			43: {ID: 43, TelegramID: 9002, Language: "en", Balance: 4500, IsReseller: true},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	telegram := &fakeTelegramClient{}
+	plan := &config.Plan{
+		Label:          "Monthly",
+		Days:           30,
+		Price:          5000,
+		WholesalePrice: &wholesale,
+		TrafficLimitGB: 0,
+	}
+
+	job := &Job{
+		subKeyRepo:    keyRepo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   telegram,
+		nowFn: func() time.Time {
+			return now
+		},
+		selectPlanFn: func(key database.SubscriptionKey) (*config.Plan, error) {
+			if key.ID != 8 {
+				t.Fatalf("selectPlanFn key.ID = %d, want 8", key.ID)
+			}
+			return plan, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 1", len(walletSvc.calls))
+	}
+	if walletSvc.calls[0].planPrice != 4000 {
+		t.Fatalf("ExtendKeyWithBalance() planPrice = %v, want wholesale 4000", walletSvc.calls[0].planPrice)
+	}
+	if walletSvc.calls[0].pricingTier != config.PricingTierWholesale {
+		t.Fatalf("ExtendKeyWithBalance() pricingTier = %q, want %q", walletSvc.calls[0].pricingTier, config.PricingTierWholesale)
+	}
+	if len(telegram.messages) != 1 {
+		t.Fatalf("SendMessage() calls = %d, want 1", len(telegram.messages))
+	}
+	if !strings.Contains(telegram.messages[0].Text, "4000") {
+		t.Fatalf("SendMessage() text = %q, want wholesale amount 4000", telegram.messages[0].Text)
+	}
+	if strings.Contains(telegram.messages[0].Text, "5000") {
+		t.Fatalf("SendMessage() text = %q, must not show retail amount", telegram.messages[0].Text)
+	}
+}
+
+func TestJobRunResellerWithoutWholesaleFallsBackRetail(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(48 * time.Hour)
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 10, CustomerID: 44, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
+		},
+	}
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			44: {ID: 44, TelegramID: 9003, Language: "en", Balance: 15000, IsReseller: true},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	telegram := &fakeTelegramClient{}
+	plan := &config.Plan{Label: "Monthly", Days: 30, Price: 5000, TrafficLimitGB: 0}
+
+	job := &Job{
+		subKeyRepo:    keyRepo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   telegram,
+		nowFn: func() time.Time {
+			return now
+		},
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return plan, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 1", len(walletSvc.calls))
+	}
+	if walletSvc.calls[0].planPrice != 5000 {
+		t.Fatalf("ExtendKeyWithBalance() planPrice = %v, want retail 5000", walletSvc.calls[0].planPrice)
+	}
+	if walletSvc.calls[0].pricingTier != config.PricingTierRetail {
+		t.Fatalf("ExtendKeyWithBalance() pricingTier = %q, want %q", walletSvc.calls[0].pricingTier, config.PricingTierRetail)
 	}
 }
 
@@ -1020,5 +1142,105 @@ func TestAlreadyRenewedThisCycle(t *testing.T) {
 	}
 	if alreadyRenewedThisCycle(nil, &expireAt) {
 		t.Fatal("nil last must not count as renewed")
+	}
+}
+
+func TestJobRunChargesNonResellerRetailPrice(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(48 * time.Hour)
+	wholesale := 4000
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 71, CustomerID: 43, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
+		},
+	}
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			43: {ID: 43, TelegramID: 9002, Language: "en", Balance: 15000, IsReseller: false},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	plan := &config.Plan{
+		Label:          "Monthly",
+		Days:           30,
+		Price:          5000,
+		WholesalePrice: &wholesale,
+		TrafficLimitGB: 0,
+	}
+
+	job := &Job{
+		subKeyRepo:    keyRepo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   &fakeTelegramClient{},
+		nowFn:         func() time.Time { return now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return plan, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 1", len(walletSvc.calls))
+	}
+	if walletSvc.calls[0].planPrice != 5000 {
+		t.Fatalf("ExtendKeyWithBalance() planPrice = %v, want 5000 (retail)", walletSvc.calls[0].planPrice)
+	}
+	if walletSvc.calls[0].pricingTier != config.PricingTierRetail {
+		t.Fatalf("ExtendKeyWithBalance() pricingTier = %q, want %q", walletSvc.calls[0].pricingTier, config.PricingTierRetail)
+	}
+}
+
+func TestJobRunResellerInsufficientAgainstWholesaleDoesNotExtend(t *testing.T) {
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(24 * time.Hour)
+	wholesale := 4000
+	keyRepo := &fakeAutoRenewKeyRepo{
+		claimAllowed: true,
+		keys: []database.SubscriptionKey{
+			{ID: 72, CustomerID: 44, ExpireAt: &expireAt, TrafficLimitGB: 0, AutoRenewPlanDays: intPtr(30)},
+		},
+	}
+	// Balance between wholesale and retail: must NOT charge retail, and must NOT extend.
+	customerRepo := &fakeAutoRenewCustomerRepo{
+		customers: map[int64]*database.Customer{
+			44: {ID: 44, TelegramID: 9003, Language: "en", Balance: 3500, IsReseller: true},
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{}
+	telegram := &fakeTelegramClient{}
+	plan := &config.Plan{
+		Label:          "Monthly",
+		Days:           30,
+		Price:          5000,
+		WholesalePrice: &wholesale,
+		TrafficLimitGB: 0,
+	}
+
+	job := &Job{
+		subKeyRepo:    keyRepo,
+		customerRepo:  customerRepo,
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   telegram,
+		nowFn:         func() time.Time { return now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return plan, nil
+		},
+	}
+
+	job.Run(context.Background())
+
+	if len(walletSvc.calls) != 0 {
+		t.Fatalf("ExtendKeyWithBalance() calls = %d, want 0 (insufficient for wholesale)", len(walletSvc.calls))
+	}
+	if len(keyRepo.markedRenewed) != 0 {
+		t.Fatalf("MarkKeyAutoRenewed() calls = %v, want none", keyRepo.markedRenewed)
+	}
+	if len(telegram.messages) != 1 {
+		t.Fatalf("SendMessage() calls = %d, want 1 insufficient-funds notice", len(telegram.messages))
 	}
 }
