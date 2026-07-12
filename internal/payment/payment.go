@@ -259,6 +259,7 @@ type PaymentService struct {
 	subKeyRepo          *database.SubscriptionKeyRepository
 	promoCodeRepository *database.PromoCodeRepository
 	walletTxRepo        *database.WalletTransactionRepository
+	resellerCreditRepo  *database.ResellerCreditRepository
 	testMode            bool
 	testModeMu          sync.RWMutex
 	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
@@ -286,6 +287,7 @@ func NewPaymentService(
 	subKeyRepo *database.SubscriptionKeyRepository,
 	promoCodeRepository *database.PromoCodeRepository,
 	walletTxRepo *database.WalletTransactionRepository,
+	resellerCreditRepo *database.ResellerCreditRepository,
 ) *PaymentService {
 	return &PaymentService{
 		purchaseRepository:  purchaseRepository,
@@ -300,6 +302,7 @@ func NewPaymentService(
 		subKeyRepo:          subKeyRepo,
 		promoCodeRepository: promoCodeRepository,
 		walletTxRepo:        walletTxRepo,
+		resellerCreditRepo:  resellerCreditRepo,
 		visionAlertLastSent: make(map[string]time.Time),
 		now:                 time.Now,
 	}
@@ -1225,7 +1228,7 @@ func (s *PaymentService) resumeExistingPurchase(ctx context.Context, existing *d
 			return "", existing.ID, fmt.Errorf("purchase already cancelled")
 		}
 		return "", existing.ID, nil
-	case database.InvoiceTypeWalletPayment:
+	case database.InvoiceTypeWalletPayment, database.InvoiceTypePostpaid:
 		switch existing.Status {
 		case database.PurchaseStatusPaid:
 			return "", existing.ID, nil
@@ -1234,7 +1237,10 @@ func (s *PaymentService) resumeExistingPurchase(ctx context.Context, existing *d
 		}
 		if err := s.ProcessPurchaseById(ctx, existing.ID); err != nil {
 			if errors.Is(err, ErrPurchaseFinalizationPending) {
-				slog.Warn("Existing wallet purchase fulfilled but finalization is pending", "purchase_id", existing.ID)
+				slog.Warn("Existing purchase fulfilled but finalization is pending",
+					"purchase_id", existing.ID,
+					"invoice_type", existing.InvoiceType,
+				)
 				return "", existing.ID, nil
 			}
 			return "", existing.ID, err
@@ -1922,6 +1928,8 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 		return s.createWalletTopUpInvoice(ctx, amount, customer)
 	case database.InvoiceTypeWalletPayment:
 		return s.createWalletPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID)
+	case database.InvoiceTypePostpaid:
+		return s.createPostpaidPurchase(ctx, amount, days, trafficLimitGB, customer, promoCode, promoID, extendKeyID)
 	default:
 		return "", 0, fmt.Errorf("unknown invoice type: %s", invoiceType)
 	}
@@ -2198,6 +2206,232 @@ func (s *PaymentService) createWalletPurchase(ctx context.Context, amount float6
 
 	slog.Info("Wallet purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
 	return "", purchaseId, nil
+}
+
+// createPostpaidPurchase charges reseller AR (balance_owed) instead of wallet,
+// then fulfills via ProcessPurchaseById. Never touches wallet_transaction.
+func (s *PaymentService) createPostpaidPurchase(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, promoCode string, promoID *int64, extendKeyID *int64) (url string, purchaseId int64, err error) {
+	if s.resellerCreditRepo == nil {
+		return "", 0, fmt.Errorf("reseller credit repository is not configured")
+	}
+	if customer == nil || !customer.IsReseller {
+		return "", 0, fmt.Errorf("postpaid is only available for resellers")
+	}
+	if amount <= 0 {
+		return "", 0, fmt.Errorf("postpaid amount must be positive")
+	}
+	if s.customerRepository == nil {
+		return "", 0, fmt.Errorf("customer repository is not configured")
+	}
+	if s.purchaseRepository == nil {
+		return "", 0, fmt.Errorf("purchase repository is not configured")
+	}
+
+	// Ensure AR account exists before the sale lock (idempotent insert).
+	if _, err := s.resellerCreditRepo.EnsureAccount(ctx, customer.ID, config.ResellerDefaultCreditLimit()); err != nil {
+		return "", 0, fmt.Errorf("ensure reseller credit account: %w", err)
+	}
+
+	purchaseId, created, err := s.createAndChargePostpaidPurchase(ctx, &database.Purchase{
+		InvoiceType:    database.InvoiceTypePostpaid,
+		Status:         database.PurchaseStatusNew,
+		Amount:         amount,
+		Currency:       config.Currency(),
+		CustomerID:     customer.ID,
+		Month:          0,
+		Days:           days,
+		TrafficLimitGB: trafficLimitGB,
+		ExtendKeyID:    extendKeyID,
+		PromoCodeID:    promoID,
+		PricingTier:    pricingTierFromContext(ctx),
+	}, customer.ID, amount, promoCode)
+	if err != nil {
+		slog.Error("Error creating postpaid purchase", "error", err)
+		return "", 0, err
+	}
+	if !created {
+		existing, lookupErr := s.purchaseRepository.FindById(ctx, purchaseId)
+		if lookupErr != nil {
+			return "", 0, lookupErr
+		}
+		if existing != nil {
+			return s.resumeExistingPurchase(ctx, existing)
+		}
+	}
+
+	if err := s.ProcessPurchaseById(ctx, purchaseId); err != nil {
+		if errors.Is(err, ErrPurchaseFinalizationPending) {
+			slog.Warn("Postpaid purchase fulfilled but finalization is pending", "purchase_id", purchaseId)
+			return "", purchaseId, nil
+		}
+		if errors.Is(err, ErrPurchaseInFlight) {
+			slog.Info("Postpaid purchase already in flight; skipping reverse/cancel", "purchase_id", purchaseId)
+			return "", purchaseId, err
+		}
+		if created {
+			if reverseErr := s.reversePostpaidSaleAfterProcessFailure(ctx, customer.ID, purchaseId, amount, err); reverseErr != nil {
+				slog.Error("CRITICAL: failed to reverse postpaid AR after process failure",
+					"purchase_id", purchaseId,
+					"process_error", err,
+					"reverse_error", reverseErr,
+				)
+				return "", purchaseId, fmt.Errorf("failed to process postpaid purchase: %w (AR reverse failed: %v)", err, reverseErr)
+			}
+		}
+		return "", purchaseId, err
+	}
+
+	slog.Info("Postpaid purchase completed", "purchase_id", utils.MaskHalfInt64(purchaseId), "customer_id", utils.MaskHalfInt64(customer.ID))
+	return "", purchaseId, nil
+}
+
+// createAndChargePostpaidPurchase creates the purchase row and records an AR sale
+// ledger entry in a single DB transaction. Does not debit wallet.
+func (s *PaymentService) createAndChargePostpaidPurchase(ctx context.Context, purchase *database.Purchase, customerID int64, amount float64, promoCode string) (purchaseID int64, created bool, err error) {
+	dbTx, err := s.customerRepository.BeginTx(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to begin postpaid purchase transaction: %w", err)
+	}
+	defer func() {
+		_ = dbTx.Rollback(ctx)
+	}()
+
+	if err := s.lockPromoForPurchaseTx(ctx, dbTx, purchase, promoCode); err != nil {
+		if errors.Is(err, ErrInvalidPromoCode) {
+			if existing, resumeErr := s.resumeExistingAfterInvalidPromo(ctx, purchase); resumeErr != nil {
+				return 0, false, resumeErr
+			} else if existing != nil {
+				return existing.ID, false, nil
+			}
+		}
+		return 0, false, err
+	}
+
+	purchaseID, existing, err := s.createPurchaseRecordTx(ctx, dbTx, purchase)
+	if err != nil {
+		return 0, false, err
+	}
+	if existing != nil {
+		return existing.ID, false, nil
+	}
+
+	saleKey := postpaidSaleIdempotencyKey(ctx, purchaseID)
+	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
+	}
+	_, _, saleCreated, err := s.resellerCreditRepo.RecordSaleTx(ctx, dbTx, database.CreateLedgerEntryInput{
+		CustomerID:     customerID,
+		EntryType:      database.ResellerLedgerEntryTypeSale,
+		Direction:      database.ResellerLedgerDirectionIncrease,
+		Amount:         amount,
+		PurchaseID:     &purchaseID,
+		EffectiveAt:    now,
+		Note:           fmt.Sprintf("Postpaid sale for purchase #%d", purchaseID),
+		CreatedBy:      "system:postpaid",
+		IdempotencyKey: saleKey,
+	})
+	if err != nil {
+		// Insert-before-check may leave an uncommitted ledger row; rollback via defer.
+		return 0, false, err
+	}
+	// created=false from RecordSaleTx is success (idempotent replay of the sale row).
+	_ = saleCreated
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return 0, false, fmt.Errorf("failed to commit postpaid purchase: %w", err)
+	}
+
+	return purchaseID, true, nil
+}
+
+func postpaidSaleIdempotencyKey(ctx context.Context, purchaseID int64) string {
+	if key := idempotencyKeyFromContext(ctx); key != nil {
+		return "postpaid-sale:" + key.String()
+	}
+	return fmt.Sprintf("postpaid-sale:%d", purchaseID)
+}
+
+func postpaidSaleReverseIdempotencyKey(purchaseID int64) string {
+	return fmt.Sprintf("postpaid-sale-reverse:%d", purchaseID)
+}
+
+// reversePostpaidSaleAfterProcessFailure cancels an unpaid postpaid purchase and
+// decreases balance_owed via adjustment so orphan AR is not left after a failed
+// ProcessPurchaseById on a newly created sale.
+func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Context, customerID, purchaseID int64, amount float64, processErr error) error {
+	if s.resellerCreditRepo == nil || s.customerRepository == nil || s.purchaseRepository == nil {
+		return fmt.Errorf("repositories not configured for postpaid reverse")
+	}
+
+	// Do not reverse if another worker already paid/finalized the purchase.
+	purchase, err := s.purchaseRepository.FindById(ctx, purchaseID)
+	if err != nil {
+		return err
+	}
+	if purchase == nil {
+		return fmt.Errorf("purchase %d not found for postpaid reverse", purchaseID)
+	}
+	if purchase.Status == database.PurchaseStatusPaid {
+		return nil
+	}
+
+	dbTx, err := s.customerRepository.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin postpaid reverse tx: %w", err)
+	}
+	defer func() {
+		_ = dbTx.Rollback(ctx)
+	}()
+
+	// Cancel unpaid purchase inside the same compensating tx as the AR reverse.
+	// Status predicate avoids overwriting paid if a race finalized between FindById and here.
+	tag, err := dbTx.Exec(ctx, `
+		UPDATE purchase
+		SET status = $1, paid_at = NULL
+		WHERE id = $2
+		  AND status <> $3
+		  AND status <> $1
+	`, database.PurchaseStatusCancel, purchaseID, database.PurchaseStatusPaid)
+	if err != nil {
+		return fmt.Errorf("cancel postpaid purchase: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// Already paid or already cancelled — re-check; do not reverse paid sales.
+		current, lookupErr := s.purchaseRepository.FindById(ctx, purchaseID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if current != nil && current.Status == database.PurchaseStatusPaid {
+			return nil
+		}
+		// Already cancelled: still attempt idempotent reverse adjustment below.
+	}
+
+	now := time.Now().UTC()
+	if s.now != nil {
+		now = s.now().UTC()
+	}
+	note := fmt.Sprintf("Reverse postpaid sale after process failure for purchase #%d: %v", purchaseID, processErr)
+	_, _, _, err = s.resellerCreditRepo.RecordAdjustmentTx(ctx, dbTx, database.CreateLedgerEntryInput{
+		CustomerID:     customerID,
+		EntryType:      database.ResellerLedgerEntryTypeAdjustment,
+		Direction:      database.ResellerLedgerDirectionDecrease,
+		Amount:         amount,
+		PurchaseID:     &purchaseID,
+		EffectiveAt:    now,
+		Note:           note,
+		CreatedBy:      "system:postpaid",
+		IdempotencyKey: postpaidSaleReverseIdempotencyKey(purchaseID),
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := dbTx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit postpaid reverse: %w", err)
+	}
+	return nil
 }
 
 // CreatePurchaseWithExtend is like createWalletPurchase but sets ExtendKeyID so

@@ -195,6 +195,7 @@ func main() {
 	promoCodeRepository := database.NewPromoCodeRepository(pool)
 	subKeyRepo := database.NewSubscriptionKeyRepository(pool)
 	walletTxRepo := database.NewWalletTransactionRepository(pool)
+	resellerCreditRepo := database.NewResellerCreditRepository(pool)
 	financialAdjustmentRepository := database.NewFinancialAdjustmentRepository(pool)
 	financeService := reporting.NewFinanceService(purchaseRepository, financialAdjustmentRepository)
 
@@ -261,7 +262,7 @@ func main() {
 	}
 
 	// Initialize PaymentService first (WalletService depends on it, not the reverse)
-	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo)
+	paymentService := payment.NewPaymentService(tm, purchaseRepository, remnawaveClient, customerRepository, b, referralRepository, messageCache, paymentAnalyzer, mobilePaymentRepo, subKeyRepo, promoCodeRepository, walletTxRepo, resellerCreditRepo)
 
 	// Initialize WalletService second (depends on PaymentService)
 	walletService := wallet.NewWalletService(paymentService, customerRepository, subKeyRepo, walletTxRepo)
