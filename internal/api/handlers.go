@@ -206,8 +206,24 @@ type AdminResellerRequest struct {
 }
 
 type AdminResellerResponse struct {
-	TelegramID int64 `json:"telegram_id"`
-	IsReseller bool  `json:"is_reseller"`
+	TelegramID      int64   `json:"telegram_id"`
+	IsReseller      bool    `json:"is_reseller"`
+	CreditLimit     float64 `json:"credit_limit"`
+	BalanceOwed     float64 `json:"balance_owed"`
+	RemainingCredit float64 `json:"remaining_credit"`
+}
+
+// AdminResellerCreditRequest is the body for PATCH .../credit.
+type AdminResellerCreditRequest struct {
+	CreditLimit float64 `json:"credit_limit"`
+}
+
+// AdminSettlementRequest is the body for POST admin offline AR settlements.
+// Money-safety: admin settlements never debit wallet; AR ledger only.
+type AdminSettlementRequest struct {
+	Amount         float64 `json:"amount"`
+	Note           string  `json:"note,omitempty"`
+	IdempotencyKey string  `json:"idempotency_key,omitempty"`
 }
 
 type syncKeyStats = payment.KeyStats
@@ -536,6 +552,12 @@ type APIHandler struct {
 	isAdminTelegramID           func(int64) bool
 	updateCustomerFields        func(context.Context, int64, map[string]interface{}) error
 	listResellersFn             func(context.Context) ([]database.Customer, error)
+	// Optional seams for admin reseller credit unit tests (nil → production repos).
+	setResellerCreditLimitFn  func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
+	ensureResellerAccountFn   func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
+	getResellerAccountFn      func(context.Context, int64) (*database.ResellerCreditAccount, error)
+	listResellerLedgerFn       func(context.Context, int64, int, int) ([]database.ResellerLedgerEntry, error)
+	recordAdminSettlementFn  func(ctx context.Context, customerID int64, amount float64, note, createdBy, idempotencyKey string) (*database.ResellerLedgerEntry, *database.ResellerCreditAccount, bool, error)
 }
 
 // SetResellerCreditDeps wires AR credit + wallet transaction repos used by
@@ -700,6 +722,60 @@ func (h *APIHandler) resellers(ctx context.Context) ([]database.Customer, error)
 		return nil, errors.New("customer repository is unavailable")
 	}
 	return h.customerRepo.ListResellers(ctx)
+}
+
+func (h *APIHandler) ensureResellerAccount(ctx context.Context, customerID int64, defaultLimit float64) (*database.ResellerCreditAccount, error) {
+	if h.ensureResellerAccountFn != nil {
+		return h.ensureResellerAccountFn(ctx, customerID, defaultLimit)
+	}
+	if h.resellerCreditRepo == nil {
+		return nil, errors.New("reseller credit repository is unavailable")
+	}
+	return h.resellerCreditRepo.EnsureAccount(ctx, customerID, defaultLimit)
+}
+
+func (h *APIHandler) getResellerAccount(ctx context.Context, customerID int64) (*database.ResellerCreditAccount, error) {
+	if h.getResellerAccountFn != nil {
+		return h.getResellerAccountFn(ctx, customerID)
+	}
+	if h.resellerCreditRepo == nil {
+		return nil, errors.New("reseller credit repository is unavailable")
+	}
+	return h.resellerCreditRepo.GetAccount(ctx, customerID)
+}
+
+func (h *APIHandler) setResellerCreditLimit(ctx context.Context, customerID int64, limit float64) (*database.ResellerCreditAccount, error) {
+	if h.setResellerCreditLimitFn != nil {
+		return h.setResellerCreditLimitFn(ctx, customerID, limit)
+	}
+	if h.resellerCreditRepo == nil {
+		return nil, errors.New("reseller credit repository is unavailable")
+	}
+	return h.resellerCreditRepo.SetCreditLimit(ctx, customerID, limit)
+}
+
+func (h *APIHandler) listResellerLedger(ctx context.Context, customerID int64, limit, offset int) ([]database.ResellerLedgerEntry, error) {
+	if h.listResellerLedgerFn != nil {
+		return h.listResellerLedgerFn(ctx, customerID, limit, offset)
+	}
+	if h.resellerCreditRepo == nil {
+		return nil, errors.New("reseller credit repository is unavailable")
+	}
+	return h.resellerCreditRepo.ListLedger(ctx, customerID, limit, offset)
+}
+
+// adminResellerResponse builds AdminResellerResponse from customer + optional credit account.
+func adminResellerResponse(telegramID int64, isReseller bool, acct *database.ResellerCreditAccount) AdminResellerResponse {
+	resp := AdminResellerResponse{
+		TelegramID: telegramID,
+		IsReseller: isReseller,
+	}
+	if acct != nil {
+		resp.CreditLimit = acct.CreditLimit
+		resp.BalanceOwed = acct.BalanceOwed
+		resp.RemainingCredit = acct.RemainingCredit()
+	}
+	return resp
 }
 
 func (h *APIHandler) savePromoCode(ctx context.Context, code string, discount, maxUses int, validUntil time.Time) error {
@@ -1733,32 +1809,61 @@ func (h *APIHandler) ListResellers(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]AdminResellerResponse, 0, len(customers))
 	for _, c := range customers {
-		resp = append(resp, AdminResellerResponse{
-			TelegramID: c.TelegramID,
-			IsReseller: c.IsReseller,
-		})
+		var acct *database.ResellerCreditAccount
+		// Prefer EnsureAccount so admin list shows real remaining credit.
+		// If credit repo/seams unavailable, leave credit fields as zeros.
+		if h.ensureResellerAccountFn != nil || h.resellerCreditRepo != nil {
+			if a, err := h.ensureResellerAccount(r.Context(), c.ID, config.ResellerDefaultCreditLimit()); err == nil {
+				acct = a
+			} else {
+				slog.Warn("list resellers: ensure credit account failed", "customer_id", c.ID, "error", err)
+			}
+		}
+		resp = append(resp, adminResellerResponse(c.TelegramID, c.IsReseller, acct))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// AdminCustomerByTelegramID routes admin customer sub-resources:
+//
+//	PATCH .../{telegram_id}/reseller
+//	PATCH .../{telegram_id}/credit
+//	POST  .../{telegram_id}/settlements  (offline AR; no wallet debit)
+//	GET   .../{telegram_id}/ledger
 func (h *APIHandler) AdminCustomerByTelegramID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin/customers/")
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[1] != "reseller" {
+	if len(parts) != 2 {
 		http.Error(w, "Not found", http.StatusNotFound)
-		return
-	}
-	if r.Method != http.MethodPatch {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	telegramID, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || telegramID == 0 {
 		http.Error(w, "Invalid telegram id", http.StatusBadRequest)
+		return
+	}
+
+	switch parts[1] {
+	case "reseller":
+		h.patchAdminCustomerReseller(w, r, telegramID)
+	case "credit":
+		h.patchAdminCustomerCredit(w, r, telegramID)
+	case "settlements":
+		h.postAdminCustomerSettlement(w, r, telegramID)
+	case "ledger":
+		h.getAdminCustomerLedger(w, r, telegramID)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+func (h *APIHandler) patchAdminCustomerReseller(w http.ResponseWriter, r *http.Request, telegramID int64) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -1785,11 +1890,263 @@ func (h *APIHandler) AdminCustomerByTelegramID(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	var acct *database.ResellerCreditAccount
+	if req.IsReseller && (h.ensureResellerAccountFn != nil || h.resellerCreditRepo != nil) {
+		a, err := h.ensureResellerAccount(r.Context(), customer.ID, config.ResellerDefaultCreditLimit())
+		if err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to ensure reseller credit account", err)
+			return
+		}
+		acct = a
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(AdminResellerResponse{
-		TelegramID: customer.TelegramID,
-		IsReseller: req.IsReseller,
-	})
+	_ = json.NewEncoder(w).Encode(adminResellerResponse(customer.TelegramID, req.IsReseller, acct))
+}
+
+func (h *APIHandler) patchAdminCustomerCredit(w http.ResponseWriter, r *http.Request, telegramID int64) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.setResellerCreditLimitFn == nil && h.resellerCreditRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller credit unavailable", fmt.Errorf("reseller credit repo nil"))
+		return
+	}
+
+	var req AdminResellerCreditRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.CreditLimit < 0 || math.IsNaN(req.CreditLimit) || math.IsInf(req.CreditLimit, 0) {
+		http.Error(w, "credit_limit must be a finite non-negative number", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load customer", err)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "Customer not found", http.StatusNotFound)
+		return
+	}
+
+	acct, err := h.setResellerCreditLimit(r.Context(), customer.ID, req.CreditLimit)
+	if err != nil {
+		if errors.Is(err, database.ErrResellerCreditLimitBelowOwed) {
+			http.Error(w, "credit_limit cannot be below balance_owed", http.StatusBadRequest)
+			return
+		}
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to set credit limit", err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(adminResellerResponse(customer.TelegramID, customer.IsReseller, acct))
+}
+
+// postAdminCustomerSettlement records an offline AR settlement.
+// Money-safety: NO wallet debit, NO wallet_transaction — AR ledger only.
+func (h *APIHandler) postAdminCustomerSettlement(w http.ResponseWriter, r *http.Request, telegramID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.recordAdminSettlementFn == nil && (h.resellerCreditRepo == nil || h.customerRepo == nil) {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller settlement unavailable", fmt.Errorf("reseller settlement deps nil"))
+		return
+	}
+
+	adminTelegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var req AdminSettlementRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Amount <= 0 || math.IsNaN(req.Amount) || math.IsInf(req.Amount, 0) {
+		http.Error(w, "amount must be a finite positive number", http.StatusBadRequest)
+		return
+	}
+
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if idempotencyKey == "" {
+		idempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	if idempotencyKey == "" {
+		http.Error(w, "Idempotency-Key header or idempotency_key body field is required", http.StatusBadRequest)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load customer", err)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "Customer not found", http.StatusNotFound)
+		return
+	}
+
+	createdBy := fmt.Sprintf("admin:%d", adminTelegramID)
+	note := strings.TrimSpace(req.Note)
+
+	var (
+		entry   *database.ResellerLedgerEntry
+		acct    *database.ResellerCreditAccount
+		created bool
+	)
+
+	if h.recordAdminSettlementFn != nil {
+		entry, acct, created, err = h.recordAdminSettlementFn(
+			r.Context(), customer.ID, req.Amount, note, createdBy, idempotencyKey,
+		)
+	} else {
+		// Production path: EnsureAccount → BeginTx → RecordSettlementTx → Commit.
+		// Intentionally does NOT call DeductBalance / wallet_transaction.
+		if _, err := h.ensureResellerAccount(r.Context(), customer.ID, config.ResellerDefaultCreditLimit()); err != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to ensure reseller account", err)
+			return
+		}
+
+		ctx := r.Context()
+		dbTx, txErr := h.customerRepo.BeginTx(ctx)
+		if txErr != nil {
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to begin settlement transaction", txErr)
+			return
+		}
+		defer func() { _ = dbTx.Rollback(ctx) }()
+
+		entry, acct, created, err = h.resellerCreditRepo.RecordSettlementTx(ctx, dbTx, database.CreateLedgerEntryInput{
+			CustomerID:     customer.ID,
+			EntryType:      database.ResellerLedgerEntryTypeSettlement,
+			Direction:      database.ResellerLedgerDirectionDecrease,
+			Amount:         req.Amount,
+			EffectiveAt:    h.currentTime().UTC(),
+			Note:           note,
+			CreatedBy:      createdBy,
+			IdempotencyKey: idempotencyKey,
+		})
+		if err == nil {
+			if created {
+				if commitErr := dbTx.Commit(ctx); commitErr != nil {
+					writeSanitizedError(w, http.StatusInternalServerError, "Failed to commit settlement", commitErr)
+					return
+				}
+			} else {
+				_ = dbTx.Rollback(ctx)
+				if live, getErr := h.getResellerAccount(ctx, customer.ID); getErr == nil && live != nil {
+					acct = live
+				}
+			}
+		}
+	}
+
+	if err != nil {
+		switch {
+		case errors.Is(err, database.ErrResellerOverSettlement):
+			http.Error(w, "Settlement amount exceeds balance owed", http.StatusBadRequest)
+			return
+		case errors.Is(err, database.ErrResellerLedgerIdempotencyMismatch):
+			http.Error(w, "Idempotency key already used with a different settlement", http.StatusConflict)
+			return
+		default:
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to record AR settlement", err)
+			return
+		}
+	}
+
+	resp := CreateSettlementResponse{
+		Created:         created,
+		Amount:          entry.Amount,
+		BalanceOwed:     acct.BalanceOwed,
+		RemainingCredit: acct.RemainingCredit(),
+		IdempotencyKey:  idempotencyKey,
+		LedgerEntryID:   entry.ID,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if created {
+		w.WriteHeader(http.StatusCreated)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *APIHandler) getAdminCustomerLedger(w http.ResponseWriter, r *http.Request, telegramID int64) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.listResellerLedgerFn == nil && h.resellerCreditRepo == nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Reseller credit unavailable", fmt.Errorf("reseller credit repo nil"))
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load customer", err)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "Customer not found", http.StatusNotFound)
+		return
+	}
+
+	limit := 50
+	offset := 0
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			http.Error(w, "limit must be a positive integer", http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("offset")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			http.Error(w, "offset must be a non-negative integer", http.StatusBadRequest)
+			return
+		}
+		offset = n
+	}
+
+	entries, err := h.listResellerLedger(r.Context(), customer.ID, limit, offset)
+	if err != nil {
+		writeSanitizedError(w, http.StatusInternalServerError, "Failed to load reseller ledger", err)
+		return
+	}
+
+	items := make([]ResellerLedgerItem, 0, len(entries))
+	for _, e := range entries {
+		item := ResellerLedgerItem{
+			ID:          e.ID,
+			EntryType:   string(e.EntryType),
+			Direction:   string(e.Direction),
+			Amount:      e.Amount,
+			PurchaseID:  e.PurchaseID,
+			EffectiveAt: e.EffectiveAt.UTC().Format(time.RFC3339),
+			CreatedBy:   e.CreatedBy,
+		}
+		if note := strings.TrimSpace(e.Note); note != "" {
+			item.Note = note
+		}
+		items = append(items, item)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(items)
 }
 
 func (h *APIHandler) DeleteAdminPlan(w http.ResponseWriter, r *http.Request) {

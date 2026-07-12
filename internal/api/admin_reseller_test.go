@@ -75,6 +75,9 @@ func TestRegisterHandlersProtectsAdminResellerRoutes(t *testing.T) {
 	}{
 		{name: "list resellers", method: http.MethodGet, path: "/api/admin/resellers"},
 		{name: "toggle reseller", method: http.MethodPatch, path: "/api/admin/customers/12345/reseller"},
+		{name: "set credit", method: http.MethodPatch, path: "/api/admin/customers/12345/credit"},
+		{name: "admin settlement", method: http.MethodPost, path: "/api/admin/customers/12345/settlements"},
+		{name: "admin ledger", method: http.MethodGet, path: "/api/admin/customers/12345/ledger"},
 	}
 
 	for _, tt := range tests {
