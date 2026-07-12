@@ -60,6 +60,15 @@ export interface ResellerAccount {
     is_reseller?: boolean;
 }
 
+/** Admin list / credit / toggle response for a reseller customer. */
+export interface AdminReseller {
+    telegram_id: number;
+    is_reseller: boolean;
+    credit_limit: number;
+    balance_owed: number;
+    remaining_credit: number;
+}
+
 export interface ResellerLedgerEntry {
     id: number;
     entry_type: string;
