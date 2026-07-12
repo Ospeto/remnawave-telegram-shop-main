@@ -10,7 +10,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { buildTelegramStartUrl } from '../lib/externalLinks';
-import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
+import { APIError, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
 
@@ -209,7 +209,7 @@ export function Checkout() {
         purchaseIntentRef.current = { action: null, key: null };
 
         try {
-            const plansData = await fetchJSON<Plan[]>('/api/plans');
+            const plansData = await fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData);
             const normalizedPlans = getVisiblePlans(Array.isArray(plansData) ? plansData : []);
 
             if (!isWalletTopup && !resolvePlanReference(normalizedPlans, planIndex).plan) {
@@ -565,8 +565,7 @@ export function Checkout() {
 
     // Pre-purchase wallet eligibility uses full server plan price only.
     // URL discount is not trusted; promo is applied server-side via promo_code.
-    const isReseller = !!userData?.is_reseller;
-    const showResellerBadge = !isWalletTopup && (selectedPlan?.pricing_tier === 'wholesale' || isReseller);
+    const showResellerBadge = !isWalletTopup && selectedPlan?.pricing_tier === 'wholesale';
     const topUpAmount = isWalletTopup && hasValidTopUpAmount ? parsedTopUpAmount : 0;
     const targetAmount = isWalletTopup ? topUpAmount : (selectedPlan?.price ?? 0);
     const canPayWithWallet = !isWalletTopup && selectedPlan !== undefined && walletBalance !== null && walletBalance >= targetAmount;

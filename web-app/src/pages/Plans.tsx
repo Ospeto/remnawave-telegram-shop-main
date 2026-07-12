@@ -8,8 +8,8 @@ import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
-import { APIError, fetchJSON, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { APIError, isAPIStatus } from '../lib/http';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans } from '../lib/plans';
 
 
@@ -60,7 +60,7 @@ export function Plans() {
         setAuthExpired(false);
 
         try {
-            const plansData = await fetchJSON<Plan[]>('/api/plans');
+            const plansData = await fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData);
             setPlans(getVisiblePlans(Array.isArray(plansData) ? plansData : []));
 
             if (isWalletTopup) {

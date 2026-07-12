@@ -714,6 +714,12 @@ describe('Checkout', () => {
 
         await screen.findByText('How to pay');
         await waitFor(() => {
+            const plansCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/plans');
+            expect(plansCall).toBeTruthy();
+            const [, plansOptions] = plansCall as [string, RequestInit];
+            const plansHeaders = new Headers(plansOptions?.headers);
+            expect(plansHeaders.get('Authorization')).toBe('Bearer session-token');
+
             const purchaseCall = fetchMock.mock.calls.find(([url]) => url === '/api/purchase');
             expect(purchaseCall).toBeTruthy();
 
@@ -722,5 +728,113 @@ describe('Checkout', () => {
             expect(body.promo_code).toBeUndefined();
             expect(body.plan_id).toBe('plan-30');
         });
+    });
+
+    it('fetches /api/plans with Authorization and uses wholesale price for wallet eligibility', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                const headers = new Headers(init?.headers);
+                expect(headers.get('Authorization')).toMatch(/^Bearer /);
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 4000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'wholesale',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                // Between wholesale (4000) and retail (5000): eligible only if wholesale is used.
+                return jsonResponse({ balance: 4500, currency: 'MMK' });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByText('Reseller price')).toBeTruthy();
+
+        await waitFor(() => {
+            const plansCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/plans');
+            expect(plansCall).toBeTruthy();
+            const headers = new Headers((plansCall?.[1] as RequestInit | undefined)?.headers);
+            expect(headers.get('Authorization')).toBe('Bearer session-token');
+        });
+
+        // Wallet option should be available because balance covers wholesale price.
+        expect(await screen.findByRole('button', { name: /Pay 4,000 MMK from Wallet/i })).toBeTruthy();
+    });
+
+    it('shows reseller badge only when pricing_tier is wholesale', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    {
+                        id: 'plan-30',
+                        label: '1 Month',
+                        days: 30,
+                        price: 5000,
+                        traffic_limit_gb: 0,
+                        currency: 'MMK',
+                        active: true,
+                        sort_order: 0,
+                        pricing_tier: 'retail',
+                    },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                    is_reseller: true,
+                });
+            }
+            if (url === '/api/wallet') {
+                return jsonResponse({ balance: 0, currency: 'MMK' });
+            }
+
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByText('1 Month')).toBeTruthy();
+        expect(screen.queryByText('Reseller price')).toBeNull();
     });
 });
