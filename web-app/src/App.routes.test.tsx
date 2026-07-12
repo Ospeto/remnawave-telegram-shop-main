@@ -1,19 +1,27 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// Keep this list in sync with web-app/src/App.tsx route table.
-// Full App mount needs Telegram/theme providers; registration is asserted statically.
-const APP_ROUTE_SNIPPETS = [
-  'import { AdminFinance } from \'./pages/AdminFinance\'',
-  '<Route path="/admin/finance" element={<AdminFinance />} />',
+// Assert nested admin registration against real App.tsx source.
+const appSource = readFileSync(resolve(__dirname, './App.tsx'), 'utf8');
+
+const REQUIRED = [
+  "import { AdminLayout } from './pages/AdminLayout'",
+  "import { AdminHub } from './pages/AdminHub'",
+  "import { AdminFinance } from './pages/AdminFinance'",
+  "import { AdminPlans } from './pages/AdminPlans'",
+  "import { AdminPromos } from './pages/AdminPromos'",
+  '<Route path="/admin" element={<AdminLayout />}>',
+  '<Route index element={<AdminHub />} />',
+  '<Route path="finance" element={<AdminFinance />} />',
+  '<Route path="plans" element={<AdminPlans />} />',
+  '<Route path="promos" element={<AdminPromos />} />',
 ] as const;
 
-describe('App finance route registration', () => {
-  it('documents /admin/finance AdminFinance registration contract', () => {
-    for (const snippet of APP_ROUTE_SNIPPETS) {
-      expect(snippet.includes('AdminFinance') || snippet.includes('/admin/finance')).toBe(true);
+describe('App admin route registration', () => {
+  it('registers nested /admin layout + hub + children in App.tsx', () => {
+    for (const snippet of REQUIRED) {
+      expect(appSource).toContain(snippet);
     }
-    // Contract: App.tsx must keep these exact registrations (see App.tsx).
-    expect(APP_ROUTE_SNIPPETS[0]).toContain('AdminFinance');
-    expect(APP_ROUTE_SNIPPETS[1]).toContain('/admin/finance');
   });
 });
