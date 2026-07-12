@@ -22,20 +22,17 @@ function formatMoney(value: number): string {
     return (value || 0).toLocaleString();
 }
 
+// direction increase → +amount (owed up / red)
+// direction decrease → -amount (owed down / green)
+// Prefer direction; entry_type is secondary label only
 function resolveLedgerSignedAmount(entry: ResellerLedgerEntry): number {
-    if (entry.direction === 'debit' || entry.direction === 'in') {
-        return Math.abs(entry.amount);
-    }
-    if (entry.direction === 'credit' || entry.direction === 'out') {
-        return -Math.abs(entry.amount);
-    }
-    if (entry.entry_type === 'settlement' || entry.entry_type === 'payment') {
-        return -Math.abs(entry.amount);
-    }
-    if (entry.entry_type === 'charge') {
-        return Math.abs(entry.amount);
-    }
-    return entry.amount;
+    const dir = entry.direction.toLowerCase();
+    if (dir === 'decrease') return -Math.abs(entry.amount);
+    if (dir === 'increase') return Math.abs(entry.amount);
+    // fallback: settlement decreases, sale increases
+    const t = entry.entry_type.toLowerCase();
+    if (t === 'settlement') return -Math.abs(entry.amount);
+    return Math.abs(entry.amount);
 }
 
 function formatLedgerAmount(entry: ResellerLedgerEntry): string {

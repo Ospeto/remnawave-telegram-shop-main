@@ -67,12 +67,30 @@ describe('ResellerAccount', () => {
                 return jsonResponse([
                     {
                         id: 1,
-                        entry_type: 'charge',
-                        direction: 'debit',
+                        entry_type: 'sale',
+                        direction: 'increase',
                         amount: 25000,
                         effective_at: '2026-07-01T10:00:00Z',
                         note: 'Postpaid purchase',
                         created_by: 'system',
+                    },
+                    {
+                        id: 2,
+                        entry_type: 'settlement',
+                        direction: 'decrease',
+                        amount: 10000,
+                        effective_at: '2026-07-02T10:00:00Z',
+                        note: 'Wallet payment',
+                        created_by: 'system',
+                    },
+                    {
+                        id: 3,
+                        entry_type: 'adjustment',
+                        direction: 'decrease',
+                        amount: 5000,
+                        effective_at: '2026-07-03T10:00:00Z',
+                        note: 'Credit adjustment',
+                        created_by: 'admin',
                     },
                 ]);
             }
@@ -88,8 +106,17 @@ describe('ResellerAccount', () => {
         expect(screen.getByText('100,000')).toBeTruthy();
         expect(screen.getByText('25,000')).toBeTruthy();
         expect(screen.getByText('75,000')).toBeTruthy();
-        expect(screen.getByText('charge')).toBeTruthy();
+        expect(screen.getByText('sale')).toBeTruthy();
         expect(screen.getByText('Postpaid purchase')).toBeTruthy();
+        // increase → positive/red; decrease → negative/green
+        expect(screen.getByText('+25,000')).toBeTruthy();
+        expect(screen.getByText('-10,000')).toBeTruthy();
+        expect(screen.getByText('-5,000')).toBeTruthy();
+        expect(screen.getByText('settlement')).toBeTruthy();
+        expect(screen.getByText('adjustment')).toBeTruthy();
+        expect(screen.getByText('+25,000').style.color).toBe('rgb(255, 59, 48)');
+        expect(screen.getByText('-10,000').style.color).toBe('rgb(52, 199, 89)');
+        expect(screen.getByText('-5,000').style.color).toBe('rgb(52, 199, 89)');
     });
 
     it('pays balance via wallet settlement POST', async () => {
