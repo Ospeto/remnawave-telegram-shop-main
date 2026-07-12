@@ -218,6 +218,14 @@ func normalizePlans(plans []Plan) ([]Plan, error) {
 		if plan.Price <= 0 {
 			return nil, fmt.Errorf("plan price must be positive")
 		}
+		if plan.WholesalePrice != nil {
+			if *plan.WholesalePrice <= 0 {
+				return nil, fmt.Errorf("plan wholesale_price must be positive")
+			}
+			if *plan.WholesalePrice > plan.Price {
+				return nil, fmt.Errorf("plan wholesale_price cannot exceed price")
+			}
+		}
 		if plan.TrafficLimitGB < 0 {
 			return nil, fmt.Errorf("plan traffic limit cannot be negative")
 		}

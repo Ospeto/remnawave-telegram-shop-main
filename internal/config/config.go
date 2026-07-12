@@ -18,6 +18,7 @@ type Plan struct {
 	Label          string `json:"label"`
 	Days           int    `json:"days"`
 	Price          int    `json:"price"`
+	WholesalePrice *int   `json:"wholesale_price,omitempty"`
 	TrafficLimitGB int    `json:"traffic_limit_gb"`
 	SortOrder      int    `json:"sort_order"`
 	Active         bool   `json:"active"`
