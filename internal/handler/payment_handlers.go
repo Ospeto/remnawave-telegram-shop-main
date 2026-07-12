@@ -37,11 +37,29 @@ func formatPrice(price int) string {
 	return result.String()
 }
 
+// planPriceLabel returns the keyboard/display label for a plan using ResolvePlanPrice.
+func planPriceLabel(plan config.Plan, isReseller bool) string {
+	amount, _ := config.ResolvePlanPrice(plan, isReseller)
+	return fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(amount), config.Currency())
+}
+
 func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
 	langCode := update.CallbackQuery.From.LanguageCode
 
-	keyboard := h.buildPricingKeyboard(langCode)
+	isReseller := false
+	if h.customerRepository != nil {
+		dbCtx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+		customer, err := h.customerRepository.FindByTelegramId(dbCtx, callback.Chat.ID)
+		cancel()
+		if err != nil {
+			slog.Error("Error finding customer for pricing keyboard", "error", err)
+		} else if customer != nil {
+			isReseller = customer.IsReseller
+		}
+	}
+
+	keyboard := h.buildPricingKeyboard(langCode, isReseller)
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    callback.Chat.ID,
@@ -58,13 +76,13 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 	}
 }
 
-func (h Handler) buildPricingKeyboard(langCode string) [][]models.InlineKeyboardButton {
+func (h Handler) buildPricingKeyboard(langCode string, isReseller bool) [][]models.InlineKeyboardButton {
 	planSlots := config.ActivePlanSlots()
 	var keyboard [][]models.InlineKeyboardButton
 
 	for _, slot := range planSlots {
 		plan := slot.Plan
-		label := fmt.Sprintf("%s %d Days - %s %s", plan.Label, plan.Days, formatPrice(plan.Price), config.Currency())
+		label := planPriceLabel(plan, isReseller)
 		keyboard = append(keyboard, []models.InlineKeyboardButton{{
 			Text:         label,
 			CallbackData: fmt.Sprintf("%s?plan=%d", CallbackSell, slot.LegacyIndex),
@@ -162,7 +180,9 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 }
 
 func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, plan *config.Plan, customer *database.Customer, planIdx int, langCode string) {
-	_, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(plan.Price), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
+	amount, tier := config.ResolvePlanPrice(*plan, customer.IsReseller)
+	ctx = payment.WithPricingTier(ctx, tier)
+	_, purchaseId, err := h.paymentService.CreatePurchase(ctx, float64(amount), plan.Days, plan.TrafficLimitGB, customer, database.InvoiceTypeMobileBanking, "")
 	if err != nil {
 		var pendingErr *payment.AwaitingReceiptVerificationError
 		if errors.As(err, &pendingErr) && pendingErr.Purchase != nil {
@@ -176,7 +196,8 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 	// Store pending state: telegramID → purchaseID
 	h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
 
-	h.editMobileBankingInstructions(ctx, b, callback, plan.Price, planIdx, langCode, false)
+	// Instructions show resolved amount (wholesale for resellers when configured).
+	h.editMobileBankingInstructions(ctx, b, callback, amount, planIdx, langCode, false)
 }
 
 func (h Handler) handlePendingMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, pending *database.Purchase, planIdx int, langCode string) {
