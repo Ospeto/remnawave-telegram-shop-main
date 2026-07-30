@@ -303,6 +303,8 @@ func mapCreatePurchaseIdempotencyError(err error) (status int, message string, o
 		return http.StatusForbidden, "Idempotency key conflict", true
 	case errors.Is(err, payment.ErrIdempotencyRequestMismatch):
 		return http.StatusConflict, "Idempotency key already used with a different request", true
+	case errors.Is(err, payment.ErrSubscriptionKeyUnavailable):
+		return http.StatusConflict, "Subscription key is no longer available; choose an active key", true
 	default:
 		return 0, "", false
 	}
@@ -553,10 +555,10 @@ type APIHandler struct {
 	updateCustomerFields        func(context.Context, int64, map[string]interface{}) error
 	listResellersFn             func(context.Context) ([]database.Customer, error)
 	// Optional seams for admin reseller credit unit tests (nil → production repos).
-	setResellerCreditLimitFn  func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
-	ensureResellerAccountFn   func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
-	getResellerAccountFn      func(context.Context, int64) (*database.ResellerCreditAccount, error)
-	listResellerLedgerFn       func(context.Context, int64, int, int) ([]database.ResellerLedgerEntry, error)
+	setResellerCreditLimitFn func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
+	ensureResellerAccountFn  func(context.Context, int64, float64) (*database.ResellerCreditAccount, error)
+	getResellerAccountFn     func(context.Context, int64) (*database.ResellerCreditAccount, error)
+	listResellerLedgerFn     func(context.Context, int64, int, int) ([]database.ResellerLedgerEntry, error)
 	recordAdminSettlementFn  func(ctx context.Context, customerID int64, amount float64, note, createdBy, idempotencyKey string) (*database.ResellerLedgerEntry, *database.ResellerCreditAccount, bool, error)
 }
 
@@ -1281,6 +1283,10 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		}
 		if extendKey.CustomerID != customer.ID {
 			http.Error(w, "Purchase not allowed", http.StatusForbidden)
+			return
+		}
+		if extendKey.Status != "active" || extendKey.RemnawaveUUID == uuid.Nil {
+			http.Error(w, "Subscription key is no longer available; choose an active key", http.StatusConflict)
 			return
 		}
 	}

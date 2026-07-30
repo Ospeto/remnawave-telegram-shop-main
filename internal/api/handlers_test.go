@@ -240,6 +240,13 @@ func TestMapCreatePurchaseIdempotencyError_OtherErrorNotMapped(t *testing.T) {
 	}
 }
 
+func TestMapCreatePurchaseIdempotencyError_UnavailableExtensionKey(t *testing.T) {
+	status, msg, ok := mapCreatePurchaseIdempotencyError(payment.ErrSubscriptionKeyUnavailable)
+	if !ok || status != http.StatusConflict || msg == "" {
+		t.Fatalf("mapCreatePurchaseIdempotencyError() = %d, %q, %v; want conflict mapping", status, msg, ok)
+	}
+}
+
 func TestShouldUpdatePurchaseFieldsAfterCreate_SkipsIdempotentResume(t *testing.T) {
 	// On idempotent resume, plan_label/payment_phone must not rewrite the original purchase.
 	if shouldUpdatePurchaseFieldsAfterCreate(&database.Purchase{ID: 1, PlanLabel: "Pro 30d"}) {

@@ -62,6 +62,9 @@ var (
 	ErrTrialAlreadyUsed = errors.New("trial already used")
 	// ErrCustomerNotFound means the customer record does not exist.
 	ErrCustomerNotFound = errors.New("customer not found")
+	// ErrSubscriptionKeyUnavailable means an extension target is no longer a
+	// live key owned by the customer. Callers must start a fresh-key purchase.
+	ErrSubscriptionKeyUnavailable = errors.New("subscription key is unavailable for extension")
 	// ErrIdempotencyKeyConflict means the Idempotency-Key is already bound to another customer.
 	// Callers must not disclose or mutate the existing purchase.
 	ErrIdempotencyKeyConflict = errors.New("idempotency key belongs to another customer")
@@ -72,6 +75,18 @@ var (
 
 type AwaitingReceiptVerificationError struct {
 	Purchase *database.Purchase
+}
+
+func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
+	return key != nil && key.CustomerID == customerID && key.Status == "active" && key.RemnawaveUUID != uuid.Nil
+}
+
+func remoteUserMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "404") || strings.Contains(message, "not found")
 }
 
 func (e *AwaitingReceiptVerificationError) Error() string {
@@ -1310,6 +1325,33 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	}
 
 	const bytesInGB = 1073741824
+	// A receipt may outlive the subscription key selected at checkout. Never
+	// retry a remote update against a deleted/missing UUID; convert that paid
+	// intent into a fresh-key fulfillment instead.
+	if purchase.ExtendKeyID != nil && s.subKeyRepo == nil {
+		s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+		return ErrSubscriptionKeyUnavailable
+	}
+	if purchase.ExtendKeyID != nil {
+		extendKey, keyErr := s.subKeyRepo.FindByID(ctx, *purchase.ExtendKeyID)
+		if keyErr != nil {
+			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+			return keyErr
+		}
+		if !subscriptionKeyCanBeExtended(extendKey, customer.ID) {
+			if clearErr := s.purchaseRepository.UpdateFields(ctx, purchase.ID, map[string]interface{}{"extend_key_id": nil}); clearErr != nil {
+				s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+				return fmt.Errorf("clear unavailable extension target: %w", clearErr)
+			}
+			slog.Warn("Extension target unavailable; fulfilling as a fresh key", "purchase_id", utils.MaskHalfInt64(purchase.ID), "key_id", *purchase.ExtendKeyID, "key_status", func() string {
+				if extendKey == nil {
+					return "missing"
+				}
+				return extendKey.Status
+			}())
+			purchase.ExtendKeyID = nil
+		}
+	}
 
 	if purchase.InvoiceType == database.InvoiceTypeWalletTopUp {
 		// WALLET TOP-UP — balance credit and transaction log must be atomic.
@@ -1344,6 +1386,15 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 		// Extend the specific Remnawave user by UUID (adds days and traffic)
 		remnawaveUser, err := s.remnawaveClient.ExtendUser(ctx, existingKey.RemnawaveUUID, purchase.TrafficLimitGB*bytesInGB, purchase.Days)
 		if err != nil {
+			if remoteUserMissing(err) {
+				if clearErr := s.purchaseRepository.UpdateFields(ctx, purchase.ID, map[string]interface{}{"extend_key_id": nil}); clearErr != nil {
+					s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+					return fmt.Errorf("clear missing remote extension target: %w", clearErr)
+				}
+				s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+				slog.Warn("Remote extension target missing; retrying fulfillment with a fresh key", "purchase_id", utils.MaskHalfInt64(purchase.ID), "key_id", existingKey.ID)
+				return s.ProcessPurchaseById(ctx, purchase.ID)
+			}
 			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
 			return err
 		}
@@ -1849,6 +1900,18 @@ func (s *PaymentService) CreatePurchase(ctx context.Context, amount float64, day
 }
 
 func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, extendKeyID *int64) (url string, purchaseId int64, err error) {
+	if extendKeyID != nil {
+		if s.subKeyRepo == nil {
+			return "", 0, ErrSubscriptionKeyUnavailable
+		}
+		key, lookupErr := s.subKeyRepo.FindByID(ctx, *extendKeyID)
+		if lookupErr != nil {
+			return "", 0, lookupErr
+		}
+		if !subscriptionKeyCanBeExtended(key, customer.ID) {
+			return "", 0, ErrSubscriptionKeyUnavailable
+		}
+	}
 	var promoID *int64
 	if invoiceType != database.InvoiceTypeWalletTopUp {
 		// When an Idempotency-Key is present, soft-resolve promo for body match
@@ -2502,6 +2565,16 @@ func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount fl
 			}
 		}
 		return "", 0, err
+	}
+	if s.subKeyRepo == nil {
+		return "", 0, ErrSubscriptionKeyUnavailable
+	}
+	key, lookupErr := s.subKeyRepo.FindByID(ctx, keyID)
+	if lookupErr != nil {
+		return "", 0, lookupErr
+	}
+	if !subscriptionKeyCanBeExtended(key, customer.ID) {
+		return "", 0, ErrSubscriptionKeyUnavailable
 	}
 
 	if customer.Balance < amount {

@@ -16,6 +16,38 @@ import (
 	"github.com/jackc/pgconn"
 )
 
+func TestSubscriptionKeyCanBeExtendedRequiresLiveOwnedKey(t *testing.T) {
+	keyID := uuid.New()
+	tests := []struct {
+		name string
+		key  *database.SubscriptionKey
+		cust int64
+		want bool
+	}{
+		{"active owned", &database.SubscriptionKey{CustomerID: 7, Status: "active", RemnawaveUUID: keyID}, 7, true},
+		{"deleted", &database.SubscriptionKey{CustomerID: 7, Status: "deleted", RemnawaveUUID: keyID}, 7, false},
+		{"wrong customer", &database.SubscriptionKey{CustomerID: 8, Status: "active", RemnawaveUUID: keyID}, 7, false},
+		{"missing remote uuid", &database.SubscriptionKey{CustomerID: 7, Status: "active"}, 7, false},
+		{"missing row", nil, 7, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := subscriptionKeyCanBeExtended(tt.key, tt.cust); got != tt.want {
+				t.Fatalf("subscriptionKeyCanBeExtended() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoteUserMissing(t *testing.T) {
+	if !remoteUserMissing(errors.New("fallback status 404: user not found")) {
+		t.Fatal("remoteUserMissing() = false for a missing remote user")
+	}
+	if remoteUserMissing(errors.New("timeout contacting Remnawave")) {
+		t.Fatal("remoteUserMissing() = true for a transient error")
+	}
+}
+
 func TestCanonicalCustomerSubscriptionStatePrefersLatestExpiryKey(t *testing.T) {
 	now := time.Now()
 	earlier := now.Add(24 * time.Hour)
