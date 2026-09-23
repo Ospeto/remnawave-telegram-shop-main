@@ -12,8 +12,48 @@ import (
 	"github.com/go-telegram/bot/models"
 
 	"remnawave-tg-shop-bot/internal/config"
+	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
 )
+
+func (h Handler) renderTrialIneligible(customer *database.Customer, langCode string) (string, [][]models.InlineKeyboardButton) {
+	hasActiveSub := customer != nil && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" &&
+		customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
+
+	if hasActiveSub {
+		var subURL string
+		if customer.SubscriptionLink != nil {
+			subURL = *customer.SubscriptionLink
+		}
+		escapedURL := html.EscapeString(subURL)
+		notice := h.translation.GetText(langCode, "trial_already_active")
+		text := fmt.Sprintf("%s\n\n<code>%s</code>", notice, escapedURL)
+		markup := h.buildDirectSubscriptionKeyboard(langCode, subURL)
+		return text, markup
+	}
+
+	text := h.translation.GetText(langCode, "trial_already_used_notice")
+	var buyButton models.InlineKeyboardButton
+	if config.GetMiniAppURL() != "" {
+		buyButton = models.InlineKeyboardButton{
+			Text: h.translation.GetText(langCode, "buy_button"),
+			WebApp: &models.WebAppInfo{
+				URL: config.GetMiniAppURL(),
+			},
+		}
+	} else {
+		buyButton = models.InlineKeyboardButton{
+			Text:         h.translation.GetText(langCode, "buy_button"),
+			CallbackData: CallbackBuy,
+		}
+	}
+
+	markup := [][]models.InlineKeyboardButton{
+		{buyButton},
+		{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
+	}
+	return text, markup
+}
 
 func (h Handler) TrialCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.Message == nil || update.Message.From == nil {
@@ -41,6 +81,18 @@ func (h Handler) TrialCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	eligible, err := h.paymentService.CanActivateTrial(ctx, telegramID)
 	if err != nil {
 		slog.Error("Error checking trial eligibility", "error", err)
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:    chatID,
+			Text:      h.translation.GetText(langCode, "trial_failed"),
+			ParseMode: models.ParseModeHTML,
+			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
+			}},
+		})
+		if err != nil {
+			slog.Error("Error sending trial error message", "error", err)
+		}
+		return
 	}
 
 	if eligible {
@@ -70,63 +122,19 @@ func (h Handler) TrialCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 		h.applyCanonicalConnectState(ctx, customer)
 	}
 
-	hasActiveSub := customer != nil && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" &&
-		customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
-
-	if hasActiveSub {
-		var subURL string
-		if customer.SubscriptionLink != nil {
-			subURL = *customer.SubscriptionLink
-		}
-		escapedURL := html.EscapeString(subURL)
-		notice := h.translation.GetText(langCode, "trial_already_active")
-		text := fmt.Sprintf("%s\n\n<code>%s</code>", notice, escapedURL)
-
-		markup := h.buildDirectSubscriptionKeyboard(langCode, subURL)
-		isDisabled := true
-		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      text,
-			ParseMode: models.ParseModeHTML,
-			LinkPreviewOptions: &models.LinkPreviewOptions{
-				IsDisabled: &isDisabled,
-			},
-			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
-		})
-		if err != nil {
-			slog.Error("Error sending trial already active message", "error", err)
-		}
-		return
-	}
-
-	// Already used trial / not eligible and no active subscription
-	text := h.translation.GetText(langCode, "trial_already_used_notice")
-	var buyButton models.InlineKeyboardButton
-	if config.GetMiniAppURL() != "" {
-		buyButton = models.InlineKeyboardButton{
-			Text: h.translation.GetText(langCode, "buy_button"),
-			WebApp: &models.WebAppInfo{
-				URL: config.GetMiniAppURL(),
-			},
-		}
-	} else {
-		buyButton = models.InlineKeyboardButton{
-			Text:         h.translation.GetText(langCode, "buy_button"),
-			CallbackData: CallbackBuy,
-		}
-	}
-
+	text, markup := h.renderTrialIneligible(customer, langCode)
+	isDisabled := true
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    chatID,
 		Text:      text,
 		ParseMode: models.ParseModeHTML,
-		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-			{buyButton},
-			{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
-		}},
+		LinkPreviewOptions: &models.LinkPreviewOptions{
+			IsDisabled: &isDisabled,
+		},
+		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
 	})
 	if err != nil {
-		slog.Error("Error sending trial already used notice", "error", err)
+		slog.Error("Error sending trial ineligible message", "error", err)
 	}
 }
 
@@ -149,53 +157,18 @@ func (h Handler) TrialCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		if customer != nil {
 			h.applyCanonicalConnectState(ctx, customer)
 		}
-		hasActiveSub := customer != nil && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" &&
-			customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
-
-		if hasActiveSub {
-			subURL := *customer.SubscriptionLink
-			escapedURL := html.EscapeString(subURL)
-			notice := h.translation.GetText(langCode, "trial_already_active")
-			text := fmt.Sprintf("%s\n\n<code>%s</code>", notice, escapedURL)
-			markup := h.buildDirectSubscriptionKeyboard(langCode, subURL)
-			isDisabled := true
-			_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    callback.Chat.ID,
-				MessageID: callback.ID,
-				Text:      text,
-				ParseMode: models.ParseModeHTML,
-				LinkPreviewOptions: &models.LinkPreviewOptions{
-					IsDisabled: &isDisabled,
-				},
-				ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
-			})
-		} else {
-			text := h.translation.GetText(langCode, "trial_already_used_notice")
-			var buyButton models.InlineKeyboardButton
-			if config.GetMiniAppURL() != "" {
-				buyButton = models.InlineKeyboardButton{
-					Text: h.translation.GetText(langCode, "buy_button"),
-					WebApp: &models.WebAppInfo{
-						URL: config.GetMiniAppURL(),
-					},
-				}
-			} else {
-				buyButton = models.InlineKeyboardButton{
-					Text:         h.translation.GetText(langCode, "buy_button"),
-					CallbackData: CallbackBuy,
-				}
-			}
-			_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    callback.Chat.ID,
-				MessageID: callback.ID,
-				Text:      text,
-				ParseMode: models.ParseModeHTML,
-				ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-					{buyButton},
-					{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
-				}},
-			})
-		}
+		text, markup := h.renderTrialIneligible(customer, langCode)
+		isDisabled := true
+		_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    callback.Chat.ID,
+			MessageID: callback.ID,
+			Text:      text,
+			ParseMode: models.ParseModeHTML,
+			LinkPreviewOptions: &models.LinkPreviewOptions{
+				IsDisabled: &isDisabled,
+			},
+			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
+		})
 		return
 	}
 
@@ -231,35 +204,17 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 			if customer != nil {
 				h.applyCanonicalConnectState(ctx, customer)
 			}
-			if customer != nil && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
-				existingSub := *customer.SubscriptionLink
-				escapedURL := html.EscapeString(existingSub)
-				notice := h.translation.GetText(langCode, "trial_already_active")
-				text := fmt.Sprintf("%s\n\n<code>%s</code>", notice, escapedURL)
-				markup := h.buildDirectSubscriptionKeyboard(langCode, existingSub)
-				isDisabled := true
-				_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-					ChatID:    callback.Chat.ID,
-					MessageID: callback.ID,
-					Text:      text,
-					ParseMode: models.ParseModeHTML,
-					LinkPreviewOptions: &models.LinkPreviewOptions{
-						IsDisabled: &isDisabled,
-					},
-					ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
-				})
-				return
-			}
-
-			text := h.translation.GetText(langCode, "trial_already_used_notice")
+			text, markup := h.renderTrialIneligible(customer, langCode)
+			isDisabled := true
 			_, _ = b.EditMessageText(ctx, &bot.EditMessageTextParams{
 				ChatID:    callback.Chat.ID,
 				MessageID: callback.ID,
 				Text:      text,
 				ParseMode: models.ParseModeHTML,
-				ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-					{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
-				}},
+				LinkPreviewOptions: &models.LinkPreviewOptions{
+					IsDisabled: &isDisabled,
+				},
+				ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
 			})
 			return
 		}
