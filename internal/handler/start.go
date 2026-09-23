@@ -237,6 +237,20 @@ func (h Handler) resolveConnectButton(lang string) []models.InlineKeyboardButton
 }
 
 func (h Handler) buildStartKeyboard(existingCustomer *database.Customer, langCode string) [][]models.InlineKeyboardButton {
+	var rows [][]models.InlineKeyboardButton
+
+	if h.paymentService != nil && existingCustomer != nil {
+		eligible, err := h.paymentService.CanActivateTrial(context.Background(), existingCustomer.TelegramID)
+		if err == nil && eligible {
+			rows = append(rows, []models.InlineKeyboardButton{
+				{
+					Text:         h.translation.GetText(langCode, "trial_button"),
+					CallbackData: CallbackTrial,
+				},
+			})
+		}
+	}
+
 	shareURL := "https://t.me/share/url?url=" + config.BotURL() + "?start=ref_" + strconv.FormatInt(existingCustomer.TelegramID, 10)
 	var buyButton models.InlineKeyboardButton
 	if config.GetMiniAppURL() != "" {
@@ -253,15 +267,15 @@ func (h Handler) buildStartKeyboard(existingCustomer *database.Customer, langCod
 		}
 	}
 
-	return [][]models.InlineKeyboardButton{
+	rows = append(rows, []models.InlineKeyboardButton{
+		buyButton,
+	})
+	rows = append(rows, []models.InlineKeyboardButton{
 		{
-			buyButton,
+			Text: h.translation.GetText(langCode, "referral_button"),
+			URL:  shareURL,
 		},
-		{
-			{
-				Text: h.translation.GetText(langCode, "referral_button"),
-				URL:  shareURL,
-			},
-		},
-	}
+	})
+
+	return rows
 }
