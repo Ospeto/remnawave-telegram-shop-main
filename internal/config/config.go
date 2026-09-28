@@ -116,6 +116,15 @@ func GetMiniAppURL() string {
 	return conf.miniApp
 }
 
+func SetMiniAppURLForTesting(url string) func() {
+	oldURL := conf.miniApp
+	conf.miniApp = url
+
+	return func() {
+		conf.miniApp = oldURL
+	}
+}
+
 func SquadUUIDs() map[uuid.UUID]uuid.UUID {
 	return conf.squadUUIDs
 }

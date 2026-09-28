@@ -221,10 +221,10 @@ func TestStartCommandHandler_IneligibleCustomerShowsStartMenu(t *testing.T) {
 		t.Fatalf("captured calls = %d, want at least 2", len(*captured))
 	}
 
-	// Last call should be the start menu greeting
+	// Last call should be the start menu greeting (Burmese by default)
 	lastCall := (*captured)[len(*captured)-1]
 	text, _ := lastCall.Body["text"].(string)
-	greeting := tm.GetText("en", "greeting")
+	greeting := tm.GetText("my", "greeting")
 	if !strings.Contains(text, greeting) {
 		t.Fatalf("last call text = %q, want greeting %q", text, greeting)
 	}
@@ -331,7 +331,7 @@ func TestCustomerTextMessageHandler_IneligibleCustomerNoSubShowsStartMenu(t *tes
 
 	lastCall := (*captured)[len(*captured)-1]
 	text, _ := lastCall.Body["text"].(string)
-	greeting := tm.GetText("en", "greeting")
+	greeting := tm.GetText("my", "greeting")
 	if !strings.Contains(text, greeting) {
 		t.Fatalf("last call text = %q, want greeting %q", text, greeting)
 	}
@@ -393,7 +393,9 @@ func TestCustomerTextMessageHandler_CustomerWithActiveSubShowsConnectionInfo(t *
 
 	call := (*captured)[0]
 	text, _ := call.Body["text"].(string)
-	if !strings.Contains(strings.ToLower(text), "active until") || !strings.Contains(text, activeLink) {
+	burmeseActive := tm.GetText("my", "subscription_active")
+	subTextPrefix := strings.Split(burmeseActive, ":")[0]
+	if !strings.Contains(text, subTextPrefix) || !strings.Contains(text, activeLink) {
 		t.Fatalf("text = %q, want active subscription info with activeLink %q", text, activeLink)
 	}
 }
@@ -490,5 +492,117 @@ func TestCustomerTextMessageHandler_AdminAutoActivatesTrialOnGreeting(t *testing
 	text, _ := (*captured)[0].Body["text"].(string)
 	if !strings.Contains(text, "<code>"+subURL+"</code>") {
 		t.Fatalf("message text = %q, want code block with %q", text, subURL)
+	}
+}
+
+func TestResolveEffectiveLanguage(t *testing.T) {
+	tests := []struct {
+		name         string
+		customer     *database.Customer
+		telegramLang string
+		want         string
+	}{
+		{
+			name:         "telegram en defaults to my",
+			customer:     nil,
+			telegramLang: "en",
+			want:         "my",
+		},
+		{
+			name:         "telegram empty defaults to my",
+			customer:     nil,
+			telegramLang: "",
+			want:         "my",
+		},
+		{
+			name:         "telegram ru preserved as ru",
+			customer:     nil,
+			telegramLang: "ru",
+			want:         "ru",
+		},
+		{
+			name:         "customer language en defaults to my",
+			customer:     &database.Customer{Language: "en"},
+			telegramLang: "en",
+			want:         "my",
+		},
+		{
+			name:         "customer language en with empty telegram defaults to my",
+			customer:     &database.Customer{Language: "en"},
+			telegramLang: "",
+			want:         "my",
+		},
+		{
+			name:         "customer language my returns my",
+			customer:     &database.Customer{Language: "my"},
+			telegramLang: "en",
+			want:         "my",
+		},
+		{
+			name:         "customer language ru returns ru",
+			customer:     &database.Customer{Language: "ru"},
+			telegramLang: "en",
+			want:         "ru",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveEffectiveLanguage(tt.customer, tt.telegramLang)
+			if got != tt.want {
+				t.Fatalf("resolveEffectiveLanguage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStartCommandHandler_DefaultsTelegramEnToBurmese(t *testing.T) {
+	restoreTrial := config.SetTrialConfigForTesting(7, 10)
+	defer restoreTrial()
+
+	b, captured := newTestBot(t)
+	tm := loadHandlerTestTranslations(t)
+
+	subURL := "https://example.com/sub/trial-key"
+	ps := &payment.PaymentService{}
+	ps.SetTestTrialHooks(
+		func(ctx context.Context, telegramID int64) (bool, error) {
+			return true, nil
+		},
+		func(ctx context.Context, telegramID int64) (string, error) {
+			return subURL, nil
+		},
+	)
+
+	h := Handler{
+		translation:    tm,
+		paymentService: ps,
+	}
+
+	update := &models.Update{
+		Message: &models.Message{
+			ID: 52,
+			Chat: models.Chat{
+				ID: 12345,
+			},
+			From: &models.User{
+				ID:           12345,
+				Username:     "myanmar_user",
+				LanguageCode: "en", // Client sends "en"
+			},
+			Text: "/start",
+		},
+	}
+
+	h.StartCommandHandler(context.Background(), b, update)
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1 trial delivery message", len(*captured))
+	}
+
+	text, _ := (*captured)[0].Body["text"].(string)
+	// Must contain Burmese trial text rather than English
+	if !strings.Contains(text, "အခမဲ့ စမ်းသပ်အသုံးပြုခွင့်") {
+		t.Fatalf("message text = %q, want Burmese trial success text", text)
 	}
 }

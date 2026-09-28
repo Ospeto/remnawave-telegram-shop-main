@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -61,7 +63,12 @@ func (h Handler) TrialCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	}
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
-	langCode := update.Message.From.LanguageCode
+
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, telegramID)
+	}
+	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
 
 	if config.TrialDays() == 0 {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -114,9 +121,11 @@ func (h Handler) TrialCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	}
 
 	// User not eligible — either already has active subscription/trial or already used trial
-	customer, err := h.customerRepository.FindByTelegramId(ctx, telegramID)
-	if err != nil {
-		slog.Error("Error finding customer for trial command", "error", err)
+	if customer == nil && h.customerRepository != nil {
+		customer, err = h.customerRepository.FindByTelegramId(ctx, telegramID)
+		if err != nil {
+			slog.Error("Error finding customer for trial command", "error", err)
+		}
 	}
 	if customer != nil {
 		h.applyCanonicalConnectState(ctx, customer)
@@ -148,12 +157,16 @@ func (h Handler) TrialCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		return
 	}
 	callback := update.CallbackQuery.Message.Message
-	langCode := update.CallbackQuery.From.LanguageCode
+	telegramID := update.CallbackQuery.From.ID
+
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, telegramID)
+	}
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 
 	if !eligible {
 		// If not eligible, show existing subscription or used notice
-		telegramID := update.CallbackQuery.From.ID
-		customer, _ := h.customerRepository.FindByTelegramId(ctx, telegramID)
 		if customer != nil {
 			h.applyCanonicalConnectState(ctx, customer)
 		}
@@ -194,7 +207,14 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 		return
 	}
 	callback := update.CallbackQuery.Message.Message
-	langCode := update.CallbackQuery.From.LanguageCode
+	telegramID := update.CallbackQuery.From.ID
+
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, telegramID)
+	}
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
+
 	ctxWithUsername := context.WithValue(ctx, payment.UsernameCtxKey, update.CallbackQuery.From.Username)
 	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
 	if err != nil {
@@ -283,6 +303,12 @@ func (h Handler) TryAutoActivateAndSendTrial(ctx context.Context, b *bot.Bot, ch
 		return false
 	}
 
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, telegramID)
+	}
+	langCode = resolveEffectiveLanguage(customer, langCode)
+
 	eligible, err := h.paymentService.CanActivateTrial(ctx, telegramID)
 	if err != nil || !eligible {
 		if err != nil && !errors.Is(err, payment.ErrTrialUnavailable) && !errors.Is(err, payment.ErrCustomerNotFound) {
@@ -308,12 +334,32 @@ func (h Handler) TryAutoActivateAndSendTrial(ctx context.Context, b *bot.Bot, ch
 	return true
 }
 
+func buildOneClickHappURL(subURL string) string {
+	baseURL := strings.TrimSpace(config.GetMiniAppURL())
+	if baseURL == "" || subURL == "" {
+		return subURL
+	}
+
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return subURL
+	}
+
+	parsed.RawQuery = ""
+	parsed.Path = "/redirect"
+	query := url.Values{}
+	query.Set("sub", subURL)
+	parsed.RawQuery = query.Encode()
+
+	return parsed.String()
+}
+
 func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][]models.InlineKeyboardButton {
 	var markup [][]models.InlineKeyboardButton
 
 	if subURL != "" {
 		markup = append(markup, []models.InlineKeyboardButton{
-			{Text: h.translation.GetText(lang, "happ_proxy_button"), URL: subURL},
+			{Text: h.translation.GetText(lang, "happ_proxy_button"), URL: buildOneClickHappURL(subURL)},
 		})
 	}
 

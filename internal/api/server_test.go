@@ -365,3 +365,56 @@ func testTelegramInitData(t *testing.T, botToken string, authDate time.Time, use
 	}
 	return query.Encode()
 }
+
+func TestRedirectHandlerDirectSub(t *testing.T) {
+	mux := http.NewServeMux()
+	RegisterHandlers(mux, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	// Valid sub URL
+	req := httptest.NewRequest(http.MethodGet, "/redirect?sub=https://sub.wavypremium.xyz/my-key", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "happ://add/https://sub.wavypremium.xyz/my-key") {
+		t.Fatalf("expected body to contain happ://add/ deep link, got: %s", body)
+	}
+	if !strings.Contains(body, "https://sub.wavypremium.xyz/my-key") {
+		t.Fatalf("expected body to contain sub URL, got: %s", body)
+	}
+
+	// Valid url parameter fallback
+	reqFallback := httptest.NewRequest(http.MethodGet, "/redirect?url=https://sub.wavypremium.xyz/my-key", nil)
+	recFallback := httptest.NewRecorder()
+	mux.ServeHTTP(recFallback, reqFallback)
+	if recFallback.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for url param, got %d", recFallback.Code)
+	}
+
+	// Invalid sub: http://
+	reqHTTP := httptest.NewRequest(http.MethodGet, "/redirect?sub=http://sub.wavypremium.xyz/my-key", nil)
+	recHTTP := httptest.NewRecorder()
+	mux.ServeHTTP(recHTTP, reqHTTP)
+	if recHTTP.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for http scheme, got %d", recHTTP.Code)
+	}
+
+	// Invalid sub: non-url
+	reqNonURL := httptest.NewRequest(http.MethodGet, "/redirect?sub=not-a-valid-url", nil)
+	recNonURL := httptest.NewRecorder()
+	mux.ServeHTTP(recNonURL, reqNonURL)
+	if recNonURL.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for non-URL, got %d", recNonURL.Code)
+	}
+
+	// Missing both token and sub
+	reqEmpty := httptest.NewRequest(http.MethodGet, "/redirect", nil)
+	recEmpty := httptest.NewRecorder()
+	mux.ServeHTTP(recEmpty, reqEmpty)
+	if recEmpty.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for empty redirect request, got %d", recEmpty.Code)
+	}
+}

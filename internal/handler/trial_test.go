@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -21,24 +22,38 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 	h := Handler{translation: tm}
 
 	subURL := "https://example.com/sub/token123"
+
+	// 1. Test with Mini App URL configured: Happ button should route through /redirect?sub=...
+	restoreMiniApp := config.SetMiniAppURLForTesting("https://shop.wavypremium.xyz")
+	defer restoreMiniApp()
+
 	markup := h.buildDirectSubscriptionKeyboard("en", subURL)
 
 	if len(markup) < 3 {
 		t.Fatalf("buildDirectSubscriptionKeyboard() rows = %d, want at least 3", len(markup))
 	}
 
-	// First row should be Happ Proxy direct link
+	// First row should be Happ Proxy 1-click import link via /redirect
 	happRow := markup[0]
 	if len(happRow) != 1 {
 		t.Fatalf("first row button count = %d, want 1", len(happRow))
 	}
 	happBtn := happRow[0]
-	if happBtn.URL != subURL {
-		t.Fatalf("happBtn.URL = %q, want %q", happBtn.URL, subURL)
+	wantURL := "https://shop.wavypremium.xyz/redirect?sub=" + url.QueryEscape(subURL)
+	if happBtn.URL != wantURL {
+		t.Fatalf("happBtn.URL = %q, want %q", happBtn.URL, wantURL)
 	}
 	if !strings.Contains(happBtn.Text, "Happ") {
 		t.Fatalf("happBtn.Text = %q, want Happ proxy text", happBtn.Text)
 	}
+
+	// 2. Test fallback when Mini App URL is empty: Happ button falls back to raw subURL
+	restoreEmpty := config.SetMiniAppURLForTesting("")
+	markupFallback := h.buildDirectSubscriptionKeyboard("en", subURL)
+	if markupFallback[0][0].URL != subURL {
+		t.Fatalf("fallback happBtn.URL = %q, want raw %q", markupFallback[0][0].URL, subURL)
+	}
+	restoreEmpty()
 
 	// Second row should contain iOS App Store and Android Play Store download buttons
 	downloadRow := markup[1]
@@ -64,6 +79,65 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 	backRow := markup[len(markup)-1]
 	if len(backRow) != 1 || backRow[0].CallbackData != CallbackStart {
 		t.Fatalf("backRow = %#v, want back button with CallbackStart", backRow)
+	}
+}
+
+func TestBuildOneClickHappURL(t *testing.T) {
+	subURL := "https://sub.wavypremium.xyz/test-key-123"
+
+	// With base URL with trailing slash
+	restore := config.SetMiniAppURLForTesting("https://shop.wavypremium.xyz/")
+	defer restore()
+
+	got := buildOneClickHappURL(subURL)
+	want := "https://shop.wavypremium.xyz/redirect?sub=" + url.QueryEscape(subURL)
+	if got != want {
+		t.Fatalf("buildOneClickHappURL() = %q, want %q", got, want)
+	}
+
+	// With query parameters in base URL that should be stripped
+	restoreWithQuery := config.SetMiniAppURLForTesting("https://shop.wavypremium.xyz/app?param=1&foo=bar")
+	defer restoreWithQuery()
+
+	gotQuery := buildOneClickHappURL(subURL)
+	if gotQuery != want {
+		t.Fatalf("buildOneClickHappURL(with queries) = %q, want %q", gotQuery, want)
+	}
+
+	// With empty base URL: fallback to subURL
+	restoreEmpty := config.SetMiniAppURLForTesting("")
+	defer restoreEmpty()
+
+	gotEmpty := buildOneClickHappURL(subURL)
+	if gotEmpty != subURL {
+		t.Fatalf("buildOneClickHappURL(empty base) = %q, want fallback %q", gotEmpty, subURL)
+	}
+}
+
+func TestResolveEffectiveLanguage_Trial(t *testing.T) {
+	tests := []struct {
+		name         string
+		customer     *database.Customer
+		telegramLang string
+		want         string
+	}{
+		{"en lang defaults to my", nil, "en", "my"},
+		{"empty lang defaults to my", nil, "", "my"},
+		{"ru lang returns ru", nil, "ru", "ru"},
+		{"customer en with telegram en defaults to my", &database.Customer{Language: "en"}, "en", "my"},
+		{"customer en with telegram empty defaults to my", &database.Customer{Language: "en"}, "", "my"},
+		{"customer en with telegram ru returns ru", &database.Customer{Language: "en"}, "ru", "ru"},
+		{"customer my returns my", &database.Customer{Language: "my"}, "en", "my"},
+		{"customer ru returns ru", &database.Customer{Language: "ru"}, "en", "ru"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveEffectiveLanguage(tt.customer, tt.telegramLang)
+			if got != tt.want {
+				t.Fatalf("resolveEffectiveLanguage() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
