@@ -36,7 +36,7 @@ type Customer struct {
 	AutoRenewTrafficGB  int        `db:"auto_renew_traffic_gb"`
 	LastAutoRenewedAt   *time.Time `db:"last_auto_renewed_at"`
 	AutoRenewNotifiedAt *time.Time `db:"auto_renew_notified_at"`
-	IsReseller           bool       `db:"is_reseller"`
+	IsReseller          bool       `db:"is_reseller"`
 }
 
 func (cr *CustomerRepository) FindByExpirationRange(ctx context.Context, startDate, endDate time.Time) (*[]Customer, error) {
@@ -665,6 +665,16 @@ func (cr *CustomerRepository) MarkAutoRenewNotified(ctx context.Context, custome
 	_, err := cr.pool.Exec(ctx, query, now, customerID)
 	if err != nil {
 		return fmt.Errorf("failed to mark auto renew notified: %w", err)
+	}
+	return nil
+}
+
+// ResetTrial clears trial tracking and active subscription links on a customer record.
+func (cr *CustomerRepository) ResetTrial(ctx context.Context, customerID int64) error {
+	query := `UPDATE customer SET trial_used_at = NULL, subscription_link = NULL, expire_at = NULL WHERE id = $1`
+	_, err := cr.pool.Exec(ctx, query, customerID)
+	if err != nil {
+		return fmt.Errorf("failed to reset customer trial: %w", err)
 	}
 	return nil
 }

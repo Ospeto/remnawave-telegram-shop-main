@@ -240,10 +240,10 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 
 	isDisabled := true
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      callback.Chat.ID,
-		MessageID:   callback.ID,
-		Text:        successText,
-		ParseMode:   models.ParseModeHTML,
+		ChatID:    callback.Chat.ID,
+		MessageID: callback.ID,
+		Text:      successText,
+		ParseMode: models.ParseModeHTML,
 		LinkPreviewOptions: &models.LinkPreviewOptions{
 			IsDisabled: &isDisabled,
 		},
@@ -316,6 +316,11 @@ func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][
 			{Text: h.translation.GetText(lang, "happ_proxy_button"), URL: subURL},
 		})
 	}
+
+	markup = append(markup, []models.InlineKeyboardButton{
+		{Text: h.translation.GetText(lang, "download_happ_ios"), URL: "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
+		{Text: h.translation.GetText(lang, "download_happ_android"), URL: "https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US"},
+	})
 
 	markup = append(markup, h.resolveConnectButton(lang))
 

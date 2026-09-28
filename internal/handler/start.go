@@ -45,14 +45,19 @@ func (h Handler) CustomerTextMessageHandler(ctx context.Context, b *bot.Bot, upd
 		return
 	}
 
-	if h.isAdminUpdate(update) {
-		return
-	}
-
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
 	username := update.Message.From.Username
 	langCode := update.Message.From.LanguageCode
+
+	// If admin sends plain text, allow it ONLY if they can activate a trial (e.g. testing trial after /trialreset).
+	// Otherwise, ignore admin messages as normal so admin chat is not polluted with regular menus.
+	if h.isAdminUpdate(update) {
+		if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
+			return
+		}
+		return
+	}
 
 	customer, _, err := h.ensureCustomer(ctx, telegramID, langCode)
 	if err != nil {
