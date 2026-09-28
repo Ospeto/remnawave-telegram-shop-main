@@ -45,12 +45,13 @@ func planPriceLabel(plan config.Plan, isReseller bool) string {
 
 func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
-	langCode := update.CallbackQuery.From.LanguageCode
 
+	var customer *database.Customer
 	isReseller := false
 	if h.customerRepository != nil {
 		dbCtx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-		customer, err := h.customerRepository.FindByTelegramId(dbCtx, callback.Chat.ID)
+		var err error
+		customer, err = h.customerRepository.FindByTelegramId(dbCtx, callback.Chat.ID)
 		cancel()
 		if err != nil {
 			slog.Error("Error finding customer for pricing keyboard", "error", err)
@@ -59,6 +60,7 @@ func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *mod
 		}
 	}
 
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 	keyboard := h.buildPricingKeyboard(langCode, isReseller)
 
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -99,7 +101,11 @@ func (h Handler) buildPricingKeyboard(langCode string, isReseller bool) [][]mode
 func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
 	callbackQuery := parseCallbackData(update.CallbackQuery.Data)
-	langCode := update.CallbackQuery.From.LanguageCode
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, callback.Chat.ID)
+	}
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 	planIdx := callbackQuery["plan"]
 
 	keyboard := h.buildPaymentMethodKeyboard(langCode, planIdx)
@@ -169,7 +175,7 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 	ctxWithUsername := context.WithValue(dbCtx, "username", update.CallbackQuery.From.Username)
 	ctxWithUsername = payment.WithIdempotencyKey(ctxWithUsername, uuid.NewSHA1(uuid.NameSpaceURL, []byte("telegram-callback:"+update.CallbackQuery.ID)))
-	langCode := update.CallbackQuery.From.LanguageCode
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 
 	switch invoiceType {
 	case database.InvoiceTypeMobileBanking:
@@ -355,7 +361,11 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	}
 
 	chatID := update.Message.Chat.ID
-	langCode := update.Message.From.LanguageCode
+	var customer *database.Customer
+	if h.customerRepository != nil {
+		customer, _ = h.customerRepository.FindByTelegramId(ctx, chatID)
+	}
+	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
 
 	// Check if this user has a pending mobile banking purchase
 	purchaseID, hasPending := h.mobilePayCache.Get(chatID)

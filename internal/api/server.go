@@ -128,19 +128,38 @@ func RegisterHandlers(
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes
 	mux.HandleFunc("/redirect", func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimSpace(r.URL.Query().Get("token"))
-		if token == "" {
-			http.Error(w, "Missing redirect token", http.StatusBadRequest)
-			return
+		sub := strings.TrimSpace(r.URL.Query().Get("sub"))
+		if sub == "" {
+			sub = strings.TrimSpace(r.URL.Query().Get("url"))
 		}
 
-		grant, err := redirectGrants.consume(token)
-		if err != nil {
-			http.Error(w, "Redirect link expired. Please reopen the app and try again.", http.StatusBadRequest)
-			return
+		var target string
+		var subURL string
+
+		if sub != "" {
+			if !isAllowedRedirectSubscriptionURL(sub) {
+				http.Error(w, "Invalid subscription URL", http.StatusBadRequest)
+				return
+			}
+			target = "happ://add/" + sub
+			subURL = sub
+		} else {
+			token := strings.TrimSpace(r.URL.Query().Get("token"))
+			if token == "" {
+				http.Error(w, "Missing redirect token or subscription URL", http.StatusBadRequest)
+				return
+			}
+
+			grant, err := redirectGrants.consume(token)
+			if err != nil {
+				http.Error(w, "Redirect link expired. Please reopen the app and try again.", http.StatusBadRequest)
+				return
+			}
+			target = grant.Target
+			subURL = grant.SubscriptionURL
 		}
 
-		page, err := renderRedirectPage(grant.Target, grant.SubscriptionURL)
+		page, err := renderRedirectPage(target, subURL)
 		if err != nil {
 			http.Error(w, "Failed to render redirect page", http.StatusInternalServerError)
 			return
@@ -287,11 +306,11 @@ function showCopied() {
 	}
 
 	data := struct {
-		Target       string
+		Target       template.URL
 		DeepLinkJSON template.JS
 		SubURLJSON   template.JS
 	}{
-		Target:       target,
+		Target:       template.URL(target),
 		DeepLinkJSON: template.JS(deepLinkJSON),
 		SubURLJSON:   template.JS(subURLJSON),
 	}

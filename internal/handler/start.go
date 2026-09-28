@@ -16,6 +16,20 @@ import (
 	"remnawave-tg-shop-bot/utils"
 )
 
+func resolveEffectiveLanguage(customer *database.Customer, telegramLang string) string {
+	if customer != nil && customer.Language != "" && customer.Language != "en" {
+		return customer.Language
+	}
+	base := strings.ToLower(strings.TrimSpace(telegramLang))
+	if strings.Contains(base, "-") {
+		base = strings.Split(base, "-")[0]
+	}
+	if base == "ru" {
+		return "ru"
+	}
+	return "my"
+}
+
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update == nil || update.Message == nil || update.Message.From == nil {
 		return
@@ -31,7 +45,7 @@ func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *mo
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
 	username := update.Message.From.Username
-	langCode := update.Message.From.LanguageCode
+	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
 
 	if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
 		return
@@ -48,24 +62,31 @@ func (h Handler) CustomerTextMessageHandler(ctx context.Context, b *bot.Bot, upd
 	chatID := update.Message.Chat.ID
 	telegramID := update.Message.From.ID
 	username := update.Message.From.Username
-	langCode := update.Message.From.LanguageCode
+	rawLang := update.Message.From.LanguageCode
 
 	// If admin sends plain text, allow it ONLY if they can activate a trial (e.g. testing trial after /trialreset).
 	// Otherwise, ignore admin messages as normal so admin chat is not polluted with regular menus.
 	if h.isAdminUpdate(update) {
-		if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
+		var adminCustomer *database.Customer
+		if h.customerRepository != nil {
+			adminCustomer, _ = h.customerRepository.FindByTelegramId(ctx, telegramID)
+		}
+		effectiveLang := resolveEffectiveLanguage(adminCustomer, rawLang)
+		if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, effectiveLang) {
 			return
 		}
 		return
 	}
 
-	customer, _, err := h.ensureCustomer(ctx, telegramID, langCode)
+	customer, _, err := h.ensureCustomer(ctx, telegramID, rawLang)
 	if err != nil {
 		slog.Error("CustomerTextMessageHandler: error ensuring customer", "telegram_id", telegramID, "error", err)
 		return
 	}
 
-	if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
+	effectiveLang := resolveEffectiveLanguage(customer, rawLang)
+
+	if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, effectiveLang) {
 		return
 	}
 
@@ -74,11 +95,11 @@ func (h Handler) CustomerTextMessageHandler(ctx context.Context, b *bot.Bot, upd
 		customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
 
 	if hasActiveSub {
-		h.sendConnectionMessage(ctx, b, chatID, customer, langCode)
+		h.sendConnectionMessage(ctx, b, chatID, customer, effectiveLang)
 		return
 	}
 
-	h.sendStartMenu(ctx, b, chatID, customer, langCode)
+	h.sendStartMenu(ctx, b, chatID, customer, effectiveLang)
 }
 
 func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode string) (*database.Customer, bool, error) {
@@ -88,7 +109,7 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 	if h.customerRepository == nil {
 		return &database.Customer{
 			TelegramID: telegramID,
-			Language:   langCode,
+			Language:   resolveEffectiveLanguage(nil, langCode),
 		}, false, nil
 	}
 
@@ -99,11 +120,12 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 	}
 
 	if existingCustomer == nil {
+		effectiveLang := resolveEffectiveLanguage(nil, langCode)
 		ctxWithTime, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		existingCustomer, err = h.customerRepository.Create(ctxWithTime, &database.Customer{
 			TelegramID: telegramID,
-			Language:   langCode,
+			Language:   effectiveLang,
 		})
 		if err != nil {
 			slog.Error("error creating customer", "error", err)
@@ -111,13 +133,17 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 		}
 		return existingCustomer, true, nil
 	} else {
-		updates := map[string]interface{}{
-			"language": langCode,
-		}
-		err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
-		if err != nil {
-			slog.Error("Error updating customer", "error", err)
-			return nil, false, err
+		effectiveLang := resolveEffectiveLanguage(existingCustomer, langCode)
+		if existingCustomer.Language != effectiveLang {
+			updates := map[string]interface{}{
+				"language": effectiveLang,
+			}
+			err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
+			if err != nil {
+				slog.Error("Error updating customer", "error", err)
+				return nil, false, err
+			}
+			existingCustomer.Language = effectiveLang
 		}
 	}
 
@@ -271,7 +297,7 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		return
 	}
 
-	langCode := callback.From.LanguageCode
+	langCode := resolveEffectiveLanguage(existingCustomer, callback.From.LanguageCode)
 	inlineKeyboard := h.buildStartKeyboard(existingCustomer, langCode)
 
 	_, err = b.EditMessageText(ctxWithTime, &bot.EditMessageTextParams{

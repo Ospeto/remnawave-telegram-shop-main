@@ -28,13 +28,15 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 	}
 	h.applyCanonicalConnectState(ctx, customer)
 
-	h.sendConnectionMessage(ctx, b, update.Message.Chat.ID, customer, update.Message.From.LanguageCode)
+	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
+	h.sendConnectionMessage(ctx, b, update.Message.Chat.ID, customer, langCode)
 }
 
 func (h Handler) sendConnectionMessage(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
 	if b == nil {
 		return
 	}
+	langCode = resolveEffectiveLanguage(customer, langCode)
 	var markup [][]models.InlineKeyboardButton
 	if config.GetMiniAppURL() != "" {
 		markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
@@ -48,7 +50,7 @@ func (h Handler) sendConnectionMessage(ctx context.Context, b *bot.Bot, chatID i
 					URL: *customer.SubscriptionLink,
 				}}})
 			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
-				URL: *customer.SubscriptionLink,
+				URL: buildOneClickHappURL(*customer.SubscriptionLink),
 			}})
 		}
 	}
@@ -86,7 +88,7 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	}
 	h.applyCanonicalConnectState(ctx, customer)
 
-	langCode := update.CallbackQuery.From.LanguageCode
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 
 	var markup [][]models.InlineKeyboardButton
 	if config.GetMiniAppURL() != "" {
@@ -101,7 +103,7 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 					URL: *customer.SubscriptionLink,
 				}}})
 			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
-				URL: *customer.SubscriptionLink,
+				URL: buildOneClickHappURL(*customer.SubscriptionLink),
 			}})
 		}
 	}
