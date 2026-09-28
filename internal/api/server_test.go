@@ -417,6 +417,14 @@ func TestRedirectHandlerDirectSub(t *testing.T) {
 		t.Fatalf("expected status 400 for non-URL, got %d", recNonURL.Code)
 	}
 
+	// Invalid sub: userinfo in URL
+	reqUserInfo := httptest.NewRequest(http.MethodGet, "/redirect?sub=https://user:pass@sub.wavypremium.xyz/my-key", nil)
+	recUserInfo := httptest.NewRecorder()
+	mux.ServeHTTP(recUserInfo, reqUserInfo)
+	if recUserInfo.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for sub with userinfo, got %d", recUserInfo.Code)
+	}
+
 	// Missing both token and sub
 	reqEmpty := httptest.NewRequest(http.MethodGet, "/redirect", nil)
 	recEmpty := httptest.NewRecorder()

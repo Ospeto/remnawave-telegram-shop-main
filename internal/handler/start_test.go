@@ -521,6 +521,12 @@ func TestResolveEffectiveLanguage(t *testing.T) {
 			want:         "ru",
 		},
 		{
+			name:         "telegram ru-RU preserved as ru",
+			customer:     nil,
+			telegramLang: "ru-RU",
+			want:         "ru",
+		},
+		{
 			name:         "customer language en defaults to my",
 			customer:     &database.Customer{Language: "en"},
 			telegramLang: "en",

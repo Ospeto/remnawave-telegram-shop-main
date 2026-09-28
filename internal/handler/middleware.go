@@ -47,24 +47,28 @@ func (h Handler) CreateCustomerIfNotExistMiddleware(next bot.HandlerFunc) bot.Ha
 			return
 		}
 
+		effectiveLang := resolveEffectiveLanguage(existingCustomer, langCode)
 		if existingCustomer == nil {
 			existingCustomer, err = h.customerRepository.Create(ctx, &database.Customer{
 				TelegramID: telegramId,
-				Language:   langCode,
+				Language:   effectiveLang,
 			})
 			if err != nil {
 				slog.Error("error creating customer", "error", err)
 				return
 			}
 		} else {
-			updates := map[string]interface{}{
-				"language": langCode,
-			}
+			if existingCustomer.Language != effectiveLang {
+				updates := map[string]interface{}{
+					"language": effectiveLang,
+				}
 
-			err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
-			if err != nil {
-				slog.Error("Error updating customer", "error", err)
-				return
+				err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
+				if err != nil {
+					slog.Error("Error updating customer", "error", err)
+					return
+				}
+				existingCustomer.Language = effectiveLang
 			}
 		}
 

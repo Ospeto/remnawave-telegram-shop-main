@@ -124,6 +124,7 @@ func TestResolveEffectiveLanguage_Trial(t *testing.T) {
 		{"en lang defaults to my", nil, "en", "my"},
 		{"empty lang defaults to my", nil, "", "my"},
 		{"ru lang returns ru", nil, "ru", "ru"},
+		{"ru-RU lang returns ru", nil, "ru-RU", "ru"},
 		{"customer en with telegram en defaults to my", &database.Customer{Language: "en"}, "en", "my"},
 		{"customer en with telegram empty defaults to my", &database.Customer{Language: "en"}, "", "my"},
 		{"customer en with telegram ru returns ru", &database.Customer{Language: "en"}, "ru", "ru"},

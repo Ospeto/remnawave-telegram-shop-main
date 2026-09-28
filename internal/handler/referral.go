@@ -35,7 +35,7 @@ func (h Handler) ReferralCallbackHandler(ctx context.Context, b *bot.Bot, update
 		slog.Error("referral handler: customer not found", "error", err)
 		return
 	}
-	langCode := update.CallbackQuery.From.LanguageCode
+	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 
 	// Build share link. Bot username comes from the message sender (the bot itself).
 	refCode := customer.TelegramID

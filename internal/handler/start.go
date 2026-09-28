@@ -20,7 +20,11 @@ func resolveEffectiveLanguage(customer *database.Customer, telegramLang string) 
 	if customer != nil && customer.Language != "" && customer.Language != "en" {
 		return customer.Language
 	}
-	if telegramLang == "ru" || strings.ToLower(telegramLang) == "ru" {
+	base := strings.ToLower(strings.TrimSpace(telegramLang))
+	if strings.Contains(base, "-") {
+		base = strings.Split(base, "-")[0]
+	}
+	if base == "ru" {
 		return "ru"
 	}
 	return "my"
