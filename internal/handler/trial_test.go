@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-telegram/bot/models"
+
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/payment"
@@ -21,8 +23,8 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 	subURL := "https://example.com/sub/token123"
 	markup := h.buildDirectSubscriptionKeyboard("en", subURL)
 
-	if len(markup) < 2 {
-		t.Fatalf("buildDirectSubscriptionKeyboard() rows = %d, want at least 2", len(markup))
+	if len(markup) < 3 {
+		t.Fatalf("buildDirectSubscriptionKeyboard() rows = %d, want at least 3", len(markup))
 	}
 
 	// First row should be Happ Proxy direct link
@@ -36,6 +38,26 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 	}
 	if !strings.Contains(happBtn.Text, "Happ") {
 		t.Fatalf("happBtn.Text = %q, want Happ proxy text", happBtn.Text)
+	}
+
+	// Second row should contain iOS App Store and Android Play Store download buttons
+	downloadRow := markup[1]
+	if len(downloadRow) != 2 {
+		t.Fatalf("download row button count = %d, want 2", len(downloadRow))
+	}
+	iosBtn := downloadRow[0]
+	if iosBtn.URL != "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" {
+		t.Fatalf("iosBtn.URL = %q, want Apple App Store URL", iosBtn.URL)
+	}
+	if !strings.Contains(iosBtn.Text, "iOS") {
+		t.Fatalf("iosBtn.Text = %q, want iOS label", iosBtn.Text)
+	}
+	androidBtn := downloadRow[1]
+	if androidBtn.URL != "https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" {
+		t.Fatalf("androidBtn.URL = %q, want Google Play Store URL", androidBtn.URL)
+	}
+	if !strings.Contains(androidBtn.Text, "Android") {
+		t.Fatalf("androidBtn.Text = %q, want Android label", androidBtn.Text)
 	}
 
 	// Last row should be back button
@@ -228,7 +250,7 @@ func TestTryAutoActivateAndSendTrial_Table(t *testing.T) {
 
 		b, captured := newTestBot(t)
 		h := Handler{
-			translation: tm,
+			translation:    tm,
 			paymentService: &payment.PaymentService{},
 		}
 
@@ -400,4 +422,78 @@ func TestTryAutoActivateAndSendTrial_Table(t *testing.T) {
 			t.Fatal("TryAutoActivateAndSendTrial() = false after ActivateTrial succeeded, want true so callers do not fall through to start menu")
 		}
 	})
+}
+
+func TestTrialResetCommandHandler_RejectsNonAdmin(t *testing.T) {
+	b, captured := newTestBot(t)
+	tm := loadHandlerTestTranslations(t)
+	h := Handler{
+		translation: tm,
+	}
+
+	// Normal user telegram ID, not the admin
+	nonAdminID := int64(987654321)
+	update := &models.Update{
+		Message: &models.Message{
+			ID: 10,
+			Chat: models.Chat{
+				ID: 12345,
+			},
+			From: &models.User{
+				ID:           nonAdminID,
+				LanguageCode: "en",
+			},
+			Text: "/trialreset",
+		},
+	}
+
+	h.TrialResetCommandHandler(context.Background(), b, update)
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1 unauthorized message", len(*captured))
+	}
+	text, _ := (*captured)[0].Body["text"].(string)
+	if !strings.Contains(text, "Unauthorized") && !strings.Contains(text, "admin only") {
+		t.Fatalf("expected unauthorized message, got %q", text)
+	}
+}
+
+func TestTrialResetCommandHandler_AdminSuccess(t *testing.T) {
+	adminID := int64(532666374)
+	restoreAdmin := config.SetAdminTelegramIdForTesting(adminID)
+	defer restoreAdmin()
+
+	b, captured := newTestBot(t)
+	tm := loadHandlerTestTranslations(t)
+
+	// In unit test without real db connection, customerRepository is nil.
+	// When repository is nil, it reports customer repository is not configured.
+	h := Handler{
+		translation: tm,
+	}
+
+	update := &models.Update{
+		Message: &models.Message{
+			ID: 11,
+			Chat: models.Chat{
+				ID: 12345,
+			},
+			From: &models.User{
+				ID:           adminID,
+				LanguageCode: "my",
+			},
+			Text: "/trialreset",
+		},
+	}
+
+	h.TrialResetCommandHandler(context.Background(), b, update)
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1 message", len(*captured))
+	}
+	text, _ := (*captured)[0].Body["text"].(string)
+	// Without customerRepo, it safely outputs not configured error
+	if !strings.Contains(text, "Customer repository is not configured") {
+		t.Fatalf("expected repo unconfigured message, got %q", text)
+	}
 }

@@ -870,3 +870,80 @@ func (h Handler) sendRestoreConfirmation(ctx context.Context, b *bot.Bot, update
 		ParseMode: models.ParseModeHTML,
 	})
 }
+
+// TrialResetCommandHandler resets the admin user's trial usage and active subscription keys so that
+// the admin can test the full trial delivery flow by sending "hi" or /start.
+func (h Handler) TrialResetCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if !h.adminOnly(ctx, b, update) {
+		return
+	}
+
+	adminTelegramID := config.GetAdminTelegramId()
+	if adminTelegramID == 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Admin Telegram ID is not configured.",
+		})
+		return
+	}
+
+	callerID := updateUserID(update)
+	if callerID != adminTelegramID {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "⛔ Unauthorized: admin only command.",
+		})
+		return
+	}
+
+	if h.customerRepository == nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Customer repository is not configured.",
+		})
+		return
+	}
+
+	customer, err := h.customerRepository.FindByTelegramId(ctx, adminTelegramID)
+	if err != nil {
+		slog.Error("TrialResetCommandHandler: error finding admin customer", "error", err)
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   fmt.Sprintf("❌ Error finding customer: %v", err),
+		})
+		return
+	}
+
+	if customer != nil {
+		if err := h.customerRepository.ResetTrial(ctx, customer.ID); err != nil {
+			slog.Error("TrialResetCommandHandler: error resetting customer trial", "error", err)
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   fmt.Sprintf("❌ Error resetting trial: %v", err),
+			})
+			return
+		}
+
+		if h.subKeyRepo != nil {
+			if _, err := h.subKeyRepo.DeleteByCustomerID(ctx, customer.ID); err != nil {
+				slog.Error("TrialResetCommandHandler: error deleting customer sub keys", "error", err)
+				b.SendMessage(ctx, &bot.SendMessageParams{
+					ChatID: update.Message.Chat.ID,
+					Text:   fmt.Sprintf("❌ Error deleting subscription keys: %v", err),
+				})
+				return
+			}
+		}
+	}
+
+	langCode := updateLanguageCode(update)
+	replyText := h.translation.GetText(langCode, "admin_trial_reset_success")
+	if replyText == "" {
+		replyText = "✅ အက်ဒမင်အကောင့်အတွက် Trial စမ်းသပ်ခွင့်ကို Reset ပြုလုပ်ပြီးပါပြီ။ ယခုအခါ 'hi' သို့မဟုတ် /start ပေးပို့၍ အသစ်စတင်သူကဲ့သို့ စမ်းသပ်နိုင်ပါပြီ။"
+	}
+
+	b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: update.Message.Chat.ID,
+		Text:   replyText,
+	})
+}

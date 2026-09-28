@@ -538,3 +538,24 @@ func (r *SubscriptionKeyRepository) UpdateAutoRenewPlan(ctx context.Context, key
 	}
 	return nil
 }
+
+// DeleteByCustomerID deletes all subscription keys for a given customer.
+// It first unlinks purchase.extend_key_id references to prevent foreign key constraint violations.
+func (r *SubscriptionKeyRepository) DeleteByCustomerID(ctx context.Context, customerID int64) (int64, error) {
+	// First NULL out any purchases pointing to this customer's subscription keys
+	_, err := r.pool.Exec(ctx, `
+		UPDATE purchase 
+		SET extend_key_id = NULL 
+		WHERE customer_id = $1 
+		   OR extend_key_id IN (SELECT id FROM subscription_key WHERE customer_id = $1)
+	`, customerID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to unlink purchase.extend_key_id for customer %d: %w", customerID, err)
+	}
+
+	tag, err := r.pool.Exec(ctx, "DELETE FROM subscription_key WHERE customer_id = $1", customerID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete subscription keys for customer %d: %w", customerID, err)
+	}
+	return tag.RowsAffected(), nil
+}

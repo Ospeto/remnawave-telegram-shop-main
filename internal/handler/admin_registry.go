@@ -53,6 +53,7 @@ var adminFallbackCommandDefs = []fallbackCommandDef{
 	{Usage: "/sync", Description: "Run a user sync immediately"},
 	{Usage: "/notify <telegram_id>", Description: "Send a subscription notification to one user"},
 	{Usage: "/test enable|disable", Description: "Toggle payment test mode"},
+	{Usage: "/trialreset", Description: "Reset admin customer trial status for end-to-end testing"},
 	{Usage: "Backup", Description: "Backup and restore fallbacks"},
 	{Usage: "/backup now|status|list|enable|disable|schedule HH:MM", Description: "Backup controls when you need to operate without the dashboard"},
 	{Usage: "/restore list", Description: "Show local backup files for offline/manual restore"},

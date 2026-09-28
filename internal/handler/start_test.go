@@ -398,15 +398,25 @@ func TestCustomerTextMessageHandler_CustomerWithActiveSubShowsConnectionInfo(t *
 	}
 }
 
-func TestCustomerTextMessageHandler_AdminIsIgnored(t *testing.T) {
+func TestCustomerTextMessageHandler_AdminIsIgnoredWhenIneligible(t *testing.T) {
 	restoreAdmin := config.SetAdminTelegramIdForTesting(99999)
 	defer restoreAdmin()
 
 	b, captured := newTestBot(t)
 	tm := loadHandlerTestTranslations(t)
 
+	// Payment service reports ineligible for trial
+	ps := &payment.PaymentService{}
+	ps.SetTestTrialHooks(
+		func(ctx context.Context, telegramID int64) (bool, error) {
+			return false, nil
+		},
+		nil,
+	)
+
 	h := Handler{
-		translation: tm,
+		translation:    tm,
+		paymentService: ps,
 	}
 
 	update := &models.Update{
@@ -427,6 +437,58 @@ func TestCustomerTextMessageHandler_AdminIsIgnored(t *testing.T) {
 	h.CustomerTextMessageHandler(context.Background(), b, update)
 
 	if len(*captured) != 0 {
-		t.Fatalf("captured calls = %d, want 0 (admin message ignored)", len(*captured))
+		t.Fatalf("captured calls = %d, want 0 (admin message ignored when ineligible)", len(*captured))
+	}
+}
+
+func TestCustomerTextMessageHandler_AdminAutoActivatesTrialOnGreeting(t *testing.T) {
+	restoreAdmin := config.SetAdminTelegramIdForTesting(99999)
+	defer restoreAdmin()
+	restoreTrial := config.SetTrialConfigForTesting(7, 10)
+	defer restoreTrial()
+
+	b, captured := newTestBot(t)
+	tm := loadHandlerTestTranslations(t)
+
+	subURL := "https://example.com/sub/admin-trial-key"
+	ps := &payment.PaymentService{}
+	ps.SetTestTrialHooks(
+		func(ctx context.Context, telegramID int64) (bool, error) {
+			return true, nil
+		},
+		func(ctx context.Context, telegramID int64) (string, error) {
+			return subURL, nil
+		},
+	)
+
+	h := Handler{
+		translation:    tm,
+		paymentService: ps,
+	}
+
+	update := &models.Update{
+		Message: &models.Message{
+			ID: 51,
+			Chat: models.Chat{
+				ID: 99999,
+			},
+			From: &models.User{
+				ID:           99999,
+				Username:     "adminuser",
+				LanguageCode: "my",
+			},
+			Text: "hi",
+		},
+	}
+
+	h.CustomerTextMessageHandler(context.Background(), b, update)
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1 trial delivery message", len(*captured))
+	}
+
+	text, _ := (*captured)[0].Body["text"].(string)
+	if !strings.Contains(text, "<code>"+subURL+"</code>") {
+		t.Fatalf("message text = %q, want code block with %q", text, subURL)
 	}
 }
