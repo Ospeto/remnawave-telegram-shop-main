@@ -379,6 +379,13 @@ func TestRedirectHandlerDirectSub(t *testing.T) {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
+	if strings.Contains(body, "#ZgotmplZ") {
+		t.Fatalf("redirect page leaked #ZgotmplZ in body: %s", body)
+	}
+	wantHref := `href="happ://add/https://sub.wavypremium.xyz/my-key"`
+	if !strings.Contains(body, wantHref) {
+		t.Fatalf("expected body to contain href %q, got: %s", wantHref, body)
+	}
 	if !strings.Contains(body, "happ://add/https://sub.wavypremium.xyz/my-key") {
 		t.Fatalf("expected body to contain happ://add/ deep link, got: %s", body)
 	}

@@ -306,11 +306,11 @@ function showCopied() {
 	}
 
 	data := struct {
-		Target       string
+		Target       template.URL
 		DeepLinkJSON template.JS
 		SubURLJSON   template.JS
 	}{
-		Target:       target,
+		Target:       template.URL(target),
 		DeepLinkJSON: template.JS(deepLinkJSON),
 		SubURLJSON:   template.JS(subURLJSON),
 	}

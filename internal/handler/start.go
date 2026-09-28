@@ -105,7 +105,7 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 	if h.customerRepository == nil {
 		return &database.Customer{
 			TelegramID: telegramID,
-			Language:   langCode,
+			Language:   resolveEffectiveLanguage(nil, langCode),
 		}, false, nil
 	}
 
@@ -116,11 +116,12 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 	}
 
 	if existingCustomer == nil {
+		effectiveLang := resolveEffectiveLanguage(nil, langCode)
 		ctxWithTime, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		existingCustomer, err = h.customerRepository.Create(ctxWithTime, &database.Customer{
 			TelegramID: telegramID,
-			Language:   langCode,
+			Language:   effectiveLang,
 		})
 		if err != nil {
 			slog.Error("error creating customer", "error", err)
@@ -128,13 +129,17 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 		}
 		return existingCustomer, true, nil
 	} else {
-		updates := map[string]interface{}{
-			"language": langCode,
-		}
-		err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
-		if err != nil {
-			slog.Error("Error updating customer", "error", err)
-			return nil, false, err
+		effectiveLang := resolveEffectiveLanguage(existingCustomer, langCode)
+		if existingCustomer.Language != effectiveLang {
+			updates := map[string]interface{}{
+				"language": effectiveLang,
+			}
+			err = h.customerRepository.UpdateFields(ctx, existingCustomer.ID, updates)
+			if err != nil {
+				slog.Error("Error updating customer", "error", err)
+				return nil, false, err
+			}
+			existingCustomer.Language = effectiveLang
 		}
 	}
 

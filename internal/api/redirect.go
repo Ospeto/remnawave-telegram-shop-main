@@ -107,7 +107,13 @@ func isAllowedRedirectSubscriptionURL(raw string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Scheme, "https") && parsed.Host != ""
+	if !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" {
+		return false
+	}
+	if parsed.User != nil {
+		return false
+	}
+	return true
 }
 
 var redirectGrants redirectGrantStore = newSignedRedirectGrantStore(nil, redirectGrantTTL)
