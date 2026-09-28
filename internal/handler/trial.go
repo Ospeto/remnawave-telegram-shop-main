@@ -254,6 +254,60 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 	}
 }
 
+func (h Handler) sendActivatedTrialMessage(ctx context.Context, b *bot.Bot, chatID int64, langCode string, subURL string) error {
+	if b == nil {
+		return errors.New("bot instance is nil")
+	}
+	escapedURL := html.EscapeString(subURL)
+	successText := fmt.Sprintf(h.translation.GetText(langCode, "trial_success_message"), escapedURL)
+	markup := h.buildDirectSubscriptionKeyboard(langCode, subURL)
+	isDisabled := true
+
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
+		Text:      successText,
+		ParseMode: models.ParseModeHTML,
+		LinkPreviewOptions: &models.LinkPreviewOptions{
+			IsDisabled: &isDisabled,
+		},
+		ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: markup},
+	})
+	if err != nil {
+		slog.Error("Error sending trial activated message", "chat_id", chatID, "error", err)
+	}
+	return err
+}
+
+func (h Handler) TryAutoActivateAndSendTrial(ctx context.Context, b *bot.Bot, chatID int64, telegramID int64, username string, langCode string) bool {
+	if config.TrialDays() == 0 || h.paymentService == nil {
+		return false
+	}
+
+	eligible, err := h.paymentService.CanActivateTrial(ctx, telegramID)
+	if err != nil || !eligible {
+		if err != nil && !errors.Is(err, payment.ErrTrialUnavailable) && !errors.Is(err, payment.ErrCustomerNotFound) {
+			slog.Error("Error checking trial eligibility for auto trial", "telegram_id", telegramID, "error", err)
+		}
+		return false
+	}
+
+	ctxWithUsername := context.WithValue(ctx, payment.UsernameCtxKey, username)
+	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, telegramID)
+	if err != nil {
+		slog.Error("Error auto-activating trial", "telegram_id", telegramID, "error", err)
+		return false
+	}
+
+	// Trial is already consumed after ActivateTrial succeeds. Treat the update as
+	// handled even if Telegram send fails so callers do not fall through to the
+	// start menu with a stale pre-activation customer.
+	if err := h.sendActivatedTrialMessage(ctx, b, chatID, langCode, subURL); err != nil {
+		slog.Error("Error sending auto-activated trial message", "chat_id", chatID, "error", err)
+	}
+
+	return true
+}
+
 func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][]models.InlineKeyboardButton {
 	var markup [][]models.InlineKeyboardButton
 

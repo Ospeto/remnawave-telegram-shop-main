@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"html"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
 )
 
 func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
@@ -185,4 +188,216 @@ func TestRenderTrialIneligible(t *testing.T) {
 	if !hasBuy {
 		t.Fatalf("usedCustomer markup missing buy button")
 	}
+}
+
+func TestSendActivatedTrialMessage(t *testing.T) {
+	b, captured := newTestBot(t)
+	tm := loadHandlerTestTranslations(t)
+	h := Handler{translation: tm}
+
+	subURL := "https://example.com/sub/active-key-999"
+	err := h.sendActivatedTrialMessage(context.Background(), b, 8888, "en", subURL)
+	if err != nil {
+		t.Fatalf("sendActivatedTrialMessage() error = %v", err)
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1", len(*captured))
+	}
+
+	call := (*captured)[0]
+	text, _ := call.Body["text"].(string)
+	expectedCode := fmt.Sprintf("<code>%s</code>", html.EscapeString(subURL))
+	if !strings.Contains(text, expectedCode) {
+		t.Fatalf("message text = %q, want %q", text, expectedCode)
+	}
+
+	// Verify nil bot error
+	err = h.sendActivatedTrialMessage(context.Background(), nil, 8888, "en", subURL)
+	if err == nil {
+		t.Fatal("sendActivatedTrialMessage() with nil bot want error, got nil")
+	}
+}
+
+func TestTryAutoActivateAndSendTrial_Table(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+
+	t.Run("trial days is 0", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(0, 0)
+		defer restore()
+
+		b, captured := newTestBot(t)
+		h := Handler{
+			translation: tm,
+			paymentService: &payment.PaymentService{},
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 123, 123, "user", "en")
+		if activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = true, want false when trialDays is 0")
+		}
+		if len(*captured) != 0 {
+			t.Fatalf("captured calls = %d, want 0", len(*captured))
+		}
+	})
+
+	t.Run("nil payment service", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		b, _ := newTestBot(t)
+		h := Handler{
+			translation:    tm,
+			paymentService: nil,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 123, 123, "user", "en")
+		if activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = true, want false when paymentService is nil")
+		}
+	})
+
+	t.Run("customer ineligible", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		b, captured := newTestBot(t)
+		ps := &payment.PaymentService{}
+		ps.SetTestTrialHooks(
+			func(ctx context.Context, telegramID int64) (bool, error) {
+				return false, nil
+			},
+			nil,
+		)
+		h := Handler{
+			translation:    tm,
+			paymentService: ps,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 123, 123, "user", "en")
+		if activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = true, want false when ineligible")
+		}
+		if len(*captured) != 0 {
+			t.Fatalf("captured calls = %d, want 0", len(*captured))
+		}
+	})
+
+	t.Run("eligibility check returns error", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		b, captured := newTestBot(t)
+		ps := &payment.PaymentService{}
+		ps.SetTestTrialHooks(
+			func(ctx context.Context, telegramID int64) (bool, error) {
+				return false, errors.New("database connection refused")
+			},
+			nil,
+		)
+		h := Handler{
+			translation:    tm,
+			paymentService: ps,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 123, 123, "user", "en")
+		if activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = true, want false on eligibility error")
+		}
+		if len(*captured) != 0 {
+			t.Fatalf("captured calls = %d, want 0", len(*captured))
+		}
+	})
+
+	t.Run("activation returns error", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		b, captured := newTestBot(t)
+		ps := &payment.PaymentService{}
+		ps.SetTestTrialHooks(
+			func(ctx context.Context, telegramID int64) (bool, error) {
+				return true, nil
+			},
+			func(ctx context.Context, telegramID int64) (string, error) {
+				return "", errors.New("upstream remnawave error")
+			},
+		)
+		h := Handler{
+			translation:    tm,
+			paymentService: ps,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 123, 123, "user", "en")
+		if activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = true, want false on activation error")
+		}
+		if len(*captured) != 0 {
+			t.Fatalf("captured calls = %d, want 0", len(*captured))
+		}
+	})
+
+	t.Run("successful auto activation", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		b, captured := newTestBot(t)
+		subURL := "https://example.com/sub/success-trial-token"
+		ps := &payment.PaymentService{}
+		ps.SetTestTrialHooks(
+			func(ctx context.Context, telegramID int64) (bool, error) {
+				return true, nil
+			},
+			func(ctx context.Context, telegramID int64) (string, error) {
+				// Verify username in context
+				username, _ := ctx.Value(payment.UsernameCtxKey).(string)
+				if username != "myusername" {
+					t.Errorf("username in context = %q, want 'myusername'", username)
+				}
+				return subURL, nil
+			},
+		)
+		h := Handler{
+			translation:    tm,
+			paymentService: ps,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), b, 999, 999, "myusername", "en")
+		if !activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = false, want true on success")
+		}
+		if len(*captured) != 1 {
+			t.Fatalf("captured calls = %d, want 1", len(*captured))
+		}
+
+		call := (*captured)[0]
+		text, _ := call.Body["text"].(string)
+		if !strings.Contains(text, "<code>"+subURL+"</code>") {
+			t.Fatalf("message text = %q, want code block with %q", text, subURL)
+		}
+	})
+
+	t.Run("activation succeeds even if send fails", func(t *testing.T) {
+		restore := config.SetTrialConfigForTesting(7, 10)
+		defer restore()
+
+		ps := &payment.PaymentService{}
+		ps.SetTestTrialHooks(
+			func(ctx context.Context, telegramID int64) (bool, error) {
+				return true, nil
+			},
+			func(ctx context.Context, telegramID int64) (string, error) {
+				return "https://example.com/sub/send-fail-token", nil
+			},
+		)
+		h := Handler{
+			translation:    tm,
+			paymentService: ps,
+		}
+
+		activated := h.TryAutoActivateAndSendTrial(context.Background(), nil, 999, 999, "user", "en")
+		if !activated {
+			t.Fatal("TryAutoActivateAndSendTrial() = false after ActivateTrial succeeded, want true so callers do not fall through to start menu")
+		}
+	})
 }

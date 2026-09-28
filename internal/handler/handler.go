@@ -1,6 +1,12 @@
 package handler
 
 import (
+	"context"
+	"sync"
+	"time"
+
+	"golang.org/x/time/rate"
+
 	"remnawave-tg-shop-bot/internal/cache"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/notification"
@@ -9,10 +15,6 @@ import (
 	"remnawave-tg-shop-bot/internal/service/healthcheck"
 	appSync "remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
-	"sync"
-	"time"
-
-	"golang.org/x/time/rate"
 )
 
 type Handler struct {
@@ -37,6 +39,9 @@ type Handler struct {
 
 	adminFlowsMu *sync.Mutex
 	adminFlows   map[int64]adminFlowState
+
+	// Optional test seam for customer resolution in tests
+	testEnsureCustomer func(ctx context.Context, telegramID int64, langCode string) (*database.Customer, bool, error)
 }
 
 func NewHandler(

@@ -534,6 +534,13 @@ func main() {
 			h.HasPendingAdminFlow(update.Message.From.ID)
 	}, h.AdminFlowInputHandler, isAdminMiddleware)
 
+	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+		return update.Message != nil &&
+			update.Message.From != nil &&
+			update.Message.Text != "" &&
+			!strings.HasPrefix(update.Message.Text, "/")
+	}, h.CustomerTextMessageHandler, h.SuspiciousUserFilterMiddleware)
+
 	// Register photo handler for mobile banking screenshot uploads
 	if config.IsMobileBankingEnabled() {
 		b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
