@@ -287,6 +287,17 @@ type PaymentService struct {
 	// idempotent promo retry without a live database.
 	testFindByIdempotencyKey func(ctx context.Context, key uuid.UUID) (*database.Purchase, error)
 	testFindPromoByCode      func(ctx context.Context, code string) (*database.PromoCode, error)
+	testCanActivateTrial     func(ctx context.Context, telegramID int64) (bool, error)
+	testActivateTrial        func(ctx context.Context, telegramID int64) (string, error)
+}
+
+// SetTestTrialHooks sets optional seams for testing trial activation without a database.
+func (s *PaymentService) SetTestTrialHooks(
+	canActivate func(ctx context.Context, telegramID int64) (bool, error),
+	activate func(ctx context.Context, telegramID int64) (string, error),
+) {
+	s.testCanActivateTrial = canActivate
+	s.testActivateTrial = activate
 }
 
 func NewPaymentService(
@@ -388,6 +399,10 @@ func (s *PaymentService) trialEligibleForCustomer(ctx context.Context, customer 
 }
 
 func (s *PaymentService) CanActivateTrial(ctx context.Context, telegramId int64) (bool, error) {
+	if s.testCanActivateTrial != nil {
+		return s.testCanActivateTrial(ctx, telegramId)
+	}
+
 	if config.TrialDays() == 0 {
 		return false, nil
 	}
@@ -2044,6 +2059,10 @@ func (s *PaymentService) createFreePurchase(ctx context.Context, days int, traff
 }
 
 func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (string, error) {
+	if s.testActivateTrial != nil {
+		return s.testActivateTrial(ctx, telegramId)
+	}
+
 	if config.TrialDays() == 0 {
 		return "", ErrTrialUnavailable
 	}

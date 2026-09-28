@@ -171,6 +171,15 @@ func SetSupportURLForTesting(url string) func() {
 	}
 }
 
+func SetAdminTelegramIdForTesting(id int64) func() {
+	oldID := conf.adminTelegramId
+	conf.adminTelegramId = id
+
+	return func() {
+		conf.adminTelegramId = oldID
+	}
+}
+
 func FeedbackURL() string {
 	return conf.feedbackURL
 }

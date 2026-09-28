@@ -17,16 +17,76 @@ import (
 )
 
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	customer, _, err := h.ensureCustomer(ctx, update.Message.Chat.ID, update.Message.From.LanguageCode)
+	if update == nil || update.Message == nil || update.Message.From == nil {
+		return
+	}
+
+	customer, _, err := h.ensureCustomer(ctx, update.Message.From.ID, update.Message.From.LanguageCode)
 	if err != nil {
 		return
 	}
 
 	h.processReferral(ctx, update.Message.Text, customer)
-	h.sendStartMenu(ctx, b, update.Message.Chat.ID, customer, update.Message.From.LanguageCode)
+
+	chatID := update.Message.Chat.ID
+	telegramID := update.Message.From.ID
+	username := update.Message.From.Username
+	langCode := update.Message.From.LanguageCode
+
+	if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
+		return
+	}
+
+	h.sendStartMenu(ctx, b, chatID, customer, langCode)
+}
+
+func (h Handler) CustomerTextMessageHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	if update == nil || update.Message == nil || update.Message.From == nil {
+		return
+	}
+
+	if h.isAdminUpdate(update) {
+		return
+	}
+
+	chatID := update.Message.Chat.ID
+	telegramID := update.Message.From.ID
+	username := update.Message.From.Username
+	langCode := update.Message.From.LanguageCode
+
+	customer, _, err := h.ensureCustomer(ctx, telegramID, langCode)
+	if err != nil {
+		slog.Error("CustomerTextMessageHandler: error ensuring customer", "telegram_id", telegramID, "error", err)
+		return
+	}
+
+	if h.TryAutoActivateAndSendTrial(ctx, b, chatID, telegramID, username, langCode) {
+		return
+	}
+
+	h.applyCanonicalConnectState(ctx, customer)
+	hasActiveSub := customer != nil && customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" &&
+		customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
+
+	if hasActiveSub {
+		h.sendConnectionMessage(ctx, b, chatID, customer, langCode)
+		return
+	}
+
+	h.sendStartMenu(ctx, b, chatID, customer, langCode)
 }
 
 func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode string) (*database.Customer, bool, error) {
+	if h.testEnsureCustomer != nil {
+		return h.testEnsureCustomer(ctx, telegramID, langCode)
+	}
+	if h.customerRepository == nil {
+		return &database.Customer{
+			TelegramID: telegramID,
+			Language:   langCode,
+		}, false, nil
+	}
+
 	existingCustomer, err := h.customerRepository.FindByTelegramId(ctx, telegramID)
 	if err != nil {
 		slog.Error("error finding customer by telegram id", "error", err)
@@ -60,6 +120,10 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 }
 
 func (h Handler) processReferral(ctx context.Context, messageText string, existingCustomer *database.Customer) {
+	if existingCustomer == nil || h.referralRepository == nil || h.customerRepository == nil {
+		return
+	}
+
 	commandName := utils.FirstToken(messageText)
 	customerID := utils.MaskHalfInt64(existingCustomer.ID)
 	telegramID := utils.MaskHalfInt64(existingCustomer.TelegramID)

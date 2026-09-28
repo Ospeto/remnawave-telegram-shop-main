@@ -28,8 +28,13 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 	}
 	h.applyCanonicalConnectState(ctx, customer)
 
-	langCode := update.Message.From.LanguageCode
+	h.sendConnectionMessage(ctx, b, update.Message.Chat.ID, customer, update.Message.From.LanguageCode)
+}
 
+func (h Handler) sendConnectionMessage(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
+	if b == nil {
+		return
+	}
 	var markup [][]models.InlineKeyboardButton
 	if config.GetMiniAppURL() != "" {
 		markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
@@ -50,8 +55,8 @@ func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *
 	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
 
 	isDisabled := true
-	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:    update.Message.Chat.ID,
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
 		Text:      buildConnectText(customer, langCode),
 		ParseMode: models.ParseModeHTML,
 		LinkPreviewOptions: &models.LinkPreviewOptions{
