@@ -370,6 +370,14 @@ func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][
 
 	markup = append(markup, h.resolveConnectButton(lang))
 
+	supportURL := strings.TrimSpace(config.SupportURL())
+	if supportURL == "" {
+		supportURL = "https://t.me/ospeto"
+	}
+	markup = append(markup, []models.InlineKeyboardButton{
+		{Text: h.translation.GetText(lang, "trial_support_button"), URL: supportURL},
+	})
+
 	markup = append(markup, []models.InlineKeyboardButton{
 		{Text: h.translation.GetText(lang, "back_button"), CallbackData: CallbackStart},
 	})
