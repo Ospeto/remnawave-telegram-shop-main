@@ -75,6 +75,40 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 		t.Fatalf("androidBtn.Text = %q, want Android label", androidBtn.Text)
 	}
 
+	// Support button row should be above back button
+	supportRow := markup[len(markup)-2]
+	if len(supportRow) != 1 {
+		t.Fatalf("support row button count = %d, want 1", len(supportRow))
+	}
+	supportBtn := supportRow[0]
+	if supportBtn.URL != "https://t.me/ospeto" {
+		t.Fatalf("supportBtn.URL = %q, want default %q", supportBtn.URL, "https://t.me/ospeto")
+	}
+	wantSupportText := tm.GetText("en", "trial_support_button")
+	if supportBtn.Text != wantSupportText {
+		t.Fatalf("supportBtn.Text = %q, want %q", supportBtn.Text, wantSupportText)
+	}
+
+	// Test Burmese translation on support button
+	markupBurmese := h.buildDirectSubscriptionKeyboard("my", subURL)
+	supportRowBurmese := markupBurmese[len(markupBurmese)-2]
+	wantBurmese := tm.GetText("my", "trial_support_button")
+	if supportRowBurmese[0].Text != wantBurmese {
+		t.Fatalf("supportBtn.Text (my) = %q, want %q", supportRowBurmese[0].Text, wantBurmese)
+	}
+	if !strings.Contains(supportRowBurmese[0].Text, "Support") {
+		t.Fatalf("supportBtn.Text (my) = %q, want to contain Support", supportRowBurmese[0].Text)
+	}
+
+	// Test custom support URL when configured
+	restoreSupport := config.SetSupportURLForTesting("https://t.me/custom_support_team")
+	markupCustom := h.buildDirectSubscriptionKeyboard("en", subURL)
+	restoreSupport()
+	supportRowCustom := markupCustom[len(markupCustom)-2]
+	if supportRowCustom[0].URL != "https://t.me/custom_support_team" {
+		t.Fatalf("custom supportBtn.URL = %q, want %q", supportRowCustom[0].URL, "https://t.me/custom_support_team")
+	}
+
 	// Last row should be back button
 	backRow := markup[len(markup)-1]
 	if len(backRow) != 1 || backRow[0].CallbackData != CallbackStart {
