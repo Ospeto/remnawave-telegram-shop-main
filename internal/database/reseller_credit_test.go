@@ -344,6 +344,7 @@ func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
 	for _, want := range []string{
 		"Asia/Yangon",
 		"entry_type = 'settlement'",
+		"created_by LIKE 'admin:%'",
 		"effective_at >= $1",
 		"effective_at < $2",
 		"'MMK'",
@@ -356,6 +357,30 @@ func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
 	// Must not count sales or adjustments as cash.
 	if strings.Contains(sql, "entry_type = 'sale'") || strings.Contains(sql, "adjustment") {
 		t.Fatalf("settlement SQL must not include sale/adjustment filters: %s", sql)
+	}
+}
+
+func TestBuildSumSettlementsByPeriodSQL_AllPeriodsAdminOnlyCash(t *testing.T) {
+	periods := []RevenueSummaryPeriod{
+		RevenuePeriodDay,
+		RevenuePeriodWeek,
+		RevenuePeriodMonth,
+		RevenuePeriodYear,
+		RevenuePeriodCustom,
+	}
+	for _, p := range periods {
+		t.Run(string(p), func(t *testing.T) {
+			sql, err := buildSumSettlementsByPeriodSQL(p)
+			if err != nil {
+				t.Fatalf("unexpected error for %s: %v", p, err)
+			}
+			if !strings.Contains(sql, "created_by LIKE 'admin:%'") {
+				t.Fatalf("period %s missing admin cash filter: %s", p, sql)
+			}
+			if !strings.Contains(sql, "entry_type = 'settlement'") {
+				t.Fatalf("period %s missing settlement filter: %s", p, sql)
+			}
+		})
 	}
 }
 
