@@ -233,7 +233,7 @@ func (r *Client) ForceCreateNewUser(ctx context.Context, customerId int64, teleg
 // ExtendUser extends a specific Remnawave user by UUID.
 // Days are added to the current expiry (or from now if expired).
 // Traffic is accumulated (added to existing limit), not replaced.
-// If additionalTraffic is 0 (unlimited plan), traffic limit stays 0 (unlimited).
+// An existing unlimited key stays unlimited; extending with an unlimited plan (additionalTraffic = 0) upgrades to unlimited (0).
 func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalTraffic int, days int) (*remapi.User, error) {
 	// Fetch the specific user by UUID
 	resp, err := r.client.Users().GetUserByUuid(ctx, userUUID.String())

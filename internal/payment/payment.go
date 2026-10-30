@@ -77,6 +77,8 @@ type AwaitingReceiptVerificationError struct {
 	Purchase *database.Purchase
 }
 
+// subscriptionKeyCanBeExtended reports whether key belongs to customerID, has a
+// valid remote UUID, and is in an extendable status ("active" or "expired").
 func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
 	return key != nil && key.CustomerID == customerID && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
 }
@@ -2057,6 +2059,8 @@ func (s *PaymentService) createPurchaseWithOptionalExtend(ctx context.Context, a
 	}
 }
 
+// CreatePurchaseWithExtendForInvoice creates an invoice-backed purchase (such as
+// mobile banking or postpaid) that extends an existing subscription key upon fulfillment.
 func (s *PaymentService) CreatePurchaseWithExtendForInvoice(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, invoiceType database.InvoiceType, promoCode string, keyID int64) (url string, purchaseId int64, err error) {
 	if invoiceType == database.InvoiceTypeWalletTopUp {
 		return "", 0, fmt.Errorf("extend is not supported for wallet top-up")
@@ -2599,7 +2603,7 @@ func (s *PaymentService) reversePostpaidSaleAfterProcessFailure(ctx context.Cont
 
 // CreatePurchaseWithExtend is like createWalletPurchase but sets ExtendKeyID so
 // ProcessPurchaseById will call Remnawave's ExtendUser on the specific key UUID
-// rather than creating a brand-new user. Used by the per-key auto-renew cron.
+// rather than creating a brand-new user. Used by wallet key extensions and the per-key auto-renew cron.
 func (s *PaymentService) CreatePurchaseWithExtend(ctx context.Context, amount float64, days int, trafficLimitGB int, customer *database.Customer, keyID int64, promoCode string) (url string, purchaseId int64, err error) {
 	extendKeyID := keyID
 	// Soft-resolve promo for idempotent resume before strict capacity validation.
