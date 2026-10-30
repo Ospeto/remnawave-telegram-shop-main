@@ -55,8 +55,8 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 	t.Cleanup(cleanup)
 
 	loc := revenueSummaryLocation() // Yangon
-	start := time.Date(2026, 10, 1, 0, 0, 0, 0, loc).UTC()
-	end := time.Date(2026, 11, 1, 0, 0, 0, 0, loc).UTC()
+	start := time.Date(2029, 10, 1, 0, 0, 0, 0, loc).UTC()
+	end := time.Date(2029, 11, 1, 0, 0, 0, 0, loc).UTC()
 
 	// 1. Create a customer
 	var customerID int64
@@ -84,7 +84,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 	err = pool.QueryRow(ctx, `
 		INSERT INTO purchase (customer_id, amount, month, currency, status, invoice_type, payment_method, paid_at)
 		VALUES ($1, 100000, 1, 'MMK', 'paid', 'wallet_topup', 'mobile_banking', $2)
-		RETURNING id`, customerID, time.Date(2026, 10, 1, 10, 0, 0, 0, loc).UTC()).Scan(&topupPurchaseID)
+		RETURNING id`, customerID, time.Date(2029, 10, 1, 10, 0, 0, 0, loc).UTC()).Scan(&topupPurchaseID)
 	if err != nil {
 		t.Fatalf("failed to insert wallet topup: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 	err = pool.QueryRow(ctx, `
 		INSERT INTO purchase (customer_id, amount, month, currency, status, invoice_type, payment_method, paid_at)
 		VALUES ($1, 100000, 1, 'MMK', 'paid', 'postpaid', 'postpaid', $2)
-		RETURNING id`, customerID, time.Date(2026, 10, 2, 10, 0, 0, 0, loc).UTC()).Scan(&postpaidPurchaseID)
+		RETURNING id`, customerID, time.Date(2029, 10, 2, 10, 0, 0, 0, loc).UTC()).Scan(&postpaidPurchaseID)
 	if err != nil {
 		t.Fatalf("failed to insert postpaid purchase: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 		EntryType:      ResellerLedgerEntryTypeSettlement,
 		Direction:      ResellerLedgerDirectionDecrease,
 		Amount:         60000, // 60,000 settled from wallet
-		EffectiveAt:    time.Date(2026, 10, 3, 10, 0, 0, 0, loc).UTC(),
+		EffectiveAt:    time.Date(2029, 10, 3, 10, 0, 0, 0, loc).UTC(),
 		CreatedBy:      fmt.Sprintf("customer:%d", testTelegramID),
 		IdempotencyKey: "settle-wallet-1",
 	})
@@ -137,7 +137,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 		EntryType:      ResellerLedgerEntryTypeSettlement,
 		Direction:      ResellerLedgerDirectionDecrease,
 		Amount:         40000, // 40,000 paid external cash to admin
-		EffectiveAt:    time.Date(2026, 10, 4, 10, 0, 0, 0, loc).UTC(),
+		EffectiveAt:    time.Date(2029, 10, 4, 10, 0, 0, 0, loc).UTC(),
 		CreatedBy:      fmt.Sprintf("admin:%d", 98765432),
 		IdempotencyKey: "settle-admin-1",
 	})
