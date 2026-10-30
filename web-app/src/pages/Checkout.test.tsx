@@ -212,6 +212,34 @@ describe('Checkout', () => {
         });
     });
 
+    it.each(['active', 'expired'])('renews a %s trial with an unlimited paid plan using the existing key ID', async (status) => {
+        const subscriptionURL = 'https://sub.example.com/existing-trial';
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([{ id: 'unlimited', label: 'Unlimited paid', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 }]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [{ id: 12, label: 'Trial', status, traffic_limit_gb: 1, subscription_url: subscriptionURL, expire_at: new Date().toISOString() }],
+                    trial_eligible: false,
+                });
+            }
+            if (url === '/api/wallet') return jsonResponse({ balance: 10000, currency: 'MMK' });
+            if (url === '/api/purchase') {
+                const body = JSON.parse(String(init?.body ?? '{}'));
+                expect(body).toMatchObject({ plan_id: 'unlimited', payment_method: 'wallet', extend_key_id: 12 });
+                return jsonResponse({ purchase_id: 33, amount: 5000, currency: 'MMK', invoice_type: 'wallet_payment', extend_key_id: 12, happ_link: `happ://add/${subscriptionURL}` });
+            }
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+        renderWithAppProviders([{ path: '/checkout/:planIndex', element: <Checkout /> }], ['/checkout/unlimited?extend=12']);
+        fireEvent.click(await screen.findByRole('button', { name: 'Pay 5,000 MMK from Wallet' }));
+        expect(await screen.findByText('Your key has been extended. Extra days and data have been added — you\'re all set.')).toBeTruthy();
+        expect(screen.queryByText('Your new VPN key is live and ready to use. Tap below to add it to Happ.')).toBeNull();
+    });
+
     it('shows wallet success UI for wallet_payment invoice type without manual pay instructions', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
             const url = String(input);

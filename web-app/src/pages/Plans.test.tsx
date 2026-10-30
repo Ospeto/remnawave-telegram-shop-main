@@ -39,6 +39,28 @@ describe('Plans', () => {
         seedTelegramSession();
     });
 
+    it.each(['active', 'expired'])('offers unlimited paid renewal for a %s limited trial', async (status) => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            if (String(input) === '/api/plans') {
+                return jsonResponse([
+                    { id: 'unlimited', label: 'Unlimited paid', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                    { id: 'limited', label: 'Limited paid', days: 30, price: 3000, traffic_limit_gb: 100, currency: 'MMK', active: true, sort_order: 1 },
+                ]);
+            }
+            if (String(input) === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [{ id: 12, label: 'Trial', status, traffic_limit_gb: 1, expire_at: new Date().toISOString() }],
+                    trial_eligible: false,
+                });
+            }
+            throw new Error(`Unhandled fetch: ${input}`);
+        });
+        renderWithAppProviders([{ path: '/plans', element: <Plans /> }], ['/plans?extend=12']);
+        expect((await screen.findByRole('link', { name: /Unlimited paid/i })).getAttribute('href')).toBe('/checkout/unlimited?extend=12');
+        expect(screen.getByRole('link', { name: /\bLimited paid/i }).getAttribute('href')).toBe('/checkout/limited?extend=12');
+    });
+
     it('builds wallet top-up checkout links without a negative plan index', async () => {
         fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
             const url = String(input);

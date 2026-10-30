@@ -78,7 +78,7 @@ type AwaitingReceiptVerificationError struct {
 }
 
 func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
-	return key != nil && key.CustomerID == customerID && key.Status == "active" && key.RemnawaveUUID != uuid.Nil
+	return key != nil && key.CustomerID == customerID && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
 }
 
 func remoteUserMissing(err error) bool {
@@ -733,16 +733,57 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	// Create maps for lookup/reconciliation.
 	remoteMap := make(map[string]remapi.User)
 	for _, u := range users {
-		remoteMap[u.UUID.String()] = u
+		if u.UUID != uuid.Nil {
+			remoteMap[u.UUID.String()] = u
+		}
+	}
+	trackedUUIDs := make(map[uuid.UUID]int64, len(localKeys))
+	for _, key := range localKeys {
+		trackedUUIDs[key.RemnawaveUUID] = key.ID
+	}
+	// Older migrations assigned placeholder UUIDs. Match only an exact,
+	// non-empty subscription URL from this Telegram user's remote account,
+	// preserving the local key ID referenced by purchases and clients.
+	for i := range localKeys {
+		key := &localKeys[i]
+		if key.Status == "deleted" || strings.TrimSpace(key.SubscriptionURL) == "" {
+			continue
+		}
+		if _, exists := remoteMap[key.RemnawaveUUID.String()]; exists {
+			continue
+		}
+		for _, remote := range users {
+			if remote.UUID == uuid.Nil || remote.SubscriptionUrl != key.SubscriptionURL {
+				continue
+			}
+			if trackedID, exists := trackedUUIDs[remote.UUID]; exists && trackedID != key.ID {
+				// A previous reconciliation already imported the real row.
+				// Leave the stale placeholder to be marked missing below.
+				continue
+			}
+			if err := s.subKeyRepo.LinkRemoteIdentity(ctx, key, remote.UUID, remote.Username); err != nil {
+				return nil, err
+			}
+			key.RemnawaveUUID, key.Username = remote.UUID, remote.Username
+			trackedUUIDs[remote.UUID] = key.ID
+			break
+		}
 	}
 	localMap := make(map[string]database.SubscriptionKey, len(localKeys))
+	deletedURLs := make(map[string]bool)
 	for _, localKey := range localKeys {
 		localMap[localKey.RemnawaveUUID.String()] = localKey
+		if localKey.Status == "deleted" && localKey.SubscriptionURL != "" {
+			deletedURLs[localKey.SubscriptionURL] = true
+		}
 	}
 
 	var result []KeyStats
 
 	for _, localKey := range localKeys {
+		if localKey.Status == "deleted" {
+			continue
+		}
 		remoteUser, exists := remoteMap[localKey.RemnawaveUUID.String()]
 
 		// If key exists locally but not remotely -> DELETED
@@ -760,13 +801,13 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 			newStatus = "expired"
 		}
 
-		// Sync Expiry
-		if localKey.ExpireAt == nil || !localKey.ExpireAt.Equal(remoteUser.ExpireAt) || localKey.Status != newStatus {
-			_ = s.subKeyRepo.UpdateExpiry(ctx, localKey.ID, remoteUser.ExpireAt)
-			// UpdateExpiry sets status to 'active', so we need to set it correctly if expired
-			if newStatus != "active" {
-				_ = s.subKeyRepo.UpdateStatus(ctx, localKey.ID, newStatus)
-			}
+		// Atomically persist synced expiry and status under WHERE status <> 'deleted'.
+		affected, err := s.subKeyRepo.SyncExpiryStatus(ctx, localKey.ID, remoteUser.ExpireAt, newStatus)
+		if err != nil {
+			return nil, err
+		}
+		if !affected {
+			continue
 		}
 
 		limit, limitGB, persistTrafficLimit := syncedTrafficLimit(localKey.TrafficLimitGB, remoteUser)
@@ -786,8 +827,11 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	}
 
 	// Reconcile remote-only users into local DB so downstream features
-	// (key listing, auto-renew, notifications) do not lose track of paid keys.
+	// (key listing, auto-renew, notifications) do not lose track of trial or paid keys.
 	for _, remoteUser := range users {
+		if remoteUser.UUID == uuid.Nil || strings.TrimSpace(remoteUser.SubscriptionUrl) == "" || deletedURLs[remoteUser.SubscriptionUrl] {
+			continue
+		}
 		if _, exists := localMap[remoteUser.UUID.String()]; exists {
 			continue
 		}
@@ -824,7 +868,7 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		if createErr != nil {
 			// Another worker may have inserted it concurrently.
 			existing, findErr := s.subKeyRepo.FindByRemnawaveUUID(ctx, remoteUser.UUID)
-			if findErr != nil || existing == nil {
+			if findErr != nil || existing == nil || existing.CustomerID != customerID || existing.Status == "deleted" {
 				slog.Error("Failed to reconcile remote-only subscription key",
 					"customer_id", customerID,
 					"uuid", remoteUser.UUID.String(),
@@ -2066,6 +2110,9 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 	if config.TrialDays() == 0 {
 		return "", ErrTrialUnavailable
 	}
+	if s.subKeyRepo == nil {
+		return "", ErrSubscriptionKeyUnavailable
+	}
 	tx, err := s.customerRepository.BeginTx(ctx)
 	if err != nil {
 		return "", err
@@ -2099,6 +2146,23 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 		return "", err
 	}
 
+	if user.UUID == uuid.Nil || strings.TrimSpace(user.SubscriptionUrl) == "" {
+		return "", ErrSubscriptionKeyUnavailable
+	}
+	_, err = s.subKeyRepo.CreateTx(ctx, tx, &database.SubscriptionKey{
+		CustomerID:      customer.ID,
+		RemnawaveUUID:   user.UUID,
+		Username:        user.Username,
+		SubscriptionURL: user.SubscriptionUrl,
+		ExpireAt:        &user.ExpireAt,
+		Status:          "active",
+		Label:           "Trial",
+		TrafficLimitGB:  config.TrialTrafficLimit() / 1073741824,
+	})
+	if err != nil {
+		return "", err
+	}
+
 	customerFilesToUpdate := map[string]interface{}{
 		"subscription_link": user.GetSubscriptionUrl(),
 		"expire_at":         user.GetExpireAt(),
@@ -2114,6 +2178,7 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 		return "", err
 	}
 
+	s.syncCache.Delete(customer.ID)
 	return user.GetSubscriptionUrl(), nil
 }
 

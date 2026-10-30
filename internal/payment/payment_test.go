@@ -25,6 +25,8 @@ func TestSubscriptionKeyCanBeExtendedRequiresLiveOwnedKey(t *testing.T) {
 		want bool
 	}{
 		{"active owned", &database.SubscriptionKey{CustomerID: 7, Status: "active", RemnawaveUUID: keyID}, 7, true},
+		{"expired owned", &database.SubscriptionKey{CustomerID: 7, Status: "expired", RemnawaveUUID: keyID}, 7, true},
+		{"disabled", &database.SubscriptionKey{CustomerID: 7, Status: "disabled", RemnawaveUUID: keyID}, 7, false},
 		{"deleted", &database.SubscriptionKey{CustomerID: 7, Status: "deleted", RemnawaveUUID: keyID}, 7, false},
 		{"wrong customer", &database.SubscriptionKey{CustomerID: 8, Status: "active", RemnawaveUUID: keyID}, 7, false},
 		{"missing remote uuid", &database.SubscriptionKey{CustomerID: 7, Status: "active"}, 7, false},

@@ -99,6 +99,16 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 }
 
 func (r *SubscriptionKeyRepository) Create(ctx context.Context, key *SubscriptionKey) (int64, error) {
+	return createSubscriptionKey(ctx, r.pool, key)
+}
+
+func (r *SubscriptionKeyRepository) CreateTx(ctx context.Context, tx pgx.Tx, key *SubscriptionKey) (int64, error) {
+	return createSubscriptionKey(ctx, tx, key)
+}
+
+func createSubscriptionKey(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...interface{}) pgx.Row
+}, key *SubscriptionKey) (int64, error) {
 	query := sq.Insert("subscription_key").
 		Columns("customer_id", "remnawave_uuid", "username", "subscription_url", "expire_at", "status", "label", "traffic_limit_gb", "auto_renew_plan_days", "auto_renew_plan_traffic_gb").
 		Values(key.CustomerID, key.RemnawaveUUID, key.Username, key.SubscriptionURL, key.ExpireAt, key.Status, key.Label, key.TrafficLimitGB, key.AutoRenewPlanDays, key.AutoRenewPlanTraffic).
@@ -111,7 +121,7 @@ func (r *SubscriptionKeyRepository) Create(ctx context.Context, key *Subscriptio
 	}
 
 	var id int64
-	err = r.pool.QueryRow(ctx, sql, args...).Scan(&id)
+	err = db.QueryRow(ctx, sql, args...).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create subscription_key: %w", err)
 	}
@@ -173,6 +183,22 @@ func (r *SubscriptionKeyRepository) FindByRemnawaveUUID(ctx context.Context, uui
 	return scanSubKey(r.pool.QueryRow(ctx, sql, args...))
 }
 
+// LinkRemoteIdentity repairs legacy placeholder UUIDs using a verified remote
+// user's subscription URL. It never changes ownership or revives deleted keys.
+func (r *SubscriptionKeyRepository) LinkRemoteIdentity(ctx context.Context, key *SubscriptionKey, remoteUUID uuid.UUID, username string) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE subscription_key
+		SET remnawave_uuid = $1, username = $2
+		WHERE id = $3 AND customer_id = $4 AND subscription_url = $5 AND status <> 'deleted'`,
+		remoteUUID, username, key.ID, key.CustomerID, key.SubscriptionURL)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("subscription_key %d no longer available for reconciliation", key.ID)
+	}
+	return nil
+}
+
 func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, expireAt time.Time) error {
 	query := sq.Update("subscription_key").
 		Set("expire_at", expireAt).
@@ -207,6 +233,27 @@ func (r *SubscriptionKeyRepository) UpdateStatus(ctx context.Context, id int64, 
 	}
 	_, err = r.pool.Exec(ctx, sql, args...)
 	return err
+}
+
+// SyncExpiryStatus atomically persists synced remote expiry and status for a key
+// that has not been locally deleted (WHERE status <> 'deleted'). It resets
+// expiration_notified_at to NULL only when expiry or status changes.
+// Returns affected=true if a row was updated, or affected=false if the key was deleted/missing.
+func (r *SubscriptionKeyRepository) SyncExpiryStatus(ctx context.Context, id int64, expireAt time.Time, status string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE subscription_key
+		SET expire_at = $1::timestamptz,
+		    status = $2::text,
+		    expiration_notified_at = CASE
+		        WHEN expire_at IS DISTINCT FROM $1::timestamptz OR status IS DISTINCT FROM $2::text
+		        THEN NULL ELSE expiration_notified_at
+		    END
+		WHERE id = $3 AND status <> 'deleted'`,
+		expireAt, status, id)
+	if err != nil {
+		return false, fmt.Errorf("failed to sync expiry and status: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func (r *SubscriptionKeyRepository) MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error) {

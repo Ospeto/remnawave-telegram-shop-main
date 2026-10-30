@@ -313,11 +313,15 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 	externalSquad := config.ExternalSquadUUID()
 	if externalSquad != uuid.Nil {
 		userUpdate.ExternalSquadUuid = remapi.NewOptNilUUID(externalSquad)
+	} else {
+		userUpdate.ExternalSquadUuid.SetToNull()
 	}
 
 	tag := config.RemnawaveTag()
 	if tag != "" {
 		userUpdate.Tag = remapi.NewOptNilString(tag)
+	} else {
+		userUpdate.Tag.SetToNull()
 	}
 
 	if desc, ok := ctx.Value("description").(string); ok && desc != "" {
