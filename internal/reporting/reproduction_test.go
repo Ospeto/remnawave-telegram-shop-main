@@ -1,10 +1,14 @@
 package reporting
 
 import (
+	"context"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v4/pgxpool"
 	"remnawave-tg-shop-bot/internal/database"
 )
 
@@ -240,5 +244,163 @@ func TestSettlementQueryFilter_MatchesWritePathSemantics(t *testing.T) {
 				t.Fatalf("sqlFilterMatches(%q, %q) = %v, want %v", tc.entryType, tc.createdBy, gotCash, tc.wantCash)
 			}
 		})
+	}
+}
+
+// TestIntegration_FinanceService_PostpaidWalletSettlement_RealPostgres verifies the full
+// reporting pipeline against a real PostgreSQL instance using the actual database repositories
+// and production SQL aggregation queries.
+func TestIntegration_FinanceService_PostpaidWalletSettlement_RealPostgres(t *testing.T) {
+	dbURL := os.Getenv("TEST_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://postgres:postgres@127.0.0.1:54332/wavy_test?sslmode=disable"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skipf("skipping integration test: cannot connect to test database at %s: %v", dbURL, err)
+		return
+	}
+	defer pool.Close()
+	if err := pool.Ping(ctx); err != nil {
+		t.Skipf("skipping integration test: ping failed for test database at %s: %v", dbURL, err)
+		return
+	}
+
+	testCtx := context.Background()
+	_, _ = pool.Exec(testCtx, `TRUNCATE reseller_ledger_entry, reseller_credit_account, purchase, customer CASCADE;`)
+
+	loc := YangonLocation()
+	reportTime := time.Date(2026, 10, 30, 15, 0, 0, 0, loc)
+
+	// 1. Create Customer
+	var customerID int64
+	err = pool.QueryRow(testCtx, `
+		INSERT INTO customer (telegram_id, language, balance, is_reseller)
+		VALUES ($1, 'en', 100000, true)
+		RETURNING id`, 22334455).Scan(&customerID)
+	if err != nil {
+		t.Fatalf("insert customer: %v", err)
+	}
+
+	// 2. Setup Reseller Credit Account
+	resellerRepo := database.NewResellerCreditRepository(pool)
+	_, err = resellerRepo.EnsureAccount(testCtx, customerID, 200000)
+	if err != nil {
+		t.Fatalf("ensure account: %v", err)
+	}
+	_, err = pool.Exec(testCtx, `UPDATE reseller_credit_account SET balance_owed = 100000 WHERE customer_id = $1`, customerID)
+	if err != nil {
+		t.Fatalf("update balance_owed: %v", err)
+	}
+
+	// 3. Purchase Table: Wallet top-up (100,000 MMK cash collected on Oct 1)
+	_, err = pool.Exec(testCtx, `
+		INSERT INTO purchase (customer_id, amount, month, currency, status, invoice_type, payment_method, paid_at)
+		VALUES ($1, 100000, 1, 'MMK', 'paid', 'wallet_topup', 'mobile_banking', $2)`,
+		customerID, time.Date(2026, 10, 1, 10, 0, 0, 0, loc).UTC())
+	if err != nil {
+		t.Fatalf("insert wallet topup: %v", err)
+	}
+
+	// 4. Purchase Table: Postpaid plan purchase (100,000 MMK service revenue on Oct 2, 0 cash)
+	_, err = pool.Exec(testCtx, `
+		INSERT INTO purchase (customer_id, amount, month, currency, status, invoice_type, payment_method, paid_at)
+		VALUES ($1, 100000, 1, 'MMK', 'paid', 'postpaid', 'postpaid', $2)`,
+		customerID, time.Date(2026, 10, 2, 10, 0, 0, 0, loc).UTC())
+	if err != nil {
+		t.Fatalf("insert postpaid purchase: %v", err)
+	}
+
+	// 5. Ledger: Wallet settlement (60,000 MMK debt paid down from wallet on Oct 3)
+	tx1, err := pool.Begin(testCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx1.Rollback(testCtx) }()
+	_, _, _, err = resellerRepo.RecordSettlementTx(testCtx, tx1, database.CreateLedgerEntryInput{
+		CustomerID:     customerID,
+		EntryType:      database.ResellerLedgerEntryTypeSettlement,
+		Direction:      database.ResellerLedgerDirectionDecrease,
+		Amount:         60000,
+		EffectiveAt:    time.Date(2026, 10, 3, 10, 0, 0, 0, loc).UTC(),
+		CreatedBy:      fmt.Sprintf("customer:%d", 22334455),
+		IdempotencyKey: "integ-settle-wallet",
+	})
+	if err != nil {
+		t.Fatalf("record wallet settlement: %v", err)
+	}
+	if err := tx1.Commit(testCtx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 6. Ledger: Admin external cash settlement (40,000 MMK cash received by admin on Oct 4)
+	tx2, err := pool.Begin(testCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx2.Rollback(testCtx) }()
+	_, _, _, err = resellerRepo.RecordSettlementTx(testCtx, tx2, database.CreateLedgerEntryInput{
+		CustomerID:     customerID,
+		EntryType:      database.ResellerLedgerEntryTypeSettlement,
+		Direction:      database.ResellerLedgerDirectionDecrease,
+		Amount:         40000,
+		EffectiveAt:    time.Date(2026, 10, 4, 10, 0, 0, 0, loc).UTC(),
+		CreatedBy:      fmt.Sprintf("admin:%d", 99887766),
+		IdempotencyKey: "integ-settle-admin",
+	})
+	if err != nil {
+		t.Fatalf("record admin settlement: %v", err)
+	}
+	if err := tx2.Commit(testCtx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 7. Instantiate FinanceService with production DB repositories
+	purchaseRepo := database.NewPurchaseRepository(pool)
+	financialAdjustmentRepo := database.NewFinancialAdjustmentRepository(pool)
+	service := NewFinanceService(purchaseRepo, financialAdjustmentRepo, resellerRepo)
+
+	report, err := service.GetReport(testCtx, ReportQuery{
+		Period: database.RevenuePeriodMonth,
+		Now:    reportTime,
+	})
+	if err != nil {
+		t.Fatalf("GetReport error: %v", err)
+	}
+
+	// Assertions on production metrics:
+	// Initial top-up cash: 100,000 MMK
+	// Wallet settlement (60,000 MMK): MUST NOT be added to cash (cash was recorded at top-up)
+	// Admin cash settlement (40,000 MMK): MUST be added to cash
+	// Total Cash Collected = 140,000 MMK (NOT 200,000 MMK)
+	if report.Current.CashCollected != 140000 {
+		t.Fatalf("CashCollected = %v, want 140000", report.Current.CashCollected)
+	}
+	if report.Current.GrossServiceRevenue != 100000 {
+		t.Fatalf("GrossServiceRevenue = %v, want 100000", report.Current.GrossServiceRevenue)
+	}
+	if report.Current.NetServiceRevenue != 100000 {
+		t.Fatalf("NetServiceRevenue = %v, want 100000", report.Current.NetServiceRevenue)
+	}
+	if report.Current.SuccessfulOrders != 1 {
+		t.Fatalf("SuccessfulOrders = %v, want 1", report.Current.SuccessfulOrders)
+	}
+	if report.Current.AverageOrderValue != 100000 {
+		t.Fatalf("AverageOrderValue = %v, want 100000", report.Current.AverageOrderValue)
+	}
+	if report.Current.WalletTopUps != 100000 {
+		t.Fatalf("WalletTopUps = %v, want 100000", report.Current.WalletTopUps)
+	}
+
+	// Assert read operations did not mutate balances or debt
+	acct, err := resellerRepo.GetAccount(testCtx, customerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acct.BalanceOwed != 0 {
+		t.Fatalf("balance_owed was mutated by reporting: %v", acct.BalanceOwed)
 	}
 }
