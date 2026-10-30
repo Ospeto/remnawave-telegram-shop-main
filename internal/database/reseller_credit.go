@@ -527,12 +527,12 @@ type SettlementPeriodRow struct {
 	SettlementCount int
 }
 
-// buildSumSettlementsByPeriodSQL groups settlement ledger entries by Yangon period buckets.
+// BuildSumSettlementsByPeriodSQL groups settlement ledger entries by Yangon period buckets.
 // Half-open [start, end). entry_type = 'settlement' only. Currency hardcoded to MMK.
 // Only includes authenticated admin-recorded external cash settlements (created_by LIKE 'admin:%').
 // Wallet-funded settlements (created_by LIKE 'customer:%') are excluded from cash collected
 // because the cash was already recorded upon wallet top-up.
-func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
+func BuildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
 	var bucket string
 	switch period {
 	case RevenuePeriodDay, RevenuePeriodCustom:
@@ -564,7 +564,7 @@ func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error)
 // SumSettlementsByPeriod groups settlement ledger entries by Yangon period buckets.
 // Half-open [start, end). entry_type = 'settlement' only.
 func (r *ResellerCreditRepository) SumSettlementsByPeriod(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]SettlementPeriodRow, error) {
-	query, err := buildSumSettlementsByPeriodSQL(period)
+	query, err := BuildSumSettlementsByPeriodSQL(period)
 	if err != nil {
 		return nil, err
 	}

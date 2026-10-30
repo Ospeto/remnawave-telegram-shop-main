@@ -337,7 +337,7 @@ func TestValidateCreateLedgerEntryInput_AdjustmentEitherDirection(t *testing.T) 
 }
 
 func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
-	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodDay)
+	sql, err := BuildSumSettlementsByPeriodSQL(RevenuePeriodDay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestBuildSumSettlementsByPeriodSQL_AllPeriodsAdminOnlyCash(t *testing.T) {
 	}
 	for _, p := range periods {
 		t.Run(string(p), func(t *testing.T) {
-			sql, err := buildSumSettlementsByPeriodSQL(p)
+			sql, err := BuildSumSettlementsByPeriodSQL(p)
 			if err != nil {
 				t.Fatalf("unexpected error for %s: %v", p, err)
 			}
@@ -385,7 +385,7 @@ func TestBuildSumSettlementsByPeriodSQL_AllPeriodsAdminOnlyCash(t *testing.T) {
 }
 
 func TestBuildSumSettlementsByPeriodSQL_WeekBucket(t *testing.T) {
-	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodWeek)
+	sql, err := BuildSumSettlementsByPeriodSQL(RevenuePeriodWeek)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestBuildSumSettlementsByPeriodSQL_WeekBucket(t *testing.T) {
 }
 
 func TestBuildSumSettlementsByPeriodSQL_UnsupportedPeriod(t *testing.T) {
-	_, err := buildSumSettlementsByPeriodSQL(RevenueSummaryPeriod("quarter"))
+	_, err := BuildSumSettlementsByPeriodSQL(RevenueSummaryPeriod("quarter"))
 	if err == nil {
 		t.Fatal("expected unsupported period error")
 	}

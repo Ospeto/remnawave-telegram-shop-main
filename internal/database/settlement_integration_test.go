@@ -38,10 +38,21 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 	if pool == nil {
 		return
 	}
+	defer pool.Close()
 	ctx := context.Background()
 
-	// Clean test state in isolated test DB
-	_, _ = pool.Exec(ctx, `TRUNCATE reseller_ledger_entry, reseller_credit_account, purchase, customer CASCADE;`)
+	const testTelegramID int64 = 12345678
+	cleanup := func() {
+		var custID int64
+		if err := pool.QueryRow(ctx, `SELECT id FROM customer WHERE telegram_id = $1`, testTelegramID).Scan(&custID); err == nil {
+			_, _ = pool.Exec(ctx, `DELETE FROM reseller_ledger_entry WHERE customer_id = $1`, custID)
+			_, _ = pool.Exec(ctx, `DELETE FROM reseller_credit_account WHERE customer_id = $1`, custID)
+			_, _ = pool.Exec(ctx, `DELETE FROM purchase WHERE customer_id = $1`, custID)
+			_, _ = pool.Exec(ctx, `DELETE FROM customer WHERE id = $1`, custID)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
 
 	loc := revenueSummaryLocation() // Yangon
 	start := time.Date(2026, 10, 1, 0, 0, 0, 0, loc).UTC()
@@ -52,7 +63,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 	err := pool.QueryRow(ctx, `
 		INSERT INTO customer (telegram_id, language, balance, is_reseller)
 		VALUES ($1, 'en', 100000, true)
-		RETURNING id`, 12345678).Scan(&customerID)
+		RETURNING id`, testTelegramID).Scan(&customerID)
 	if err != nil {
 		t.Fatalf("failed to insert customer: %v", err)
 	}
@@ -101,7 +112,7 @@ func TestIntegration_SumSettlementsByPeriod_ExcludesWalletSettlements(t *testing
 		Direction:      ResellerLedgerDirectionDecrease,
 		Amount:         60000, // 60,000 settled from wallet
 		EffectiveAt:    time.Date(2026, 10, 3, 10, 0, 0, 0, loc).UTC(),
-		CreatedBy:      fmt.Sprintf("customer:%d", 12345678),
+		CreatedBy:      fmt.Sprintf("customer:%d", testTelegramID),
 		IdempotencyKey: "settle-wallet-1",
 	})
 	if err != nil || !created {
