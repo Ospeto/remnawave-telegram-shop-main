@@ -312,9 +312,10 @@ Two rails; both reduce `balance_owed` on the AR ledger:
 | Metric | When counted |
 |--------|----------------|
 | **Service revenue (gross)** | Postpaid **sale / fulfill date** (paid service purchase amount) |
-| **Cash collected** | Settlement **`effective_at`** (self-pay or admin offline) |
+| **Cash collected** | Admin offline settlement **`effective_at`** only (wallet self-pay is excluded; cash was recorded at top-up) |
 
 - Do **not** treat postpaid create as cash. Settling later must not double-count revenue.
+- Reseller wallet self-pay settles debt using existing wallet liability and is excluded from cash collected to prevent double-counting top-ups.
 - Same `FinanceService` / `/admin/finance` / `/revenue` definitions as other sales.
 
 ### Money-safety invariants
@@ -336,4 +337,4 @@ Two rails; both reduce `balance_owed` on the AR ledger:
 | Reseller pay-down | `/reseller/account` or `POST /api/reseller/settlements` |
 | Admin offline settlement | `/admin/resellers` or `POST …/settlements` |
 | View ledger | Reseller: `/reseller/account`; Admin: ledger on resellers page |
-| Confirm revenue vs cash | Finance: sale date = revenue; settlement date = cash |
+| Confirm revenue vs cash | Finance: sale date = revenue; admin settlement date = cash (wallet self-pay excluded) |

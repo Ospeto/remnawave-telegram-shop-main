@@ -562,7 +562,7 @@ func BuildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error)
 }
 
 // SumSettlementsByPeriod groups settlement ledger entries by Yangon period buckets.
-// Half-open [start, end). entry_type = 'settlement' only.
+// Half-open [start, end). entry_type = 'settlement' and created_by LIKE 'admin:%' only.
 func (r *ResellerCreditRepository) SumSettlementsByPeriod(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]SettlementPeriodRow, error) {
 	query, err := BuildSumSettlementsByPeriodSQL(period)
 	if err != nil {

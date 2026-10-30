@@ -420,7 +420,7 @@ The Go app serves the Mini App and these API routes:
 | `/api/reseller/account` | Reseller: `credit_limit`, `balance_owed`, `remaining_credit` |
 | `/api/reseller/ledger` | Reseller: own paginated AR ledger |
 | `/api/reseller/settlements` | Reseller: self-pay settlement (`payment_method: "wallet"`; debits wallet; reduces AR) |
-| `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. Cash includes AR settlements on settlement date; postpaid sales count as service revenue on sale date (not cash). |
+| `/api/revenue` | Admin structured `FinanceReport`. Supports `period=day\|week\|month\|year\|custom` (Yangon boundaries; custom needs `from`/`to`). Optional `periods` for trend history. Cash includes admin offline AR settlements on settlement date (wallet settlements excluded to prevent double-counting); postpaid sales count as service revenue on sale date (not cash). |
 | `/api/revenue/export` | CSV export of the same `FinanceReport` (same query params and totals as JSON). |
 | `/api/admin/resellers` | Admin list of resellers with `credit_limit`, `balance_owed`, `remaining_credit` |
 | `/api/admin/customers/{telegram_id}/reseller` | Admin `PATCH` body `{ "is_reseller": true\|false }` |
