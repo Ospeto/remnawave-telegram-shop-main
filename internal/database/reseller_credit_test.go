@@ -337,13 +337,14 @@ func TestValidateCreateLedgerEntryInput_AdjustmentEitherDirection(t *testing.T) 
 }
 
 func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
-	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodDay)
+	sql, err := BuildSumSettlementsByPeriodSQL(RevenuePeriodDay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		"Asia/Yangon",
 		"entry_type = 'settlement'",
+		"created_by LIKE 'admin:%'",
 		"effective_at >= $1",
 		"effective_at < $2",
 		"'MMK'",
@@ -359,8 +360,32 @@ func TestBuildSumSettlementsByPeriodSQL_YangonAndSettlementOnly(t *testing.T) {
 	}
 }
 
+func TestBuildSumSettlementsByPeriodSQL_AllPeriodsAdminOnlyCash(t *testing.T) {
+	periods := []RevenueSummaryPeriod{
+		RevenuePeriodDay,
+		RevenuePeriodWeek,
+		RevenuePeriodMonth,
+		RevenuePeriodYear,
+		RevenuePeriodCustom,
+	}
+	for _, p := range periods {
+		t.Run(string(p), func(t *testing.T) {
+			sql, err := BuildSumSettlementsByPeriodSQL(p)
+			if err != nil {
+				t.Fatalf("unexpected error for %s: %v", p, err)
+			}
+			if !strings.Contains(sql, "created_by LIKE 'admin:%'") {
+				t.Fatalf("period %s missing admin cash filter: %s", p, sql)
+			}
+			if !strings.Contains(sql, "entry_type = 'settlement'") {
+				t.Fatalf("period %s missing settlement filter: %s", p, sql)
+			}
+		})
+	}
+}
+
 func TestBuildSumSettlementsByPeriodSQL_WeekBucket(t *testing.T) {
-	sql, err := buildSumSettlementsByPeriodSQL(RevenuePeriodWeek)
+	sql, err := BuildSumSettlementsByPeriodSQL(RevenuePeriodWeek)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +395,7 @@ func TestBuildSumSettlementsByPeriodSQL_WeekBucket(t *testing.T) {
 }
 
 func TestBuildSumSettlementsByPeriodSQL_UnsupportedPeriod(t *testing.T) {
-	_, err := buildSumSettlementsByPeriodSQL(RevenueSummaryPeriod("quarter"))
+	_, err := BuildSumSettlementsByPeriodSQL(RevenueSummaryPeriod("quarter"))
 	if err == nil {
 		t.Fatal("expected unsupported period error")
 	}

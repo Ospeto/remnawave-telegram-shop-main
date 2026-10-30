@@ -30,9 +30,9 @@ const (
 
 // Stable repository errors for expected AR credit failures.
 var (
-	ErrResellerInsufficientCredit       = errors.New("reseller insufficient credit")
-	ErrResellerOverSettlement           = errors.New("reseller over-settlement")
-	ErrResellerCreditLimitBelowOwed     = errors.New("reseller credit limit below balance owed")
+	ErrResellerInsufficientCredit        = errors.New("reseller insufficient credit")
+	ErrResellerOverSettlement            = errors.New("reseller over-settlement")
+	ErrResellerCreditLimitBelowOwed      = errors.New("reseller credit limit below balance owed")
 	ErrResellerLedgerIdempotencyMismatch = errors.New("reseller ledger idempotency payload mismatch")
 )
 
@@ -59,8 +59,8 @@ func (a ResellerCreditAccount) RemainingCredit() float64 {
 type ResellerLedgerEntry struct {
 	ID             int64                   `json:"id"`
 	CustomerID     int64                   `json:"customer_id"`
-	EntryType      ResellerLedgerEntryType  `json:"entry_type"`
-	Direction      ResellerLedgerDirection  `json:"direction"`
+	EntryType      ResellerLedgerEntryType `json:"entry_type"`
+	Direction      ResellerLedgerDirection `json:"direction"`
 	Amount         float64                 `json:"amount"`
 	PurchaseID     *int64                  `json:"purchase_id,omitempty"`
 	EffectiveAt    time.Time               `json:"effective_at"`
@@ -444,9 +444,9 @@ func (r *ResellerCreditRepository) RecordSaleTx(
 	return r.recordLedgerTx(
 		ctx, tx, in,
 		ResellerLedgerEntryTypeSale, ResellerLedgerDirectionIncrease,
-		true,  // require purchase
-		true,  // increase owed
-		true,  // check credit limit
+		true, // require purchase
+		true, // increase owed
+		true, // check credit limit
 	)
 }
 
@@ -521,15 +521,18 @@ func (r *ResellerCreditRepository) ListLedger(ctx context.Context, customerID in
 // SettlementPeriodRow is a Yangon-bucketed sum of AR settlement ledger entries.
 // Currency is always MMK for AR v1 (ledger has no currency column).
 type SettlementPeriodRow struct {
-	PeriodStart     string  // YYYY-MM-DD Yangon
-	Currency        string  // always "MMK" for AR v1
+	PeriodStart     string // YYYY-MM-DD Yangon
+	Currency        string // always "MMK" for AR v1
 	SettlementTotal float64
 	SettlementCount int
 }
 
-// buildSumSettlementsByPeriodSQL groups settlement ledger entries by Yangon period buckets.
+// BuildSumSettlementsByPeriodSQL groups settlement ledger entries by Yangon period buckets.
 // Half-open [start, end). entry_type = 'settlement' only. Currency hardcoded to MMK.
-func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
+// Only includes authenticated admin-recorded external cash settlements (created_by LIKE 'admin:%').
+// Wallet-funded settlements (created_by LIKE 'customer:%') are excluded from cash collected
+// because the cash was already recorded upon wallet top-up.
+func BuildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error) {
 	var bucket string
 	switch period {
 	case RevenuePeriodDay, RevenuePeriodCustom:
@@ -551,6 +554,7 @@ func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error)
 			COUNT(*) AS settlement_count
 		FROM reseller_ledger_entry rle
 		WHERE rle.entry_type = 'settlement'
+		  AND rle.created_by LIKE 'admin:%%'
 		  AND rle.effective_at >= $1
 		  AND rle.effective_at < $2
 		GROUP BY 1, 2
@@ -558,9 +562,9 @@ func buildSumSettlementsByPeriodSQL(period RevenueSummaryPeriod) (string, error)
 }
 
 // SumSettlementsByPeriod groups settlement ledger entries by Yangon period buckets.
-// Half-open [start, end). entry_type = 'settlement' only.
+// Half-open [start, end). entry_type = 'settlement' and created_by LIKE 'admin:%' only.
 func (r *ResellerCreditRepository) SumSettlementsByPeriod(ctx context.Context, start, end time.Time, period RevenueSummaryPeriod) ([]SettlementPeriodRow, error) {
-	query, err := buildSumSettlementsByPeriodSQL(period)
+	query, err := BuildSumSettlementsByPeriodSQL(period)
 	if err != nil {
 		return nil, err
 	}

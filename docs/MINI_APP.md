@@ -261,5 +261,5 @@ Postpaid is **Mini App only** in v1 (no bot postpaid button). AR is separate fro
 
 ### Finance (postpaid)
 
-- **Service revenue** on postpaid sale/fulfill date; **cash collected** on settlement `effective_at` only (not on postpaid create).
+- **Service revenue** on postpaid sale/fulfill date; **cash collected** on admin offline settlement `effective_at` only (wallet settlements excluded to prevent double-counting top-ups; see [HOWTOUSE.md](../HOWTOUSE.md#finance-reporting); not on postpaid create).
 - No AR backfill of historical prepaid wholesale purchases.
