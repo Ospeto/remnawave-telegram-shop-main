@@ -1285,8 +1285,8 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Purchase not allowed", http.StatusForbidden)
 			return
 		}
-		if extendKey.Status != "active" || extendKey.RemnawaveUUID == uuid.Nil {
-			http.Error(w, "Subscription key is no longer available; choose an active key", http.StatusConflict)
+		if (extendKey.Status != "active" && extendKey.Status != "expired") || extendKey.RemnawaveUUID == uuid.Nil {
+			http.Error(w, "Subscription key is no longer available; choose another key", http.StatusConflict)
 			return
 		}
 	}

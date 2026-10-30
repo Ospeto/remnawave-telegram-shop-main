@@ -199,21 +199,7 @@ export function Plans() {
 
     const TOPUP_AMOUNTS = [5000, 10000, 30000, 50000, 100000];
 
-    // Extend plan filtering rules:
-    //   Key is ACTIVE  → lock to same traffic type (unlimited↔limited, no switching)
-    //   Key is EXPIRED → all plans available (starting fresh)
-    //   New purchase   → all plans available
-    const extendingKeyIsActive = extendingKey?.status === 'active';
-    const extendingKeyIsUnlimited = extendingKey?.traffic_limit_gb === 0;
-    const filteredPlans = isExtend && extendingKey && extendingKeyIsActive
-        ? plans.filter(p =>
-            extendingKeyIsUnlimited
-                ? p.traffic_limit_gb === 0   // Unlimited → Unlimited only
-                : p.traffic_limit_gb > 0     // Limited   → Limited only
-        )
-        : plans;
-
-
+    // Trial and paid keys can renew with any sellable plan.
     const itemsToDisplay = isWalletTopup
         ? TOPUP_AMOUNTS.map(amount => ({
             id: `topup-${amount}`,
@@ -224,7 +210,7 @@ export function Plans() {
             currency: plans[0]?.currency || 'MMK',
             isTopUp: true
         }))
-        : filteredPlans;
+        : plans;
 
     const isReseller = !!userData?.is_reseller;
     const showPromoSection = !isWalletTopup && !isReseller;
