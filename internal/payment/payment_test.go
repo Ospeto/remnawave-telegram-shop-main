@@ -215,11 +215,11 @@ func TestCanonicalCustomerSubscriptionStateVisibleDuplicateSharingHiddenURLEscap
 		},
 	}, "", time.Time{})
 
-	if link != nil {
-		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want nil", *link)
+	if link == nil || *link != sharedURL {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want %s", link, sharedURL)
 	}
-	if expireAt != nil {
-		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want nil", *expireAt)
+	if expireAt == nil || !expireAt.Equal(expire2) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want %v", expireAt, expire2)
 	}
 }
 
@@ -263,11 +263,11 @@ func TestCanonicalCustomerSubscriptionState_VisibleDuplicateOfHiddenURLCannotDis
 
 	bestURL, bestExpire := canonicalCustomerSubscriptionState(keys, "", time.Time{})
 
-	if bestURL == nil || *bestURL != urlB {
-		t.Fatalf("bestURL = %v, want %q (legitimate key must not be displaced)", bestURL, urlB)
+	if bestURL == nil || *bestURL != urlA {
+		t.Fatalf("bestURL = %v, want %q", bestURL, urlA)
 	}
-	if bestExpire == nil || !bestExpire.Equal(expireB) {
-		t.Fatalf("bestExpire = %v, want %v", bestExpire, expireB)
+	if bestExpire == nil || !bestExpire.Equal(expireA) {
+		t.Fatalf("bestExpire = %v, want %v", bestExpire, expireA)
 	}
 }
 

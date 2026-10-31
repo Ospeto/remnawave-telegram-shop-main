@@ -126,9 +126,7 @@ func RegisterHandlers(
 	// Per-key auto-renew toggle
 	mux.HandleFunc("/api/keys/autorenew", withAuth(handler.UpdateKeyAutoRenew))
 
-	// Hide/archive expired key endpoints
-	mux.HandleFunc("/api/keys/hide", withAuth(handler.HideKey))
-	mux.HandleFunc("/api/keys/archive", withAuth(handler.HideKey))
+	// Key sub-resources
 	mux.HandleFunc("/api/keys/", withAuth(handler.KeyRoute))
 
 	// Deep link redirect — opens in system browser to handle custom URL schemes

@@ -24,9 +24,6 @@ func TestRegisterHandlersProtectsHideKeyRoutes(t *testing.T) {
 		path   string
 	}{
 		{name: "hide by path param", method: http.MethodPost, path: "/api/keys/123/hide"},
-		{name: "archive by path param", method: http.MethodPost, path: "/api/keys/123/archive"},
-		{name: "hide by body", method: http.MethodPost, path: "/api/keys/hide"},
-		{name: "archive by body", method: http.MethodPost, path: "/api/keys/archive"},
 	}
 
 	for _, tt := range tests {
@@ -84,26 +81,6 @@ func TestHideKeyRejectsInvalidKeyIDs(t *testing.T) {
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("path %q status = %d, want %d", path, rec.Code, http.StatusBadRequest)
-			}
-		})
-	}
-
-	// Also test body endpoint with invalid key_id
-	bodyReqs := []string{
-		`{"key_id": 0}`,
-		`{"key_id": -10}`,
-		`{"key_id": "not-an-int"}`,
-	}
-	for _, body := range bodyReqs {
-		t.Run("body: "+body, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/keys/hide", strings.NewReader(body))
-			req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(12345)))
-			rec := httptest.NewRecorder()
-
-			handler.HideKey(rec, req)
-
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("body %q status = %d, want %d", body, rec.Code, http.StatusBadRequest)
 			}
 		})
 	}
@@ -189,7 +166,7 @@ func TestHideKeyErrorMatrix(t *testing.T) {
 	}
 }
 
-func TestHideKeySuccessBothPathAndBodyEndpoints(t *testing.T) {
+func TestHideKeySuccessPathParam(t *testing.T) {
 	called := false
 	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.findCustomerByTelegramID = func(ctx context.Context, tid int64) (*database.Customer, error) {
@@ -203,7 +180,6 @@ func TestHideKeySuccessBothPathAndBodyEndpoints(t *testing.T) {
 		return errors.New("unexpected params")
 	}
 
-	// 1. Path endpoint: POST /api/keys/42/hide
 	req1 := httptest.NewRequest(http.MethodPost, "/api/keys/42/hide", nil)
 	req1 = req1.WithContext(context.WithValue(req1.Context(), telegramIDKey, int64(12345)))
 	rec1 := httptest.NewRecorder()
@@ -222,21 +198,6 @@ func TestHideKeySuccessBothPathAndBodyEndpoints(t *testing.T) {
 	}
 	if resp1["success"] != true || resp1["key_id"] != float64(42) {
 		t.Fatalf("unexpected response: %+v", resp1)
-	}
-
-	// 2. Body endpoint: POST /api/keys/hide
-	called = false
-	req2 := httptest.NewRequest(http.MethodPost, "/api/keys/hide", strings.NewReader(`{"key_id":42}`))
-	req2 = req2.WithContext(context.WithValue(req2.Context(), telegramIDKey, int64(12345)))
-	rec2 := httptest.NewRecorder()
-
-	handler.HideKey(rec2, req2)
-
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("HideKey status = %d, want 200", rec2.Code)
-	}
-	if !called {
-		t.Fatal("hideSubscriptionKey was not called for body endpoint")
 	}
 }
 
@@ -346,7 +307,7 @@ func TestCompactSubscriptionKeysForDisplayPreservesHiddenState(t *testing.T) {
 		}
 	})
 
-	t.Run("visible active winner retains hidden state from expired duplicate - active first", func(t *testing.T) {
+	t.Run("visible active winner clears hidden state from expired duplicate - active first", func(t *testing.T) {
 		keys := []database.SubscriptionKey{
 			{
 				ID:              10,
@@ -373,12 +334,12 @@ func TestCompactSubscriptionKeysForDisplayPreservesHiddenState(t *testing.T) {
 		if compacted[0].ID != 10 || compacted[0].Status != "active" {
 			t.Fatalf("compacted key ID = %d, status = %q, want active ID 10", compacted[0].ID, compacted[0].Status)
 		}
-		if !compacted[0].IsHidden {
-			t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved on active winner)")
+		if compacted[0].IsHidden {
+			t.Fatal("compacted key IsHidden = true, want false (active winner must not be hidden)")
 		}
 	})
 
-	t.Run("visible active winner retains hidden state from expired duplicate - expired hidden first", func(t *testing.T) {
+	t.Run("visible active winner clears hidden state from expired duplicate - expired hidden first", func(t *testing.T) {
 		keys := []database.SubscriptionKey{
 			{
 				ID:              11,
@@ -405,8 +366,8 @@ func TestCompactSubscriptionKeysForDisplayPreservesHiddenState(t *testing.T) {
 		if compacted[0].ID != 10 || compacted[0].Status != "active" {
 			t.Fatalf("compacted key ID = %d, status = %q, want active ID 10", compacted[0].ID, compacted[0].Status)
 		}
-		if !compacted[0].IsHidden {
-			t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved on active winner)")
+		if compacted[0].IsHidden {
+			t.Fatal("compacted key IsHidden = true, want false (active winner must not be hidden)")
 		}
 	})
 }

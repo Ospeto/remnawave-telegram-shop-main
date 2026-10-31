@@ -641,7 +641,7 @@ func TestHiddenKey_SyncKeysReconciliationAndRenewalContract(t *testing.T) {
 		t.Fatalf("expected 1 remote patch on extension, got %d", len(patches))
 	}
 
-	// Invariant: Key extended on remote and locally with original UUID and URL, remains hidden
+	// Invariant: Key extended on remote and locally with original UUID and URL, becomes visible
 	extendedKey, err := service.subKeyRepo.FindByID(ctx, keyID)
 	if err != nil || extendedKey == nil {
 		t.Fatal(err)
@@ -652,19 +652,19 @@ func TestHiddenKey_SyncKeysReconciliationAndRenewalContract(t *testing.T) {
 	if extendedKey.SubscriptionURL != subURL {
 		t.Fatalf("extension altered subscription URL: %s vs %s", extendedKey.SubscriptionURL, subURL)
 	}
-	if !extendedKey.IsHidden {
-		t.Fatal("extension cleared is_hidden, visibility must remain independent")
+	if extendedKey.IsHidden {
+		t.Fatal("extended key is_hidden = true, want false")
 	}
 	if extendedKey.Status != "active" {
 		t.Fatalf("extended key status = %s, want active", extendedKey.Status)
 	}
 
-	// Invariant: customer subscription_link does NOT leak hidden key
+	// Invariant: customer subscription_link is updated with active extended key
 	updatedCustomer, err := service.customerRepository.FindById(ctx, customerID)
 	if err != nil || updatedCustomer == nil {
 		t.Fatal(err)
 	}
-	if updatedCustomer.SubscriptionLink != nil {
-		t.Fatalf("customer.SubscriptionLink leaked hidden key: %s", *updatedCustomer.SubscriptionLink)
+	if updatedCustomer.SubscriptionLink == nil || *updatedCustomer.SubscriptionLink != subURL {
+		t.Fatalf("customer.SubscriptionLink = %v, want %s", updatedCustomer.SubscriptionLink, subURL)
 	}
 }

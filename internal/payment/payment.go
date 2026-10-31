@@ -1000,6 +1000,13 @@ func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbac
 			}
 		}
 	}
+	for _, key := range keys {
+		if !key.IsHidden && key.Status != "deleted" {
+			if trimmed := strings.TrimSpace(key.SubscriptionURL); trimmed != "" {
+				delete(hiddenURLs, trimmed)
+			}
+		}
+	}
 
 	var bestURL *string
 	var bestExpire *time.Time

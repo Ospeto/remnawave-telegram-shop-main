@@ -219,6 +219,8 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 		Set("expire_at", expireAt).
 		Set("status", "active").
 		Set("expiration_notified_at", nil).
+		Set("is_hidden", false).
+		Set("hidden_at", nil).
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -262,6 +264,14 @@ func (r *SubscriptionKeyRepository) SyncExpiryStatus(ctx context.Context, id int
 		    expiration_notified_at = CASE
 		        WHEN expire_at IS DISTINCT FROM $1::timestamptz OR status IS DISTINCT FROM $2::text
 		        THEN NULL ELSE expiration_notified_at
+		    END,
+		    is_hidden = CASE
+		        WHEN $2::text = 'active' AND $1::timestamptz > NOW() THEN FALSE
+		        ELSE is_hidden
+		    END,
+		    hidden_at = CASE
+		        WHEN $2::text = 'active' AND $1::timestamptz > NOW() THEN NULL
+		        ELSE hidden_at
 		    END
 		WHERE id = $3 AND status <> 'deleted'`,
 		expireAt, status, id)

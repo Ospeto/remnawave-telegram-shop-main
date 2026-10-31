@@ -1043,6 +1043,9 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 	for _, key := range keys {
 		id, ok := identity(key)
 		if !ok {
+			if key.Status == "active" {
+				key.IsHidden = false
+			}
 			compacted = append(compacted, key)
 			continue
 		}
@@ -1052,11 +1055,18 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 			if isNewer(key, compacted[idx]) {
 				compacted[idx] = key
 			}
-			compacted[idx].IsHidden = wasHidden
+			if compacted[idx].Status == "active" {
+				compacted[idx].IsHidden = false
+			} else {
+				compacted[idx].IsHidden = wasHidden
+			}
 			continue
 		}
 
 		identityToIndex[id] = len(compacted)
+		if key.Status == "active" {
+			key.IsHidden = false
+		}
 		compacted = append(compacted, key)
 	}
 
@@ -2959,13 +2969,13 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 }
 
 // KeyRoute handles sub-resources under /api/keys/
-// e.g. POST /api/keys/{id}/hide or POST /api/keys/{id}/archive
+// e.g. POST /api/keys/{id}/hide
 func (h *APIHandler) KeyRoute(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/keys/")
 	path = strings.Trim(path, "/")
 	parts := strings.Split(path, "/")
 
-	if len(parts) == 2 && (parts[1] == "hide" || parts[1] == "archive") {
+	if len(parts) == 2 && parts[1] == "hide" {
 		keyID, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil || keyID <= 0 {
 			http.Error(w, "Invalid key ID", http.StatusBadRequest)
@@ -2976,28 +2986,6 @@ func (h *APIHandler) KeyRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
-}
-
-// HideKey handles POST /api/keys/hide and POST /api/keys/archive with body {"key_id": 123}
-func (h *APIHandler) HideKey(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req struct {
-		KeyID int64 `json:"key_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.KeyID <= 0 {
-		http.Error(w, "Missing or invalid key_id", http.StatusBadRequest)
-		return
-	}
-
-	h.handleHideKey(w, r, req.KeyID)
 }
 
 func (h *APIHandler) handleHideKey(w http.ResponseWriter, r *http.Request, keyID int64) {
