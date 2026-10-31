@@ -6,12 +6,12 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
-import { UserData } from '../lib/types';
+import { SubscriptionKey, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { resolveSupportUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -24,6 +24,9 @@ export function Home() {
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
     const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
+    const [keyToRemove, setKeyToRemove] = useState<SubscriptionKey | null>(null);
+    const [removingKeyId, setRemovingKeyId] = useState<number | null>(null);
+    const [removeError, setRemoveError] = useState<string | null>(null);
     const { playClick } = useMXBrownSound();
 
     const loadData = useCallback(async () => {
@@ -152,6 +155,38 @@ export function Home() {
 
     const handleHappLink = (happUrl: string, redirectUrl?: string) => {
         openHappLink(happUrl, redirectUrl, tg ?? null);
+    };
+
+    const handleConfirmRemove = async (keyId: number) => {
+        if (!initData || removingKeyId !== null) return;
+        setRemovingKeyId(keyId);
+        setRemoveError(null);
+        try {
+            await fetchJSONWithTelegramAuth(`/api/keys/${keyId}/hide`, initData, {
+                method: 'POST',
+            });
+            setData(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    keys: prev.keys.filter(k => k.id !== keyId),
+                };
+            });
+            setKeyToRemove(null);
+        } catch (err) {
+            if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
+                setAuthExpired(true);
+                return;
+            }
+            if (err instanceof APIError) {
+                setRemoveError(err.body || t('remove_key_error'));
+            } else {
+                setRemoveError(t('remove_key_error'));
+            }
+        } finally {
+            setRemovingKeyId(null);
+        }
     };
 
     if (loading) return <LoadingScreen message={t('loading')} />;
@@ -594,6 +629,25 @@ export function Home() {
                                             {copiedId === key.id ? t('copied') : t('btn_copy_key')}
                                         </button>
                                     </div>
+                                    {key.id > 0 && key.status !== 'active' && Boolean(key.expire_at) && new Date(key.expire_at!).getTime() < Date.now() && (
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => { playClick(); setRemoveError(null); setKeyToRemove(key); }}
+                                            aria-label={t('btn_remove_key')}
+                                            style={{
+                                                padding: '10px 12px',
+                                                fontSize: 'var(--font-caption)',
+                                                fontWeight: 500,
+                                                color: 'var(--text-hint)',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'transparent',
+                                                cursor: 'pointer',
+                                            }}
+                                        >
+                                            {t('btn_remove_key')}
+                                        </button>
+                                    )}
 
                                     {/* Per-key auto-renew toggle */}
                                     {key.status === 'active' && (
@@ -717,6 +771,124 @@ export function Home() {
                     </svg>
                     {t('contact_support')}
                 </a>
+            )}
+
+            {/* Remove Expired Key Confirmation Modal */}
+            {keyToRemove && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 9999,
+                        padding: 16,
+                        backdropFilter: 'blur(4px)',
+                    }}
+                    onClick={() => {
+                        if (removingKeyId === null) {
+                            playClick();
+                            setKeyToRemove(null);
+                            setRemoveError(null);
+                        }
+                    }}
+                >
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="remove-key-title"
+                        aria-describedby="remove-key-desc"
+                        style={{
+                            background: 'var(--tg-theme-bg-color, var(--card-bg, #1c1c1e))',
+                            color: 'var(--tg-theme-text-color, #ffffff)',
+                            borderRadius: 16,
+                            padding: 24,
+                            maxWidth: 360,
+                            width: '100%',
+                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                            border: '1px solid var(--divider, rgba(255, 255, 255, 0.1))',
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <h3
+                            id="remove-key-title"
+                            style={{
+                                margin: '0 0 8px 0',
+                                fontSize: 'var(--font-h3, 18px)',
+                                fontWeight: 700,
+                            }}
+                        >
+                            {t('remove_key_confirm_title')}
+                        </h3>
+                        <p
+                            id="remove-key-desc"
+                            className="text-hint"
+                            style={{
+                                margin: '0 0 20px 0',
+                                fontSize: 'var(--font-body, 14px)',
+                                lineHeight: 1.4,
+                            }}
+                        >
+                            {t('remove_key_confirm_desc')}
+                        </p>
+                        {removeError && (
+                            <div
+                                role="alert"
+                                style={{
+                                    color: 'var(--color-danger, #ff3b30)',
+                                    fontSize: 12,
+                                    marginBottom: 16,
+                                }}
+                            >
+                                {removeError}
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                disabled={removingKeyId !== null}
+                                onClick={() => {
+                                    playClick();
+                                    setKeyToRemove(null);
+                                    setRemoveError(null);
+                                }}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px',
+                                    fontSize: 'var(--font-body, 14px)',
+                                    fontWeight: 500,
+                                }}
+                            >
+                                {t('btn_cancel_remove')}
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                disabled={removingKeyId !== null}
+                                onClick={() => {
+                                    playClick();
+                                    void handleConfirmRemove(keyToRemove.id);
+                                }}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px',
+                                    fontSize: 'var(--font-body, 14px)',
+                                    fontWeight: 600,
+                                    color: 'var(--color-danger, #ff3b30)',
+                                    borderColor: 'var(--color-danger, #ff3b30)',
+                                }}
+                            >
+                                {removingKeyId === keyToRemove.id ? t('removing_key') : t('btn_confirm_remove')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

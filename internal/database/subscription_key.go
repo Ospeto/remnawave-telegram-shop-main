@@ -4,12 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
+)
+
+var (
+	ErrKeyNotFound        = errors.New("subscription key not found")
+	ErrKeyNotOwned        = errors.New("subscription key not owned by customer")
+	ErrKeyActive          = errors.New("cannot hide active subscription key")
+	ErrKeyDeleted         = errors.New("cannot hide deleted subscription key")
+	ErrKeyIndeterminate   = errors.New("cannot hide subscription key with indeterminate expiry")
+	ErrKeyRenewalInFlight = errors.New("renewal in progress, cannot hide key")
 )
 
 type SubscriptionKey struct {
@@ -30,6 +40,8 @@ type SubscriptionKey struct {
 	AutoRenewPlanDays    *int       `db:"auto_renew_plan_days"`
 	AutoRenewPlanTraffic *int       `db:"auto_renew_plan_traffic_gb"`
 	AutoRenewClaimedAt   *time.Time `db:"auto_renew_claimed_at"`
+	IsHidden             bool       `db:"is_hidden"`
+	HiddenAt             *time.Time `db:"hidden_at"`
 }
 
 type SubscriptionKeyRepository struct {
@@ -46,7 +58,7 @@ func PrimarySubscriptionKey(keys []SubscriptionKey) *SubscriptionKey {
 
 	for i := range keys {
 		key := &keys[i]
-		if key.Status == "deleted" || key.ExpireAt == nil {
+		if key.Status == "deleted" || key.IsHidden || key.ExpireAt == nil {
 			continue
 		}
 		if key.ExpireAt.Before(now) {
@@ -65,6 +77,7 @@ var subKeyColumns = []string{
 	"subscription_url", "expire_at", "status", "created_at", "label",
 	"traffic_limit_gb", "auto_renew", "expiration_notified_at", "last_auto_renewed_at", "auto_renew_notified_at",
 	"auto_renew_plan_days", "auto_renew_plan_traffic_gb", "auto_renew_claimed_at",
+	"is_hidden", "hidden_at",
 }
 
 func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
@@ -74,6 +87,7 @@ func scanSubKey(row pgx.Row) (*SubscriptionKey, error) {
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 		&k.AutoRenewPlanDays, &k.AutoRenewPlanTraffic, &k.AutoRenewClaimedAt,
+		&k.IsHidden, &k.HiddenAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -91,6 +105,7 @@ func scanSubKeyFromRows(rows pgx.Rows) (*SubscriptionKey, error) {
 		&k.SubscriptionURL, &k.ExpireAt, &k.Status, &k.CreatedAt, &k.Label,
 		&k.TrafficLimitGB, &k.AutoRenew, &k.ExpirationNotifiedAt, &k.LastAutoRenewedAt, &k.AutoRenewNotifiedAt,
 		&k.AutoRenewPlanDays, &k.AutoRenewPlanTraffic, &k.AutoRenewClaimedAt,
+		&k.IsHidden, &k.HiddenAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan subscription_key row: %w", err)
@@ -204,6 +219,8 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 		Set("expire_at", expireAt).
 		Set("status", "active").
 		Set("expiration_notified_at", nil).
+		Set("is_hidden", false).
+		Set("hidden_at", nil).
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -349,6 +366,124 @@ func (r *SubscriptionKeyRepository) SetAutoRenew(ctx context.Context, keyID int6
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("key %d not found or not owned by customer %d", keyID, customerID)
+	}
+	return nil
+}
+
+// HideExpiredKey atomically hides an expired subscription key for the given customer.
+// It uses row-level locking (SELECT ... FOR UPDATE) inside a transaction to prevent
+// race conditions with concurrent renewals. It verifies:
+// - The key exists and belongs to customerID
+// - The key status is not 'active' and not 'deleted'
+// - The key has a non-nil expire_at strictly in the past (expire_at < NOW())
+// - The key has no active auto-renew claim in progress
+// - The key has no in-flight purchase extension in progress
+// If the key is already hidden, it succeeds idempotently.
+// On success, sets is_hidden = true, hidden_at = NOW(), auto_renew = false.
+func (r *SubscriptionKeyRepository) HideExpiredKey(ctx context.Context, keyID int64, customerID int64) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Fetch with row lock to serialize with concurrent renewals
+	row := tx.QueryRow(ctx, `
+		SELECT `+strings.Join(subKeyColumns, ", ")+`
+		FROM subscription_key
+		WHERE id = $1
+		FOR UPDATE
+	`, keyID)
+
+	key, err := scanSubKey(row)
+	if err != nil {
+		return fmt.Errorf("failed to scan subscription key: %w", err)
+	}
+	if key == nil {
+		return ErrKeyNotFound
+	}
+	if key.CustomerID != customerID {
+		return ErrKeyNotOwned
+	}
+	if key.Status == "deleted" {
+		return ErrKeyDeleted
+	}
+	if key.Status == "active" {
+		return ErrKeyActive
+	}
+	if key.ExpireAt == nil {
+		return ErrKeyIndeterminate
+	}
+	now := time.Now()
+	if !key.ExpireAt.Before(now) {
+		return ErrKeyActive
+	}
+
+	// Check if auto-renew claim is active
+	if key.AutoRenewClaimedAt != nil && key.AutoRenewClaimedAt.After(now.Add(-AutoRenewClaimTTL)) {
+		return ErrKeyRenewalInFlight
+	}
+
+	// Check if an in-flight purchase extension exists for this key
+	var pending int
+	err = tx.QueryRow(ctx, `
+		SELECT 1 FROM purchase
+		WHERE extend_key_id = $1 AND status IN ('new', 'pending', 'processing')
+		LIMIT 1
+	`, keyID).Scan(&pending)
+	if err == nil {
+		return ErrKeyRenewalInFlight
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to check in-flight purchase extension: %w", err)
+	}
+
+	if key.IsHidden {
+		// Already hidden, commit idempotently
+		return tx.Commit(ctx)
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE subscription_key
+		SET is_hidden = TRUE,
+		    hidden_at = NOW(),
+		    auto_renew = FALSE
+		WHERE id = $1 AND customer_id = $2
+	`, keyID, customerID)
+	if err != nil {
+		return fmt.Errorf("failed to update subscription key to hidden: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrKeyNotFound
+	}
+
+	return tx.Commit(ctx)
+}
+
+// ValidateExtendKeyTx validates that a key can be extended while holding a FOR SHARE lock
+// on the subscription_key row inside tx, preventing concurrent hide transactions.
+func (r *SubscriptionKeyRepository) ValidateExtendKeyTx(ctx context.Context, tx pgx.Tx, keyID int64, customerID int64) error {
+	if tx == nil {
+		return nil
+	}
+	var isHidden bool
+	var status string
+	var custID int64
+	var remUUID uuid.UUID
+	err := tx.QueryRow(ctx, `
+		SELECT customer_id, status, is_hidden, remnawave_uuid
+		FROM subscription_key
+		WHERE id = $1
+		FOR SHARE
+	`, keyID).Scan(&custID, &status, &isHidden, &remUUID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrKeyNotFound
+		}
+		return fmt.Errorf("failed to validate extend key: %w", err)
+	}
+	if custID != customerID || isHidden || (status != "active" && status != "expired") || remUUID == uuid.Nil {
+		return ErrKeyNotOwned
 	}
 	return nil
 }

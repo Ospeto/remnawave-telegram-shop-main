@@ -78,9 +78,9 @@ type AwaitingReceiptVerificationError struct {
 }
 
 // subscriptionKeyCanBeExtended reports whether key belongs to customerID, has a
-// valid remote UUID, and is in an extendable status ("active" or "expired").
+// valid remote UUID, is not hidden, and is in an extendable status ("active" or "expired").
 func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
-	return key != nil && key.CustomerID == customerID && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
+	return key != nil && key.CustomerID == customerID && !key.IsHidden && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
 }
 
 func remoteUserMissing(err error) bool {
@@ -475,6 +475,29 @@ func (s *PaymentService) resolveIdempotentExistingPurchase(ctx context.Context, 
 }
 
 func (s *PaymentService) createPurchaseRecord(ctx context.Context, purchase *database.Purchase) (int64, *database.Purchase, error) {
+	if purchase.ExtendKeyID != nil && s.customerRepository != nil {
+		tx, err := s.customerRepository.BeginTx(ctx)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to begin purchase transaction: %w", err)
+		}
+		defer func() {
+			_ = tx.Rollback(ctx)
+		}()
+
+		purchaseID, existing, err := s.createPurchaseRecordTx(ctx, tx, purchase)
+		if err != nil {
+			return 0, nil, err
+		}
+		if existing != nil {
+			return existing.ID, existing, nil
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return 0, nil, fmt.Errorf("failed to commit purchase transaction: %w", err)
+		}
+		return purchaseID, nil, nil
+	}
+
 	if key := idempotencyKeyFromContext(ctx); key != nil {
 		purchase.IdempotencyKey = key
 		existing, err := s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
@@ -521,6 +544,15 @@ func (s *PaymentService) createPurchaseRecordTx(ctx context.Context, tx pgx.Tx, 
 				return 0, nil, err
 			}
 			return existing.ID, existing, nil
+		}
+	}
+
+	if purchase.ExtendKeyID != nil && s.subKeyRepo != nil {
+		if err := s.subKeyRepo.ValidateExtendKeyTx(ctx, tx, *purchase.ExtendKeyID, purchase.CustomerID); err != nil {
+			if errors.Is(err, database.ErrKeyNotFound) || errors.Is(err, database.ErrKeyNotOwned) {
+				return 0, nil, ErrSubscriptionKeyUnavailable
+			}
+			return 0, nil, err
 		}
 	}
 
@@ -773,10 +805,14 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	}
 	localMap := make(map[string]database.SubscriptionKey, len(localKeys))
 	deletedURLs := make(map[string]bool)
+	hiddenURLs := make(map[string]bool)
 	for _, localKey := range localKeys {
 		localMap[localKey.RemnawaveUUID.String()] = localKey
 		if localKey.Status == "deleted" && localKey.SubscriptionURL != "" {
 			deletedURLs[localKey.SubscriptionURL] = true
+		}
+		if localKey.IsHidden && localKey.SubscriptionURL != "" {
+			hiddenURLs[localKey.SubscriptionURL] = true
 		}
 	}
 
@@ -817,6 +853,10 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 			_ = s.subKeyRepo.UpdateTrafficLimit(ctx, localKey.ID, limitGB)
 		}
 
+		if localKey.IsHidden {
+			continue
+		}
+
 		// Build stats object
 		stats := KeyStats{
 			ID:                localKey.ID,
@@ -831,7 +871,7 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	// Reconcile remote-only users into local DB so downstream features
 	// (key listing, auto-renew, notifications) do not lose track of trial or paid keys.
 	for _, remoteUser := range users {
-		if remoteUser.UUID == uuid.Nil || strings.TrimSpace(remoteUser.SubscriptionUrl) == "" || deletedURLs[remoteUser.SubscriptionUrl] {
+		if remoteUser.UUID == uuid.Nil || strings.TrimSpace(remoteUser.SubscriptionUrl) == "" || deletedURLs[remoteUser.SubscriptionUrl] || hiddenURLs[remoteUser.SubscriptionUrl] {
 			continue
 		}
 		if _, exists := localMap[remoteUser.UUID.String()]; exists {
@@ -915,6 +955,13 @@ func (s *PaymentService) GetCachedSyncKeys(customerID int64) ([]KeyStats, bool) 
 	copied := make([]KeyStats, len(entry.keys))
 	copy(copied, entry.keys)
 	return copied, true
+}
+
+// InvalidateSyncCache clears the cached sync stats for the given customer.
+func (s *PaymentService) InvalidateSyncCache(customerID int64) {
+	if s != nil {
+		s.syncCache.Delete(customerID)
+	}
 }
 
 // TriggerSyncKeysAsync refreshes key stats in the background (deduplicated per customer).

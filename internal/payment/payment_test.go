@@ -31,6 +31,8 @@ func TestSubscriptionKeyCanBeExtendedRequiresLiveOwnedKey(t *testing.T) {
 		{"wrong customer", &database.SubscriptionKey{CustomerID: 8, Status: "active", RemnawaveUUID: keyID}, 7, false},
 		{"missing remote uuid", &database.SubscriptionKey{CustomerID: 7, Status: "active"}, 7, false},
 		{"missing row", nil, 7, false},
+		{"hidden active owned", &database.SubscriptionKey{CustomerID: 7, Status: "active", RemnawaveUUID: keyID, IsHidden: true}, 7, false},
+		{"hidden expired owned", &database.SubscriptionKey{CustomerID: 7, Status: "expired", RemnawaveUUID: keyID, IsHidden: true}, 7, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -854,6 +856,26 @@ func TestSyncCacheEntry_TTL(t *testing.T) {
 	}
 	if time.Now().Before(expired.expiresAt) {
 		t.Error("stale entry should be expired")
+	}
+}
+
+func TestInvalidateSyncCacheRemovesCachedEntry(t *testing.T) {
+	svc := &PaymentService{}
+	customerID := int64(12345)
+
+	svc.syncCache.Store(customerID, syncCacheEntry{
+		keys:      []KeyStats{{ID: 1}},
+		expiresAt: time.Now().Add(time.Hour),
+	})
+
+	if _, ok := svc.GetCachedSyncKeys(customerID); !ok {
+		t.Fatal("expected cached sync keys to be present")
+	}
+
+	svc.InvalidateSyncCache(customerID)
+
+	if _, ok := svc.GetCachedSyncKeys(customerID); ok {
+		t.Fatal("expected cached sync keys to be invalidated and removed")
 	}
 }
 
