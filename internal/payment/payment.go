@@ -1018,7 +1018,8 @@ func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbac
 	}
 
 	for _, key := range keys {
-		if key.Status == "deleted" || key.IsHidden || key.ExpireAt == nil {
+		trimmedURL := strings.TrimSpace(key.SubscriptionURL)
+		if key.Status == "deleted" || key.IsHidden || key.ExpireAt == nil || hiddenURLs[trimmedURL] {
 			continue
 		}
 
@@ -1033,7 +1034,7 @@ func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbac
 
 		expireCopy := *key.ExpireAt
 		bestExpire = &expireCopy
-		if strings.TrimSpace(key.SubscriptionURL) != "" {
+		if trimmedURL != "" {
 			urlCopy := key.SubscriptionURL
 			bestURL = &urlCopy
 		} else {

@@ -223,6 +223,54 @@ func TestCanonicalCustomerSubscriptionStateVisibleDuplicateSharingHiddenURLEscap
 	}
 }
 
+func TestCanonicalCustomerSubscriptionState_VisibleDuplicateOfHiddenURLCannotDisplaceLegitimateVisibleKey(t *testing.T) {
+	now := time.Now()
+	urlA := "https://example.com/sub/hidden-url"
+	urlB := "https://example.com/sub/legitimate-url"
+
+	expireA := now.Add(72 * time.Hour) // Later expiry
+	expireB := now.Add(24 * time.Hour) // Earlier expiry
+
+	keys := []database.SubscriptionKey{
+		// 1. Hidden key with URL A and later expiry
+		{
+			ID:              1,
+			SubscriptionURL: urlA,
+			Status:          "expired",
+			ExpireAt:        &expireA,
+			IsHidden:        true,
+			CreatedAt:       now.Add(-5 * time.Hour),
+		},
+		// 2. Visible duplicate of URL A with later expiry
+		{
+			ID:              2,
+			SubscriptionURL: urlA,
+			Status:          "active",
+			ExpireAt:        &expireA,
+			IsHidden:        false,
+			CreatedAt:       now.Add(-4 * time.Hour),
+		},
+		// 3. Legitimate visible key with URL B and earlier expiry
+		{
+			ID:              3,
+			SubscriptionURL: urlB,
+			Status:          "active",
+			ExpireAt:        &expireB,
+			IsHidden:        false,
+			CreatedAt:       now.Add(-3 * time.Hour),
+		},
+	}
+
+	bestURL, bestExpire := canonicalCustomerSubscriptionState(keys, "", time.Time{})
+
+	if bestURL == nil || *bestURL != urlB {
+		t.Fatalf("bestURL = %v, want %q (legitimate key must not be displaced)", bestURL, urlB)
+	}
+	if bestExpire == nil || !bestExpire.Equal(expireB) {
+		t.Fatalf("bestExpire = %v, want %v", bestExpire, expireB)
+	}
+}
+
 func TestCustomerForPostPurchaseNotificationsFallsBackToOriginal(t *testing.T) {
 	original := &database.Customer{ID: 1, TelegramID: 123, Language: "en"}
 
