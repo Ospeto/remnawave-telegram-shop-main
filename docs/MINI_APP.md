@@ -8,7 +8,7 @@ This guide covers the **Telegram Mini App** for the Remnawave Shop bot. The Mini
 
 The Mini App is a React/Vite web app that opens from the bot menu button. Current surfaces include:
 
-- **Home** — subscription status, key import, auto-renew toggles; resellers see an account card
+- **Home** — subscription status, key import, auto-renew toggles, removing expired keys; resellers see an account card
 - **Plans** — browse plans and apply promo codes before checkout
 - **Checkout** — mobile banking payment instructions, screenshot upload, wallet pay; resellers may choose postpaid when credit allows
 - **Wallet** — balance, history, top-up entry
@@ -124,7 +124,7 @@ High-level API surfaces used by the Mini App:
 
 | Area | Examples |
 |---|---|
-| Session / home | `/api/me`, keys, auto-renew |
+| Session / home | `/api/me`, keys, auto-renew, `/api/keys/{id}/hide` |
 | Catalog / checkout | `/api/plans`, `/api/purchase`, `/api/upload_screenshot`, `/api/promo/validate` |
 | Wallet | `/api/wallet`, `/api/wallet/history` |
 | Admin (authorized) | plan/promo admin routes |

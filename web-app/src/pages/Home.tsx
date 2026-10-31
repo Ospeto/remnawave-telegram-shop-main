@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
@@ -6,12 +6,12 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
-import { UserData } from '../lib/types';
+import { SubscriptionKey, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { resolveSupportUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -24,6 +24,11 @@ export function Home() {
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
     const [togglingAutoRenewId, setTogglingAutoRenewId] = useState<number | null>(null);
+    const [keyToRemove, setKeyToRemove] = useState<SubscriptionKey | null>(null);
+    const [removingKeyId, setRemovingKeyId] = useState<number | null>(null);
+    const [removeError, setRemoveError] = useState<string | null>(null);
+    const removeDialogRef = useRef<HTMLDialogElement>(null);
+    const headingRef = useRef<HTMLHeadingElement>(null);
     const { playClick } = useMXBrownSound();
 
     const loadData = useCallback(async () => {
@@ -154,6 +159,63 @@ export function Home() {
         openHappLink(happUrl, redirectUrl, tg ?? null);
     };
 
+    useEffect(() => {
+        const dialog = removeDialogRef.current;
+        if (!dialog) return;
+        if (keyToRemove) {
+            if (!dialog.open) {
+                if (typeof dialog.showModal === 'function') {
+                    dialog.showModal();
+                } else {
+                    dialog.setAttribute('open', '');
+                }
+            }
+        } else {
+            if (dialog.open) {
+                if (typeof dialog.close === 'function') {
+                    dialog.close();
+                } else {
+                    dialog.removeAttribute('open');
+                }
+            }
+        }
+    }, [keyToRemove]);
+
+    const handleConfirmRemove = async (keyId: number) => {
+        if (!initData || removingKeyId !== null) return;
+        setRemovingKeyId(keyId);
+        setRemoveError(null);
+        try {
+            await fetchJSONWithTelegramAuth(`/api/keys/${keyId}/hide`, initData, {
+                method: 'POST',
+            });
+            setKeyToRemove(null);
+            setData(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    keys: prev.keys.filter(k => k.id !== keyId),
+                };
+            });
+            setTimeout(() => {
+                headingRef.current?.focus();
+            }, 0);
+        } catch (err) {
+            if (isAPIStatus(err, 401)) {
+                clearTelegramSession();
+                setAuthExpired(true);
+                return;
+            }
+            if (isAPIStatus(err, 409)) {
+                setRemoveError(t('renewal_in_progress'));
+                return;
+            }
+            setRemoveError(t('remove_key_error'));
+        } finally {
+            setRemovingKeyId(null);
+        }
+    };
+
     if (loading) return <LoadingScreen message={t('loading')} />;
     if (authExpired) {
         return (
@@ -202,7 +264,13 @@ export function Home() {
                     }}
                 />
                 <div style={{ flex: 1 }}>
-                    <h1 style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: 0 }}>{t('home_title')}</h1>
+                    <h1
+                        ref={headingRef}
+                        tabIndex={-1}
+                        style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: 0 }}
+                    >
+                        {t('home_title')}
+                    </h1>
                     <p className="text-hint" style={{ fontSize: 'var(--font-caption)', margin: 0 }}>
                         {activeKeys.length > 0
                             ? (activeKeys.length === 1 ? t('active_key_count', { count: 1 }) : t('active_key_count_plural', { count: activeKeys.length }))
@@ -594,6 +662,25 @@ export function Home() {
                                             {copiedId === key.id ? t('copied') : t('btn_copy_key')}
                                         </button>
                                     </div>
+                                    {key.id > 0 && key.status !== 'active' && Boolean(key.expire_at) && new Date(key.expire_at!).getTime() < Date.now() && (
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => { playClick(); setRemoveError(null); setKeyToRemove(key); }}
+                                            aria-label={t('btn_remove_key')}
+                                            style={{
+                                                padding: '10px 12px',
+                                                fontSize: 'var(--font-caption)',
+                                                fontWeight: 500,
+                                                color: 'var(--text-hint)',
+                                                border: '1px solid var(--border-color)',
+                                                background: 'transparent',
+                                                cursor: 'pointer',
+                                            }}
+                                        >
+                                            {t('btn_remove_key')}
+                                        </button>
+                                    )}
 
                                     {/* Per-key auto-renew toggle */}
                                     {key.status === 'active' && (
@@ -718,6 +805,117 @@ export function Home() {
                     {t('contact_support')}
                 </a>
             )}
+
+            {/* Remove Expired Key Confirmation Modal */}
+            <dialog
+                ref={removeDialogRef}
+                aria-labelledby="remove-key-title"
+                aria-describedby="remove-key-desc"
+                onCancel={(e) => {
+                    e.preventDefault();
+                    if (removingKeyId === null) {
+                        playClick();
+                        setKeyToRemove(null);
+                        setRemoveError(null);
+                    }
+                }}
+                onClick={(e) => {
+                    if (e.target === removeDialogRef.current && removingKeyId === null) {
+                        playClick();
+                        setKeyToRemove(null);
+                        setRemoveError(null);
+                    }
+                }}
+                style={{
+                    background: 'var(--tg-theme-bg-color, var(--card-bg, #1c1c1e))',
+                    color: 'var(--tg-theme-text-color, #ffffff)',
+                    borderRadius: 16,
+                    padding: 24,
+                    maxWidth: 360,
+                    width: 'calc(100% - 32px)',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                    border: '1px solid var(--divider, rgba(255, 255, 255, 0.1))',
+                    margin: 'auto',
+                }}
+            >
+                {keyToRemove && (
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        <h3
+                            id="remove-key-title"
+                            style={{
+                                margin: '0 0 8px 0',
+                                fontSize: 'var(--font-h3, 18px)',
+                                fontWeight: 700,
+                            }}
+                        >
+                            {t('remove_key_confirm_title')}
+                        </h3>
+                        <p
+                            id="remove-key-desc"
+                            className="text-hint"
+                            style={{
+                                margin: '0 0 20px 0',
+                                fontSize: 'var(--font-body, 14px)',
+                                lineHeight: 1.4,
+                            }}
+                        >
+                            {t('remove_key_confirm_desc')}
+                        </p>
+                        {removeError && (
+                            <div
+                                role="alert"
+                                style={{
+                                    color: 'var(--color-danger, #ff3b30)',
+                                    fontSize: 12,
+                                    marginBottom: 16,
+                                }}
+                            >
+                                {removeError}
+                            </div>
+                        )}
+                        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                disabled={removingKeyId !== null}
+                                autoFocus
+                                onClick={() => {
+                                    playClick();
+                                    setKeyToRemove(null);
+                                    setRemoveError(null);
+                                }}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px',
+                                    fontSize: 'var(--font-body, 14px)',
+                                    fontWeight: 500,
+                                }}
+                            >
+                                {t('btn_cancel_remove')}
+                            </button>
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                disabled={removingKeyId !== null}
+                                onClick={() => {
+                                    playClick();
+                                    void handleConfirmRemove(keyToRemove.id);
+                                }}
+                                style={{
+                                    flex: 1,
+                                    padding: '12px',
+                                    fontSize: 'var(--font-body, 14px)',
+                                    fontWeight: 600,
+                                    color: 'var(--color-danger, #ff3b30)',
+                                    borderColor: 'var(--color-danger, #ff3b30)',
+                                }}
+                            >
+                                {removingKeyId === keyToRemove.id ? t('removing_key') : t('btn_confirm_remove')}
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </dialog>
         </div>
     );
 }

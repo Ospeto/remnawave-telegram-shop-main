@@ -79,6 +79,7 @@ type AwaitingReceiptVerificationError struct {
 
 // subscriptionKeyCanBeExtended reports whether key belongs to customerID, has a
 // valid remote UUID, and is in an extendable status ("active" or "expired").
+// Hidden keys remain extendable with their original remote identity and renewal settings.
 func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
 	return key != nil && key.CustomerID == customerID && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
 }
@@ -475,6 +476,29 @@ func (s *PaymentService) resolveIdempotentExistingPurchase(ctx context.Context, 
 }
 
 func (s *PaymentService) createPurchaseRecord(ctx context.Context, purchase *database.Purchase) (int64, *database.Purchase, error) {
+	if purchase.ExtendKeyID != nil && s.customerRepository != nil {
+		tx, err := s.customerRepository.BeginTx(ctx)
+		if err != nil {
+			return 0, nil, fmt.Errorf("failed to begin purchase transaction: %w", err)
+		}
+		defer func() {
+			_ = tx.Rollback(ctx)
+		}()
+
+		purchaseID, existing, err := s.createPurchaseRecordTx(ctx, tx, purchase)
+		if err != nil {
+			return 0, nil, err
+		}
+		if existing != nil {
+			return existing.ID, existing, nil
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return 0, nil, fmt.Errorf("failed to commit purchase transaction: %w", err)
+		}
+		return purchaseID, nil, nil
+	}
+
 	if key := idempotencyKeyFromContext(ctx); key != nil {
 		purchase.IdempotencyKey = key
 		existing, err := s.purchaseRepository.FindByIdempotencyKey(ctx, *key)
@@ -521,6 +545,15 @@ func (s *PaymentService) createPurchaseRecordTx(ctx context.Context, tx pgx.Tx, 
 				return 0, nil, err
 			}
 			return existing.ID, existing, nil
+		}
+	}
+
+	if purchase.ExtendKeyID != nil && s.subKeyRepo != nil {
+		if err := s.subKeyRepo.ValidateExtendKeyTx(ctx, tx, *purchase.ExtendKeyID, purchase.CustomerID); err != nil {
+			if errors.Is(err, database.ErrKeyNotFound) || errors.Is(err, database.ErrKeyNotOwned) {
+				return 0, nil, ErrSubscriptionKeyUnavailable
+			}
+			return 0, nil, err
 		}
 	}
 
@@ -773,10 +806,14 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	}
 	localMap := make(map[string]database.SubscriptionKey, len(localKeys))
 	deletedURLs := make(map[string]bool)
+	hiddenURLs := make(map[string]bool)
 	for _, localKey := range localKeys {
 		localMap[localKey.RemnawaveUUID.String()] = localKey
 		if localKey.Status == "deleted" && localKey.SubscriptionURL != "" {
 			deletedURLs[localKey.SubscriptionURL] = true
+		}
+		if localKey.IsHidden && localKey.SubscriptionURL != "" {
+			hiddenURLs[localKey.SubscriptionURL] = true
 		}
 	}
 
@@ -817,6 +854,10 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 			_ = s.subKeyRepo.UpdateTrafficLimit(ctx, localKey.ID, limitGB)
 		}
 
+		if localKey.IsHidden {
+			continue
+		}
+
 		// Build stats object
 		stats := KeyStats{
 			ID:                localKey.ID,
@@ -831,7 +872,7 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 	// Reconcile remote-only users into local DB so downstream features
 	// (key listing, auto-renew, notifications) do not lose track of trial or paid keys.
 	for _, remoteUser := range users {
-		if remoteUser.UUID == uuid.Nil || strings.TrimSpace(remoteUser.SubscriptionUrl) == "" || deletedURLs[remoteUser.SubscriptionUrl] {
+		if remoteUser.UUID == uuid.Nil || strings.TrimSpace(remoteUser.SubscriptionUrl) == "" || deletedURLs[remoteUser.SubscriptionUrl] || hiddenURLs[remoteUser.SubscriptionUrl] {
 			continue
 		}
 		if _, exists := localMap[remoteUser.UUID.String()]; exists {
@@ -917,6 +958,13 @@ func (s *PaymentService) GetCachedSyncKeys(customerID int64) ([]KeyStats, bool) 
 	return copied, true
 }
 
+// InvalidateSyncCache clears the cached sync stats for the given customer.
+func (s *PaymentService) InvalidateSyncCache(customerID int64) {
+	if s != nil {
+		s.syncCache.Delete(customerID)
+	}
+}
+
 // TriggerSyncKeysAsync refreshes key stats in the background (deduplicated per customer).
 func (s *PaymentService) TriggerSyncKeysAsync(ctx context.Context, customerID int64, telegramID int64) {
 	if _, loaded := s.syncInFlight.LoadOrStore(customerID, struct{}{}); loaded {
@@ -944,21 +992,41 @@ type KeyStats struct {
 }
 
 func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbackURL string, fallbackExpireAt time.Time) (*string, *time.Time) {
+	hiddenURLs := make(map[string]bool)
+	for _, key := range keys {
+		if key.IsHidden {
+			if trimmed := strings.TrimSpace(key.SubscriptionURL); trimmed != "" {
+				hiddenURLs[trimmed] = true
+			}
+		}
+	}
+	for _, key := range keys {
+		if !key.IsHidden && key.Status != "deleted" {
+			if trimmed := strings.TrimSpace(key.SubscriptionURL); trimmed != "" {
+				delete(hiddenURLs, trimmed)
+			}
+		}
+	}
+
 	var bestURL *string
 	var bestExpire *time.Time
 	var bestCreatedAt time.Time
 
-	if strings.TrimSpace(fallbackURL) != "" {
-		fallbackURLCopy := fallbackURL
-		bestURL = &fallbackURLCopy
-	}
-	if !fallbackExpireAt.IsZero() {
-		fallbackExpireCopy := fallbackExpireAt
-		bestExpire = &fallbackExpireCopy
+	trimmedFallback := strings.TrimSpace(fallbackURL)
+	if !hiddenURLs[trimmedFallback] {
+		if trimmedFallback != "" {
+			fallbackURLCopy := fallbackURL
+			bestURL = &fallbackURLCopy
+		}
+		if !fallbackExpireAt.IsZero() {
+			fallbackExpireCopy := fallbackExpireAt
+			bestExpire = &fallbackExpireCopy
+		}
 	}
 
 	for _, key := range keys {
-		if key.Status == "deleted" || key.ExpireAt == nil {
+		trimmedURL := strings.TrimSpace(key.SubscriptionURL)
+		if key.Status == "deleted" || key.IsHidden || key.ExpireAt == nil || hiddenURLs[trimmedURL] {
 			continue
 		}
 
@@ -973,13 +1041,18 @@ func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbac
 
 		expireCopy := *key.ExpireAt
 		bestExpire = &expireCopy
-		if strings.TrimSpace(key.SubscriptionURL) != "" {
+		if trimmedURL != "" {
 			urlCopy := key.SubscriptionURL
 			bestURL = &urlCopy
 		} else {
 			bestURL = nil
 		}
 		bestCreatedAt = key.CreatedAt
+	}
+
+	if bestURL != nil && (hiddenURLs[*bestURL] || hiddenURLs[strings.TrimSpace(*bestURL)]) {
+		bestURL = nil
+		bestExpire = nil
 	}
 
 	return bestURL, bestExpire

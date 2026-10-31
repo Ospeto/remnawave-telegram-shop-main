@@ -548,6 +548,7 @@ type APIHandler struct {
 	retirePromoCode             func(context.Context, string, time.Time) error
 	savePlansCatalog            func(context.Context, []config.Plan) error
 	findSubscriptionKeys        func(context.Context, int64) ([]database.SubscriptionKey, error)
+	hideSubscriptionKey         func(context.Context, int64, int64) error
 	activateCustomerTrial       func(context.Context, int64) (string, error)
 	getCachedSyncKeys           func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys             func(context.Context, int64, int64)
@@ -1042,18 +1043,30 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 	for _, key := range keys {
 		id, ok := identity(key)
 		if !ok {
+			if key.Status == "active" {
+				key.IsHidden = false
+			}
 			compacted = append(compacted, key)
 			continue
 		}
 
 		if idx, exists := identityToIndex[id]; exists {
+			wasHidden := compacted[idx].IsHidden || key.IsHidden
 			if isNewer(key, compacted[idx]) {
 				compacted[idx] = key
+			}
+			if compacted[idx].Status == "active" {
+				compacted[idx].IsHidden = false
+			} else {
+				compacted[idx].IsHidden = wasHidden
 			}
 			continue
 		}
 
 		identityToIndex[id] = len(compacted)
+		if key.Status == "active" {
+			key.IsHidden = false
+		}
 		compacted = append(compacted, key)
 	}
 
@@ -1438,11 +1451,15 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.subKeyRepo != nil || h.findSubscriptionKeys != nil {
-		localKeys, _ := h.subscriptionKeysByCustomerID(r.Context(), customer.ID)
-		localKeys = compactSubscriptionKeysForDisplay(localKeys)
+		localKeys, err := h.subscriptionKeysByCustomerID(r.Context(), customer.ID)
+		if err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
 		if len(localKeys) > 0 {
 			hasMigratedKeys = true
 		}
+		localKeys = compactSubscriptionKeysForDisplay(localKeys)
 		if hasMigratedKeys {
 			primaryKey := database.PrimarySubscriptionKey(localKeys)
 			if primaryKey == nil {
@@ -1459,7 +1476,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for _, k := range localKeys {
-			if k.Status == "deleted" {
+			if k.Status == "deleted" || k.IsHidden {
 				continue
 			}
 
@@ -2949,6 +2966,87 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// KeyRoute handles sub-resources under /api/keys/
+// e.g. POST /api/keys/{id}/hide
+func (h *APIHandler) KeyRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/keys/")
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) == 2 && parts[1] == "hide" {
+		keyID, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || keyID <= 0 {
+			http.Error(w, "Invalid key ID", http.StatusBadRequest)
+			return
+		}
+		h.handleHideKey(w, r, keyID)
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+func (h *APIHandler) handleHideKey(w http.ResponseWriter, r *http.Request, keyID int64) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	customer, err := h.customerByTelegramID(r.Context(), telegramID)
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	if customer == nil {
+		http.Error(w, "User not found", http.StatusNotFound)
+		return
+	}
+
+	var hideErr error
+	if h.hideSubscriptionKey != nil {
+		hideErr = h.hideSubscriptionKey(r.Context(), keyID, customer.ID)
+	} else if h.subKeyRepo != nil {
+		hideErr = h.subKeyRepo.HideExpiredKey(r.Context(), keyID, customer.ID)
+	} else {
+		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	if hideErr != nil {
+		switch {
+		case errors.Is(hideErr, database.ErrKeyNotFound), errors.Is(hideErr, database.ErrKeyNotOwned):
+			http.Error(w, "Subscription key not found", http.StatusNotFound)
+		case errors.Is(hideErr, database.ErrKeyActive):
+			http.Error(w, "Active keys cannot be hidden", http.StatusBadRequest)
+		case errors.Is(hideErr, database.ErrKeyDeleted):
+			http.Error(w, "Deleted keys cannot be hidden", http.StatusBadRequest)
+		case errors.Is(hideErr, database.ErrKeyIndeterminate):
+			http.Error(w, "Keys with indeterminate expiry cannot be hidden", http.StatusBadRequest)
+		case errors.Is(hideErr, database.ErrKeyRenewalInFlight):
+			http.Error(w, "Renewal in progress, please try again shortly", http.StatusConflict)
+		default:
+			writeSanitizedError(w, http.StatusInternalServerError, "Failed to hide key", hideErr)
+		}
+		return
+	}
+
+	if h.paymentService != nil {
+		h.paymentService.InvalidateSyncCache(customer.ID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"key_id":  keyID,
+	})
 }
 
 type createFinancialAdjustmentRequest struct {

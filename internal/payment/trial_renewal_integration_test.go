@@ -465,3 +465,206 @@ func TestSyncExpiryStatusDoesNotResurrectDeletedKey(t *testing.T) {
 		t.Fatalf("changed write did not update expiry: got %v, want %v", activeChanged.ExpireAt, newExpiry)
 	}
 }
+
+func TestHiddenKey_SyncKeysReconciliationAndRenewalContract(t *testing.T) {
+	pool := trialTestPool(t)
+	ctx := context.Background()
+
+	paidSquad, trialSquad := uuid.NewString(), uuid.NewString()
+	paidExternal, trialExternal := uuid.NewString(), uuid.NewString()
+	for k, v := range map[string]string{
+		"DISABLE_ENV_FILE": "true", "ADMIN_TELEGRAM_ID": "1", "TELEGRAM_TOKEN": "test", "TRIAL_TRAFFIC_LIMIT": "1", "TRIAL_DAYS": "1",
+		"REMNAWAVE_URL": "http://localhost", "REMNAWAVE_TOKEN": "test", "DATABASE_URL": "postgres://unused", "REFERRAL_DAYS": "0",
+		"SQUAD_UUIDS": paidSquad, "TRIAL_INTERNAL_SQUADS": trialSquad, "EXTERNAL_SQUAD_UUID": paidExternal, "TRIAL_EXTERNAL_SQUAD_UUID": trialExternal,
+		"REMNAWAVE_TAG": "PAID", "TRIAL_REMNAWAVE_TAG": "TRIAL", "TRAFFIC_LIMIT_RESET_STRATEGY": "MONTH", "TRIAL_TRAFFIC_LIMIT_RESET_STRATEGY": "NO_RESET",
+		"MOBILE_BANKING_ENABLED": "true", "MOBILE_BANKING_PHONE": "09123456789", "GEMINI_API_KEY": "test-not-used",
+	} {
+		t.Setenv(k, v)
+	}
+	if err := config.InitConfig(); err != nil {
+		t.Fatal(err)
+	}
+
+	remoteUUID := uuid.NewString()
+	subURL := "https://sub.example.com/hidden-user"
+	pastExpiry := time.Now().UTC().Add(-24 * time.Hour)
+	remoteUser := map[string]any{
+		"uuid":            remoteUUID,
+		"username":        "hidden_user",
+		"subscriptionUrl": subURL,
+		"expireAt":        pastExpiry.Format(time.RFC3339Nano),
+		"tag":             "TRIAL",
+		"userTraffic":     map[string]any{"usedTrafficBytes": 0},
+	}
+
+	var patches []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/bottest/"):
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":1,"date":0,"chat":{"id":42,"type":"private"}}}`))
+			return
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/users"):
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			patches = append(patches, body)
+			for k, v := range body {
+				remoteUser[k] = v
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"response": remoteUser})
+			return
+		case strings.HasPrefix(r.URL.Path, "/api/users/by-telegram-id/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"response": []any{remoteUser}})
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/users/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"response": remoteUser})
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := remnawave.NewClient(server.URL, "test", "remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	telegram, err := bot.New("test", bot.WithSkipGetMe(), bot.WithServerURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewPaymentService(
+		translation.GetInstance(),
+		database.NewPurchaseRepository(pool),
+		client,
+		database.NewCustomerRepository(pool),
+		telegram,
+		database.NewReferralRepository(pool),
+		cache.NewCache(time.Minute),
+		nil, nil,
+		database.NewSubscriptionKeyRepository(pool),
+		nil,
+		database.NewWalletTransactionRepository(pool),
+		nil,
+	)
+
+	tgID := int64(777123)
+	var customerID int64
+	if err := pool.QueryRow(ctx, "INSERT INTO customer (telegram_id, balance, language) VALUES ($1, 10000, 'en') RETURNING id", tgID).Scan(&customerID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create initial expired key with auto_renew=true
+	keyID, err := service.subKeyRepo.Create(ctx, &database.SubscriptionKey{
+		CustomerID:      customerID,
+		RemnawaveUUID:   uuid.MustParse(remoteUUID),
+		Username:        "hidden_user",
+		SubscriptionURL: subURL,
+		ExpireAt:        &pastExpiry,
+		Status:          "expired",
+		Label:           "Test Key",
+		TrafficLimitGB:  5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Hide the expired key
+	if err := service.subKeyRepo.HideExpiredKey(ctx, keyID, customerID); err != nil {
+		t.Fatalf("HideExpiredKey failed: %v", err)
+	}
+
+	hiddenKey, err := service.subKeyRepo.FindByID(ctx, keyID)
+	if err != nil || hiddenKey == nil || !hiddenKey.IsHidden {
+		t.Fatalf("key was not hidden: %+v, err=%v", hiddenKey, err)
+	}
+
+	// 2. SyncKeys with remote user returning the same user
+	stats, err := service.SyncKeys(ctx, customerID, tgID)
+	if err != nil {
+		t.Fatalf("SyncKeys failed: %v", err)
+	}
+	// Invariant: stats does not expose hidden key
+	if len(stats) != 0 {
+		t.Fatalf("SyncKeys returned %d stats, want 0 for hidden key", len(stats))
+	}
+
+	// Invariant: DB row remains hidden and no duplicate row was created
+	keys, err := service.subKeyRepo.FindByCustomerID(ctx, customerID)
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("expected exactly 1 key, got %d: %v", len(keys), err)
+	}
+	if !keys[0].IsHidden {
+		t.Fatal("SyncKeys cleared is_hidden flag, want true")
+	}
+
+	// 3. Placeholder UUID repair on hidden key:
+	// Update local key with random placeholder UUID
+	placeholderUUID := uuid.New()
+	if _, err := pool.Exec(ctx, "UPDATE subscription_key SET remnawave_uuid = $1 WHERE id = $2", placeholderUUID, keyID); err != nil {
+		t.Fatal(err)
+	}
+	service.syncCache.Delete(customerID)
+	if _, err := service.SyncKeys(ctx, customerID, tgID); err != nil {
+		t.Fatalf("SyncKeys with placeholder failed: %v", err)
+	}
+	keysAfterRepair, err := service.subKeyRepo.FindByCustomerID(ctx, customerID)
+	if err != nil || len(keysAfterRepair) != 1 {
+		t.Fatalf("expected exactly 1 key after placeholder repair, got %d", len(keysAfterRepair))
+	}
+	if keysAfterRepair[0].RemnawaveUUID.String() != remoteUUID {
+		t.Fatalf("placeholder UUID was not repaired: got %s, want %s", keysAfterRepair[0].RemnawaveUUID, remoteUUID)
+	}
+	if !keysAfterRepair[0].IsHidden {
+		t.Fatal("placeholder repair cleared is_hidden flag, want true")
+	}
+
+	// 4. Extend hidden key via CreatePurchaseWithExtend
+	customer, err := service.customerRepository.FindById(ctx, customerID)
+	if err != nil || customer == nil {
+		t.Fatal(err)
+	}
+	_, purchaseID, err := service.CreatePurchaseWithExtend(
+		WithIdempotencyKey(ctx, uuid.New()),
+		5000, 30, 10, customer, keyID, "",
+	)
+	if err != nil {
+		t.Fatalf("CreatePurchaseWithExtend on hidden key failed: %v", err)
+	}
+	if purchaseID <= 0 {
+		t.Fatalf("expected positive purchaseID, got %d", purchaseID)
+	}
+	if len(patches) != 1 {
+		t.Fatalf("expected 1 remote patch on extension, got %d", len(patches))
+	}
+
+	// Invariant: Key extended on remote and locally with original UUID and URL, becomes visible
+	extendedKey, err := service.subKeyRepo.FindByID(ctx, keyID)
+	if err != nil || extendedKey == nil {
+		t.Fatal(err)
+	}
+	if extendedKey.RemnawaveUUID.String() != remoteUUID {
+		t.Fatalf("extension altered remote UUID: %s vs %s", extendedKey.RemnawaveUUID, remoteUUID)
+	}
+	if extendedKey.SubscriptionURL != subURL {
+		t.Fatalf("extension altered subscription URL: %s vs %s", extendedKey.SubscriptionURL, subURL)
+	}
+	if extendedKey.IsHidden {
+		t.Fatal("extended key is_hidden = true, want false")
+	}
+	if extendedKey.Status != "active" {
+		t.Fatalf("extended key status = %s, want active", extendedKey.Status)
+	}
+
+	// Invariant: customer subscription_link is updated with active extended key
+	updatedCustomer, err := service.customerRepository.FindById(ctx, customerID)
+	if err != nil || updatedCustomer == nil {
+		t.Fatal(err)
+	}
+	if updatedCustomer.SubscriptionLink == nil || *updatedCustomer.SubscriptionLink != subURL {
+		t.Fatalf("customer.SubscriptionLink = %v, want %s", updatedCustomer.SubscriptionLink, subURL)
+	}
+}

@@ -18,7 +18,7 @@ This repository is intended for operators who want a production-capable Telegram
 - supports payment paths:
   - mobile banking with screenshot verification
   - internal wallet top-ups and wallet purchases
-- supports promo codes, referral rewards, trials, and auto-renew toggles
+- supports promo codes, referral rewards, trials, auto-renew toggles, and hiding expired keys
 - exposes a Telegram Mini App UI for customer self-service
 - includes scheduled database backups and a Telegram admin dashboard for operator work
 
@@ -417,6 +417,7 @@ The Go app serves the Mini App and these API routes:
 | `/api/wallet/autorenew` | Legacy endpoint; returns `410 Gone`. Use `/api/keys/autorenew`. |
 | `/api/referrals` | Referral information |
 | `/api/keys/autorenew` | Per-key auto-renew settings |
+| `/api/keys/{id}/hide` | Hide an expired subscription key from customer dashboard display |
 | `/api/reseller/account` | Reseller: `credit_limit`, `balance_owed`, `remaining_credit` |
 | `/api/reseller/ledger` | Reseller: own paginated AR ledger |
 | `/api/reseller/settlements` | Reseller: self-pay settlement (`payment_method: "wallet"`; debits wallet; reduces AR) |

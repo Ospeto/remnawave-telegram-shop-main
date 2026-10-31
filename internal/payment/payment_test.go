@@ -31,6 +31,8 @@ func TestSubscriptionKeyCanBeExtendedRequiresLiveOwnedKey(t *testing.T) {
 		{"wrong customer", &database.SubscriptionKey{CustomerID: 8, Status: "active", RemnawaveUUID: keyID}, 7, false},
 		{"missing remote uuid", &database.SubscriptionKey{CustomerID: 7, Status: "active"}, 7, false},
 		{"missing row", nil, 7, false},
+		{"hidden active owned", &database.SubscriptionKey{CustomerID: 7, Status: "active", RemnawaveUUID: keyID, IsHidden: true}, 7, true},
+		{"hidden expired owned", &database.SubscriptionKey{CustomerID: 7, Status: "expired", RemnawaveUUID: keyID, IsHidden: true}, 7, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -96,6 +98,176 @@ func TestCanonicalCustomerSubscriptionStateUsesFallbackWhenKeyMissing(t *testing
 	}
 	if expireAt == nil || !expireAt.Equal(fallbackExpireAt) {
 		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want fallback expiry", expireAt)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionStateExcludesHiddenKeys(t *testing.T) {
+	now := time.Now()
+	visibleEarlier := now.Add(24 * time.Hour)
+	hiddenLater := now.Add(72 * time.Hour)
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:              1,
+			SubscriptionURL: "https://example.com/visible",
+			ExpireAt:        &visibleEarlier,
+			Status:          "active",
+			IsHidden:        false,
+			CreatedAt:       now.Add(-2 * time.Hour),
+		},
+		{
+			ID:              2,
+			SubscriptionURL: "https://example.com/hidden",
+			ExpireAt:        &hiddenLater,
+			Status:          "active",
+			IsHidden:        true,
+			CreatedAt:       now.Add(-1 * time.Hour),
+		},
+	}, "", time.Time{})
+
+	if link == nil || *link != "https://example.com/visible" {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want visible key URL", link)
+	}
+	if expireAt == nil || !expireAt.Equal(visibleEarlier) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want %v", expireAt, visibleEarlier)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionStateIgnoresFallbackMatchingHiddenKey(t *testing.T) {
+	now := time.Now()
+	hiddenExpire := now.Add(72 * time.Hour)
+	hiddenURL := "https://example.com/hidden"
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:              1,
+			SubscriptionURL: hiddenURL,
+			ExpireAt:        &hiddenExpire,
+			Status:          "expired",
+			IsHidden:        true,
+			CreatedAt:       now.Add(-5 * time.Hour),
+		},
+	}, hiddenURL, hiddenExpire)
+
+	if link != nil {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want nil", *link)
+	}
+	if expireAt != nil {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want nil", *expireAt)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionStateHiddenFallbackCannotBlockVisibleKey(t *testing.T) {
+	now := time.Now()
+	visibleEarlier := now.Add(24 * time.Hour)
+	hiddenLater := now.Add(72 * time.Hour)
+	hiddenURL := "https://example.com/hidden"
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:              1,
+			SubscriptionURL: "https://example.com/visible",
+			ExpireAt:        &visibleEarlier,
+			Status:          "active",
+			IsHidden:        false,
+			CreatedAt:       now.Add(-2 * time.Hour),
+		},
+		{
+			ID:              2,
+			SubscriptionURL: hiddenURL,
+			ExpireAt:        &hiddenLater,
+			Status:          "expired",
+			IsHidden:        true,
+			CreatedAt:       now.Add(-1 * time.Hour),
+		},
+	}, hiddenURL, hiddenLater)
+
+	if link == nil || *link != "https://example.com/visible" {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want visible key URL", link)
+	}
+	if expireAt == nil || !expireAt.Equal(visibleEarlier) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want %v", expireAt, visibleEarlier)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionStateVisibleDuplicateSharingHiddenURLEscapesNeither(t *testing.T) {
+	now := time.Now()
+	sharedURL := "https://example.com/shared"
+	expire1 := now.Add(24 * time.Hour)
+	expire2 := now.Add(48 * time.Hour)
+
+	link, expireAt := canonicalCustomerSubscriptionState([]database.SubscriptionKey{
+		{
+			ID:              1,
+			SubscriptionURL: sharedURL,
+			ExpireAt:        &expire1,
+			Status:          "expired",
+			IsHidden:        true,
+			CreatedAt:       now.Add(-5 * time.Hour),
+		},
+		{
+			ID:              2,
+			SubscriptionURL: sharedURL,
+			ExpireAt:        &expire2,
+			Status:          "active",
+			IsHidden:        false,
+			CreatedAt:       now.Add(-1 * time.Hour),
+		},
+	}, "", time.Time{})
+
+	if link == nil || *link != sharedURL {
+		t.Fatalf("canonicalCustomerSubscriptionState() link = %v, want %s", link, sharedURL)
+	}
+	if expireAt == nil || !expireAt.Equal(expire2) {
+		t.Fatalf("canonicalCustomerSubscriptionState() expireAt = %v, want %v", expireAt, expire2)
+	}
+}
+
+func TestCanonicalCustomerSubscriptionState_VisibleDuplicateOfHiddenURLCannotDisplaceLegitimateVisibleKey(t *testing.T) {
+	now := time.Now()
+	urlA := "https://example.com/sub/hidden-url"
+	urlB := "https://example.com/sub/legitimate-url"
+
+	expireA := now.Add(72 * time.Hour) // Later expiry
+	expireB := now.Add(24 * time.Hour) // Earlier expiry
+
+	keys := []database.SubscriptionKey{
+		// 1. Hidden key with URL A and later expiry
+		{
+			ID:              1,
+			SubscriptionURL: urlA,
+			Status:          "expired",
+			ExpireAt:        &expireA,
+			IsHidden:        true,
+			CreatedAt:       now.Add(-5 * time.Hour),
+		},
+		// 2. Visible duplicate of URL A with later expiry
+		{
+			ID:              2,
+			SubscriptionURL: urlA,
+			Status:          "active",
+			ExpireAt:        &expireA,
+			IsHidden:        false,
+			CreatedAt:       now.Add(-4 * time.Hour),
+		},
+		// 3. Legitimate visible key with URL B and earlier expiry
+		{
+			ID:              3,
+			SubscriptionURL: urlB,
+			Status:          "active",
+			ExpireAt:        &expireB,
+			IsHidden:        false,
+			CreatedAt:       now.Add(-3 * time.Hour),
+		},
+	}
+
+	bestURL, bestExpire := canonicalCustomerSubscriptionState(keys, "", time.Time{})
+
+	if bestURL == nil || *bestURL != urlA {
+		t.Fatalf("bestURL = %v, want %q", bestURL, urlA)
+	}
+	if bestExpire == nil || !bestExpire.Equal(expireA) {
+		t.Fatalf("bestExpire = %v, want %v", bestExpire, expireA)
 	}
 }
 
@@ -854,6 +1026,26 @@ func TestSyncCacheEntry_TTL(t *testing.T) {
 	}
 	if time.Now().Before(expired.expiresAt) {
 		t.Error("stale entry should be expired")
+	}
+}
+
+func TestInvalidateSyncCacheRemovesCachedEntry(t *testing.T) {
+	svc := &PaymentService{}
+	customerID := int64(12345)
+
+	svc.syncCache.Store(customerID, syncCacheEntry{
+		keys:      []KeyStats{{ID: 1}},
+		expiresAt: time.Now().Add(time.Hour),
+	})
+
+	if _, ok := svc.GetCachedSyncKeys(customerID); !ok {
+		t.Fatal("expected cached sync keys to be present")
+	}
+
+	svc.InvalidateSyncCache(customerID)
+
+	if _, ok := svc.GetCachedSyncKeys(customerID); ok {
+		t.Fatal("expected cached sync keys to be invalidated and removed")
 	}
 }
 
