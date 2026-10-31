@@ -278,6 +278,210 @@ func TestHideExpiredKey_InFlightPurchaseStatusesBlockHide(t *testing.T) {
 	}
 }
 
+func TestHideExpiredKey_DatabaseRejectionMatrixAndVisibilityUpdate(t *testing.T) {
+	pool := getTestPool(t)
+	if pool == nil {
+		return
+	}
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+
+	testTelegramID := time.Now().UnixNano()
+	var customerID int64
+	err := pool.QueryRow(ctx, `
+		INSERT INTO customer (telegram_id, language, balance)
+		VALUES ($1, 'en', 1000)
+		RETURNING id`, testTelegramID).Scan(&customerID)
+	if err != nil {
+		t.Fatalf("failed to insert customer: %v", err)
+	}
+
+	var otherCustomerID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO customer (telegram_id, language, balance)
+		VALUES ($1, 'en', 1000)
+		RETURNING id`, testTelegramID+1).Scan(&otherCustomerID)
+	if err != nil {
+		t.Fatalf("failed to insert other customer: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM purchase WHERE customer_id IN ($1, $2)`, customerID, otherCustomerID)
+		_, _ = pool.Exec(ctx, `DELETE FROM subscription_key WHERE customer_id IN ($1, $2)`, customerID, otherCustomerID)
+		_, _ = pool.Exec(ctx, `DELETE FROM customer WHERE id IN ($1, $2)`, customerID, otherCustomerID)
+	})
+
+	repo := NewSubscriptionKeyRepository(pool)
+
+	past := time.Now().Add(-24 * time.Hour)
+	future := time.Now().Add(24 * time.Hour)
+
+	insertKey := func(custID int64, status string, expire *time.Time, autoRenew bool) int64 {
+		var id int64
+		err := pool.QueryRow(ctx, `
+			INSERT INTO subscription_key (
+				customer_id, remnawave_uuid, username, subscription_url, expire_at, status, auto_renew, is_hidden
+			) VALUES (
+				$1, $2, 'testuser', 'https://example.com/sub/test', $3, $4, $5, false
+			) RETURNING id`, custID, uuid.New(), expire, status, autoRenew).Scan(&id)
+		if err != nil {
+			t.Fatalf("failed to insert key: %v", err)
+		}
+		return id
+	}
+
+	keyActivePast := insertKey(customerID, "active", &past, true)
+	keyDeleted := insertKey(customerID, "deleted", &past, true)
+	keyNilExpiry := insertKey(customerID, "expired", nil, true)
+	keyFutureExpiry := insertKey(customerID, "expired", &future, true)
+	keyOtherCustomer := insertKey(otherCustomerID, "expired", &past, true)
+	keyValid := insertKey(customerID, "expired", &past, true)
+
+	// 1. Missing key
+	if err := repo.HideExpiredKey(ctx, 999999999, customerID); !errors.Is(err, ErrKeyNotFound) {
+		t.Errorf("missing key err = %v, want ErrKeyNotFound", err)
+	}
+
+	// 2. Wrong customer
+	if err := repo.HideExpiredKey(ctx, keyOtherCustomer, customerID); !errors.Is(err, ErrKeyNotOwned) {
+		t.Errorf("other customer key err = %v, want ErrKeyNotOwned", err)
+	}
+
+	// 3. Status active (even with past expiry)
+	if err := repo.HideExpiredKey(ctx, keyActivePast, customerID); !errors.Is(err, ErrKeyActive) {
+		t.Errorf("active key err = %v, want ErrKeyActive", err)
+	}
+
+	// 4. Status deleted
+	if err := repo.HideExpiredKey(ctx, keyDeleted, customerID); !errors.Is(err, ErrKeyDeleted) {
+		t.Errorf("deleted key err = %v, want ErrKeyDeleted", err)
+	}
+
+	// 5. Nil expiry
+	if err := repo.HideExpiredKey(ctx, keyNilExpiry, customerID); !errors.Is(err, ErrKeyIndeterminate) {
+		t.Errorf("nil expiry key err = %v, want ErrKeyIndeterminate", err)
+	}
+
+	// 6. Future expiry
+	if err := repo.HideExpiredKey(ctx, keyFutureExpiry, customerID); !errors.Is(err, ErrKeyActive) {
+		t.Errorf("future expiry key err = %v, want ErrKeyActive", err)
+	}
+
+	// 7. Valid expired key -> succeeds
+	if err := repo.HideExpiredKey(ctx, keyValid, customerID); err != nil {
+		t.Fatalf("valid expired key hide failed: %v", err)
+	}
+
+	var isHidden bool
+	var hiddenAt *time.Time
+	var autoRenew bool
+	err = pool.QueryRow(ctx, `SELECT is_hidden, hidden_at, auto_renew FROM subscription_key WHERE id = $1`, keyValid).Scan(&isHidden, &hiddenAt, &autoRenew)
+	if err != nil {
+		t.Fatalf("query key: %v", err)
+	}
+	if !isHidden || hiddenAt == nil {
+		t.Fatalf("key was not marked hidden: is_hidden=%v, hidden_at=%v", isHidden, hiddenAt)
+	}
+	if !autoRenew {
+		t.Fatalf("auto_renew was cleared, want preserved true")
+	}
+
+	// 8. Idempotent second call succeeds
+	if err := repo.HideExpiredKey(ctx, keyValid, customerID); err != nil {
+		t.Fatalf("idempotent hide call failed: %v", err)
+	}
+}
+
+func TestHideExpiredKey_ConcurrentLockingWithPurchase(t *testing.T) {
+	pool := getTestPool(t)
+	if pool == nil {
+		return
+	}
+	t.Cleanup(pool.Close)
+	ctx := context.Background()
+
+	testTelegramID := time.Now().UnixNano()
+	var customerID int64
+	err := pool.QueryRow(ctx, `
+		INSERT INTO customer (telegram_id, language, balance)
+		VALUES ($1, 'en', 1000)
+		RETURNING id`, testTelegramID).Scan(&customerID)
+	if err != nil {
+		t.Fatalf("failed to insert customer: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM purchase WHERE customer_id = $1`, customerID)
+		_, _ = pool.Exec(ctx, `DELETE FROM subscription_key WHERE customer_id = $1`, customerID)
+		_, _ = pool.Exec(ctx, `DELETE FROM customer WHERE id = $1`, customerID)
+	})
+
+	repo := NewSubscriptionKeyRepository(pool)
+	past := time.Now().Add(-24 * time.Hour)
+
+	var keyID int64
+	err = pool.QueryRow(ctx, `
+		INSERT INTO subscription_key (
+			customer_id, remnawave_uuid, username, subscription_url, expire_at, status, auto_renew, is_hidden
+		) VALUES (
+			$1, $2, 'testuser', 'https://example.com/sub/test', $3, 'expired', true, false
+		) RETURNING id`, customerID, uuid.New(), past).Scan(&keyID)
+	if err != nil {
+		t.Fatalf("failed to insert key: %v", err)
+	}
+
+	// tx1 starts purchase creation and validates key with FOR SHARE
+	tx1, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("failed to begin tx1: %v", err)
+	}
+	defer tx1.Rollback(ctx)
+
+	if err := repo.ValidateExtendKeyTx(ctx, tx1, keyID, customerID); err != nil {
+		t.Fatalf("ValidateExtendKeyTx failed: %v", err)
+	}
+
+	// Start HideExpiredKey in goroutine (tx2) which attempts SELECT ... FOR UPDATE on keyID.
+	// It must block until tx1 commits or rolls back!
+	hideResult := make(chan error, 1)
+	go func() {
+		hideResult <- repo.HideExpiredKey(context.Background(), keyID, customerID)
+	}()
+
+	// Ensure tx2 has had time to start and block
+	select {
+	case res := <-hideResult:
+		t.Fatalf("HideExpiredKey completed prematurely without waiting for tx1 lock: %v", res)
+	case <-time.After(50 * time.Millisecond):
+		// Expected: tx2 is blocked on row lock
+	}
+
+	// tx1 inserts purchase with status 'new' and commits
+	_, err = tx1.Exec(ctx, `
+		INSERT INTO purchase (
+			customer_id, amount, month, currency, status, invoice_type, extend_key_id
+		) VALUES (
+			$1, 5000, 1, 'MMK', 'new', 'wallet_payment', $2
+		)`, customerID, keyID)
+	if err != nil {
+		t.Fatalf("failed to insert purchase in tx1: %v", err)
+	}
+
+	if err := tx1.Commit(ctx); err != nil {
+		t.Fatalf("tx1 commit failed: %v", err)
+	}
+
+	// tx2 now unblocks, sees in-flight purchase, and returns ErrKeyRenewalInFlight!
+	select {
+	case res := <-hideResult:
+		if !errors.Is(res, ErrKeyRenewalInFlight) {
+			t.Fatalf("HideExpiredKey got %v, want ErrKeyRenewalInFlight", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("HideExpiredKey timed out waiting for row lock release")
+	}
+}
+
 func TestValidateExtendKeyTx_NilTxSucceeds(t *testing.T) {
 	repo := &SubscriptionKeyRepository{}
 	if err := repo.ValidateExtendKeyTx(context.Background(), nil, 1, 1); err != nil {
