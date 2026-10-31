@@ -325,8 +325,14 @@ describe('Home', () => {
         // Canceling modal closes dialog without calling any API
         const cancelButton = screen.getByRole('button', { name: 'Cancel' });
         fireEvent.click(cancelButton);
-        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        await waitFor(() => expect(screen.queryByText('Remove Expired Key')).toBeNull());
         expect(fetchMock).toHaveBeenCalledTimes(1); // Only initial /api/me
+
+        // Re-open and verify Escape cancellation via dialog cancel event
+        fireEvent.click(removeButtons[0]);
+        const dialog = await screen.findByRole('dialog');
+        fireEvent(dialog, new Event('cancel', { bubbles: true, cancelable: true }));
+        await waitFor(() => expect(screen.queryByText('Remove Expired Key')).toBeNull());
     });
 
     it('successfully confirms removal and removes key card from DOM', async () => {
@@ -362,15 +368,17 @@ describe('Home', () => {
 
         expect(await screen.findByText('Key To Remove')).toBeTruthy();
         const removeButton = await screen.findByRole('button', { name: 'Remove' });
+        removeButton.focus();
         fireEvent.click(removeButton);
 
         const dialog = await screen.findByRole('dialog');
         const confirmButton = within(dialog).getByRole('button', { name: 'Remove' });
         fireEvent.click(confirmButton);
 
-        // Modal should close and key should disappear from DOM
+        // Modal should close, key should disappear from DOM, and heading should receive focus
         await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
         await waitFor(() => expect(screen.queryByText('Key To Remove')).toBeNull());
+        await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1 })));
 
         // Verify API was called with POST to /api/keys/102/hide
         expect(fetchMock).toHaveBeenCalledTimes(2);

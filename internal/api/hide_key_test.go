@@ -314,34 +314,150 @@ func TestGetMeExcludesHiddenKeysPreservesLegacyAndTrialInvariants(t *testing.T) 
 func TestCompactSubscriptionKeysForDisplayPreservesHiddenState(t *testing.T) {
 	now := time.Now()
 	expired := now.Add(-10 * time.Hour)
+	activeExpire := now.Add(24 * time.Hour)
 	url := "https://example.com/sub/duplicate"
 
-	// Two duplicate rows for the same subscription URL (e.g. from past reconciliations)
-	// One is marked IsHidden=true, the older one is not
-	keys := []database.SubscriptionKey{
-		{
-			ID:              1,
-			SubscriptionURL: url,
+	t.Run("expired duplicate preserves hidden state", func(t *testing.T) {
+		keys := []database.SubscriptionKey{
+			{
+				ID:              1,
+				SubscriptionURL: url,
+				Status:          "expired",
+				ExpireAt:        &expired,
+				IsHidden:        false,
+				CreatedAt:       now.Add(-5 * time.Hour),
+			},
+			{
+				ID:              2,
+				SubscriptionURL: url,
+				Status:          "expired",
+				ExpireAt:        &expired,
+				IsHidden:        true,
+				CreatedAt:       now.Add(-2 * time.Hour),
+			},
+		}
+
+		compacted := compactSubscriptionKeysForDisplay(keys)
+		if len(compacted) != 1 {
+			t.Fatalf("compacted len = %d, want 1", len(compacted))
+		}
+		if !compacted[0].IsHidden {
+			t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved)")
+		}
+	})
+
+	t.Run("visible active winner retains hidden state from expired duplicate - active first", func(t *testing.T) {
+		keys := []database.SubscriptionKey{
+			{
+				ID:              10,
+				SubscriptionURL: url,
+				Status:          "active",
+				ExpireAt:        &activeExpire,
+				IsHidden:        false,
+				CreatedAt:       now.Add(-1 * time.Hour),
+			},
+			{
+				ID:              11,
+				SubscriptionURL: url,
+				Status:          "expired",
+				ExpireAt:        &expired,
+				IsHidden:        true,
+				CreatedAt:       now.Add(-5 * time.Hour),
+			},
+		}
+
+		compacted := compactSubscriptionKeysForDisplay(keys)
+		if len(compacted) != 1 {
+			t.Fatalf("compacted len = %d, want 1", len(compacted))
+		}
+		if compacted[0].ID != 10 || compacted[0].Status != "active" {
+			t.Fatalf("compacted key ID = %d, status = %q, want active ID 10", compacted[0].ID, compacted[0].Status)
+		}
+		if !compacted[0].IsHidden {
+			t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved on active winner)")
+		}
+	})
+
+	t.Run("visible active winner retains hidden state from expired duplicate - expired hidden first", func(t *testing.T) {
+		keys := []database.SubscriptionKey{
+			{
+				ID:              11,
+				SubscriptionURL: url,
+				Status:          "expired",
+				ExpireAt:        &expired,
+				IsHidden:        true,
+				CreatedAt:       now.Add(-5 * time.Hour),
+			},
+			{
+				ID:              10,
+				SubscriptionURL: url,
+				Status:          "active",
+				ExpireAt:        &activeExpire,
+				IsHidden:        false,
+				CreatedAt:       now.Add(-1 * time.Hour),
+			},
+		}
+
+		compacted := compactSubscriptionKeysForDisplay(keys)
+		if len(compacted) != 1 {
+			t.Fatalf("compacted len = %d, want 1", len(compacted))
+		}
+		if compacted[0].ID != 10 || compacted[0].Status != "active" {
+			t.Fatalf("compacted key ID = %d, status = %q, want active ID 10", compacted[0].ID, compacted[0].Status)
+		}
+		if !compacted[0].IsHidden {
+			t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved on active winner)")
+		}
+	})
+}
+
+func TestGetMePreservesAutoRenewOnHiddenKeys(t *testing.T) {
+	now := time.Now()
+	expiredPast := now.Add(-48 * time.Hour)
+
+	handler := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler.findCustomerByTelegramID = func(ctx context.Context, tid int64) (*database.Customer, error) {
+		return &database.Customer{ID: 10, TelegramID: tid}, nil
+	}
+	handler.getCachedSyncKeys = func(int64) ([]syncKeyStats, bool) { return nil, true }
+
+	var capturedKey database.SubscriptionKey
+	handler.findSubscriptionKeys = func(ctx context.Context, custID int64) ([]database.SubscriptionKey, error) {
+		capturedKey = database.SubscriptionKey{
+			ID:              99,
+			CustomerID:      custID,
+			RemnawaveUUID:   uuid.New(),
+			SubscriptionURL: "https://example.com/hidden-sub",
 			Status:          "expired",
-			ExpireAt:        &expired,
-			IsHidden:        false,
-			CreatedAt:       now.Add(-5 * time.Hour),
-		},
-		{
-			ID:              2,
-			SubscriptionURL: url,
-			Status:          "expired",
-			ExpireAt:        &expired,
+			ExpireAt:        &expiredPast,
 			IsHidden:        true,
-			CreatedAt:       now.Add(-2 * time.Hour),
-		},
+			AutoRenew:       true, // User had auto_renew=true
+			CreatedAt:       now.Add(-72 * time.Hour),
+		}
+		return []database.SubscriptionKey{capturedKey}, nil
 	}
 
-	compacted := compactSubscriptionKeysForDisplay(keys)
-	if len(compacted) != 1 {
-		t.Fatalf("compacted len = %d, want 1", len(compacted))
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req = req.WithContext(context.WithValue(req.Context(), telegramIDKey, int64(12345)))
+	rec := httptest.NewRecorder()
+
+	handler.GetMe(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GetMe status = %d, want 200", rec.Code)
 	}
-	if !compacted[0].IsHidden {
-		t.Fatal("compacted key IsHidden = false, want true (hidden state must be preserved)")
+
+	// Verify the key itself retained auto_renew = true
+	if !capturedKey.AutoRenew {
+		t.Fatal("expected key auto_renew to remain true, hiding must not mutate auto_renew setting")
+	}
+
+	var resp ValidationResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	// And it is excluded from dashboard keys
+	if len(resp.Keys) != 0 {
+		t.Fatalf("expected 0 keys in response, got %d", len(resp.Keys))
 	}
 }

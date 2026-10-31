@@ -273,8 +273,8 @@ func TestHideExpiredKey_InFlightPurchaseStatusesBlockHide(t *testing.T) {
 	if hiddenAt == nil {
 		t.Fatalf("subscription key hidden_at is nil, want non-nil")
 	}
-	if autoRenew {
-		t.Fatalf("subscription key auto_renew = true, want false when hidden")
+	if !autoRenew {
+		t.Fatalf("subscription key auto_renew = false, want true (hide must preserve auto_renew setting)")
 	}
 }
 
@@ -360,9 +360,9 @@ func TestValidateExtendKeyTx_ValidationCases(t *testing.T) {
 		t.Errorf("expired key err = %v, want nil", err)
 	}
 
-	// 3. Hidden key -> ErrKeyNotOwned
-	if err := repo.ValidateExtendKeyTx(ctx, tx, hiddenKeyID, customerID); !errors.Is(err, ErrKeyNotOwned) {
-		t.Errorf("hidden key err = %v, want ErrKeyNotOwned", err)
+	// 3. Hidden key -> nil (hidden keys remain extendable with original remote identity)
+	if err := repo.ValidateExtendKeyTx(ctx, tx, hiddenKeyID, customerID); err != nil {
+		t.Errorf("hidden key err = %v, want nil (hidden keys remain extendable)", err)
 	}
 
 	// 4. Deleted key -> ErrKeyNotOwned

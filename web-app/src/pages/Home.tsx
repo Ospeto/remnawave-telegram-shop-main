@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
@@ -27,6 +27,8 @@ export function Home() {
     const [keyToRemove, setKeyToRemove] = useState<SubscriptionKey | null>(null);
     const [removingKeyId, setRemovingKeyId] = useState<number | null>(null);
     const [removeError, setRemoveError] = useState<string | null>(null);
+    const removeDialogRef = useRef<HTMLDialogElement>(null);
+    const headingRef = useRef<HTMLHeadingElement>(null);
     const { playClick } = useMXBrownSound();
 
     const loadData = useCallback(async () => {
@@ -157,6 +159,28 @@ export function Home() {
         openHappLink(happUrl, redirectUrl, tg ?? null);
     };
 
+    useEffect(() => {
+        const dialog = removeDialogRef.current;
+        if (!dialog) return;
+        if (keyToRemove) {
+            if (!dialog.open) {
+                if (typeof dialog.showModal === 'function') {
+                    dialog.showModal();
+                } else {
+                    dialog.setAttribute('open', '');
+                }
+            }
+        } else {
+            if (dialog.open) {
+                if (typeof dialog.close === 'function') {
+                    dialog.close();
+                } else {
+                    dialog.removeAttribute('open');
+                }
+            }
+        }
+    }, [keyToRemove]);
+
     const handleConfirmRemove = async (keyId: number) => {
         if (!initData || removingKeyId !== null) return;
         setRemovingKeyId(keyId);
@@ -165,6 +189,7 @@ export function Home() {
             await fetchJSONWithTelegramAuth(`/api/keys/${keyId}/hide`, initData, {
                 method: 'POST',
             });
+            setKeyToRemove(null);
             setData(prev => {
                 if (!prev) return prev;
                 return {
@@ -172,7 +197,9 @@ export function Home() {
                     keys: prev.keys.filter(k => k.id !== keyId),
                 };
             });
-            setKeyToRemove(null);
+            setTimeout(() => {
+                headingRef.current?.focus();
+            }, 0);
         } catch (err) {
             if (isAPIStatus(err, 401)) {
                 clearTelegramSession();
@@ -237,7 +264,13 @@ export function Home() {
                     }}
                 />
                 <div style={{ flex: 1 }}>
-                    <h1 style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: 0 }}>{t('home_title')}</h1>
+                    <h1
+                        ref={headingRef}
+                        tabIndex={-1}
+                        style={{ fontSize: 'var(--font-h2)', fontWeight: 'var(--weight-bold)', margin: 0 }}
+                    >
+                        {t('home_title')}
+                    </h1>
                     <p className="text-hint" style={{ fontSize: 'var(--font-caption)', margin: 0 }}>
                         {activeKeys.length > 0
                             ? (activeKeys.length === 1 ? t('active_key_count', { count: 1 }) : t('active_key_count_plural', { count: activeKeys.length }))
@@ -774,47 +807,39 @@ export function Home() {
             )}
 
             {/* Remove Expired Key Confirmation Modal */}
-            {keyToRemove && (
-                <div
-                    style={{
-                        position: 'fixed',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        backgroundColor: 'rgba(0, 0, 0, 0.65)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        zIndex: 9999,
-                        padding: 16,
-                        backdropFilter: 'blur(4px)',
-                    }}
-                    onClick={() => {
-                        if (removingKeyId === null) {
-                            playClick();
-                            setKeyToRemove(null);
-                            setRemoveError(null);
-                        }
-                    }}
-                >
-                    <div
-                        role="dialog"
-                        aria-modal="true"
-                        aria-labelledby="remove-key-title"
-                        aria-describedby="remove-key-desc"
-                        style={{
-                            background: 'var(--tg-theme-bg-color, var(--card-bg, #1c1c1e))',
-                            color: 'var(--tg-theme-text-color, #ffffff)',
-                            borderRadius: 16,
-                            padding: 24,
-                            maxWidth: 360,
-                            width: '100%',
-                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
-                            border: '1px solid var(--divider, rgba(255, 255, 255, 0.1))',
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                    >
+            <dialog
+                ref={removeDialogRef}
+                aria-labelledby="remove-key-title"
+                aria-describedby="remove-key-desc"
+                onCancel={(e) => {
+                    e.preventDefault();
+                    if (removingKeyId === null) {
+                        playClick();
+                        setKeyToRemove(null);
+                        setRemoveError(null);
+                    }
+                }}
+                onClick={(e) => {
+                    if (e.target === removeDialogRef.current && removingKeyId === null) {
+                        playClick();
+                        setKeyToRemove(null);
+                        setRemoveError(null);
+                    }
+                }}
+                style={{
+                    background: 'var(--tg-theme-bg-color, var(--card-bg, #1c1c1e))',
+                    color: 'var(--tg-theme-text-color, #ffffff)',
+                    borderRadius: 16,
+                    padding: 24,
+                    maxWidth: 360,
+                    width: 'calc(100% - 32px)',
+                    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
+                    border: '1px solid var(--divider, rgba(255, 255, 255, 0.1))',
+                    margin: 'auto',
+                }}
+            >
+                {keyToRemove && (
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <h3
                             id="remove-key-title"
                             style={{
@@ -853,6 +878,7 @@ export function Home() {
                                 type="button"
                                 className="btn-secondary"
                                 disabled={removingKeyId !== null}
+                                autoFocus
                                 onClick={() => {
                                     playClick();
                                     setKeyToRemove(null);
@@ -888,8 +914,8 @@ export function Home() {
                             </button>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
+            </dialog>
         </div>
     );
 }

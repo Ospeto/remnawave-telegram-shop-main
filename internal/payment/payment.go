@@ -78,9 +78,10 @@ type AwaitingReceiptVerificationError struct {
 }
 
 // subscriptionKeyCanBeExtended reports whether key belongs to customerID, has a
-// valid remote UUID, is not hidden, and is in an extendable status ("active" or "expired").
+// valid remote UUID, and is in an extendable status ("active" or "expired").
+// Hidden keys remain extendable with their original remote identity and renewal settings.
 func subscriptionKeyCanBeExtended(key *database.SubscriptionKey, customerID int64) bool {
-	return key != nil && key.CustomerID == customerID && !key.IsHidden && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
+	return key != nil && key.CustomerID == customerID && (key.Status == "active" || key.Status == "expired") && key.RemnawaveUUID != uuid.Nil
 }
 
 func remoteUserMissing(err error) bool {
@@ -991,21 +992,33 @@ type KeyStats struct {
 }
 
 func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbackURL string, fallbackExpireAt time.Time) (*string, *time.Time) {
+	hiddenURLs := make(map[string]bool)
+	for _, key := range keys {
+		if key.IsHidden {
+			if trimmed := strings.TrimSpace(key.SubscriptionURL); trimmed != "" {
+				hiddenURLs[trimmed] = true
+			}
+		}
+	}
+
 	var bestURL *string
 	var bestExpire *time.Time
 	var bestCreatedAt time.Time
 
-	if strings.TrimSpace(fallbackURL) != "" {
-		fallbackURLCopy := fallbackURL
-		bestURL = &fallbackURLCopy
-	}
-	if !fallbackExpireAt.IsZero() {
-		fallbackExpireCopy := fallbackExpireAt
-		bestExpire = &fallbackExpireCopy
+	trimmedFallback := strings.TrimSpace(fallbackURL)
+	if !hiddenURLs[trimmedFallback] {
+		if trimmedFallback != "" {
+			fallbackURLCopy := fallbackURL
+			bestURL = &fallbackURLCopy
+		}
+		if !fallbackExpireAt.IsZero() {
+			fallbackExpireCopy := fallbackExpireAt
+			bestExpire = &fallbackExpireCopy
+		}
 	}
 
 	for _, key := range keys {
-		if key.Status == "deleted" || key.ExpireAt == nil {
+		if key.Status == "deleted" || key.IsHidden || key.ExpireAt == nil {
 			continue
 		}
 
@@ -1027,6 +1040,11 @@ func canonicalCustomerSubscriptionState(keys []database.SubscriptionKey, fallbac
 			bestURL = nil
 		}
 		bestCreatedAt = key.CreatedAt
+	}
+
+	if bestURL != nil && (hiddenURLs[*bestURL] || hiddenURLs[strings.TrimSpace(*bestURL)]) {
+		bestURL = nil
+		bestExpire = nil
 	}
 
 	return bestURL, bestExpire

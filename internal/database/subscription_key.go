@@ -219,8 +219,6 @@ func (r *SubscriptionKeyRepository) UpdateExpiry(ctx context.Context, id int64, 
 		Set("expire_at", expireAt).
 		Set("status", "active").
 		Set("expiration_notified_at", nil).
-		Set("is_hidden", false).
-		Set("hidden_at", nil).
 		Where(sq.Eq{"id": id}).
 		PlaceholderFormat(sq.Dollar)
 
@@ -379,7 +377,7 @@ func (r *SubscriptionKeyRepository) SetAutoRenew(ctx context.Context, keyID int6
 // - The key has no active auto-renew claim in progress
 // - The key has no in-flight purchase extension in progress
 // If the key is already hidden, it succeeds idempotently.
-// On success, sets is_hidden = true, hidden_at = NOW(), auto_renew = false.
+// On success, sets is_hidden = true, hidden_at = NOW(). Preserves auto_renew and lifecycle configuration.
 func (r *SubscriptionKeyRepository) HideExpiredKey(ctx context.Context, keyID int64, customerID int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -446,8 +444,7 @@ func (r *SubscriptionKeyRepository) HideExpiredKey(ctx context.Context, keyID in
 	tag, err := tx.Exec(ctx, `
 		UPDATE subscription_key
 		SET is_hidden = TRUE,
-		    hidden_at = NOW(),
-		    auto_renew = FALSE
+		    hidden_at = NOW()
 		WHERE id = $1 AND customer_id = $2
 	`, keyID, customerID)
 	if err != nil {
@@ -466,23 +463,22 @@ func (r *SubscriptionKeyRepository) ValidateExtendKeyTx(ctx context.Context, tx 
 	if tx == nil {
 		return nil
 	}
-	var isHidden bool
 	var status string
 	var custID int64
 	var remUUID uuid.UUID
 	err := tx.QueryRow(ctx, `
-		SELECT customer_id, status, is_hidden, remnawave_uuid
+		SELECT customer_id, status, remnawave_uuid
 		FROM subscription_key
 		WHERE id = $1
 		FOR SHARE
-	`, keyID).Scan(&custID, &status, &isHidden, &remUUID)
+	`, keyID).Scan(&custID, &status, &remUUID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrKeyNotFound
 		}
 		return fmt.Errorf("failed to validate extend key: %w", err)
 	}
-	if custID != customerID || isHidden || (status != "active" && status != "expired") || remUUID == uuid.Nil {
+	if custID != customerID || (status != "active" && status != "expired") || remUUID == uuid.Nil {
 		return ErrKeyNotOwned
 	}
 	return nil

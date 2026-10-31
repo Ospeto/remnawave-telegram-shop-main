@@ -1052,9 +1052,7 @@ func compactSubscriptionKeysForDisplay(keys []database.SubscriptionKey) []databa
 			if isNewer(key, compacted[idx]) {
 				compacted[idx] = key
 			}
-			if compacted[idx].Status != "active" {
-				compacted[idx].IsHidden = compacted[idx].IsHidden || wasHidden
-			}
+			compacted[idx].IsHidden = wasHidden
 			continue
 		}
 
