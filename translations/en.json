@@ -29,6 +29,7 @@
   "btn_cancel_remove": "Cancel",
   "removing_key": "Removing...",
   "remove_key_error": "Failed to remove key. Please try again.",
+  "renewal_in_progress": "Renewal in progress. Please try again shortly.",
   "trial_button": "🎁 Start Free Trial",
   "trial_activated": "✅ Trial activated — your free key is ready!",
   "trial_failed": "❌ Could not activate trial. Please try again or contact support.",

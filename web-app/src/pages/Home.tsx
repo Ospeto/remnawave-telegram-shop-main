@@ -206,11 +206,11 @@ export function Home() {
                 setAuthExpired(true);
                 return;
             }
-            if (err instanceof APIError) {
-                setRemoveError(err.body || t('remove_key_error'));
-            } else {
-                setRemoveError(t('remove_key_error'));
+            if (isAPIStatus(err, 409)) {
+                setRemoveError(t('renewal_in_progress'));
+                return;
             }
+            setRemoveError(t('remove_key_error'));
         } finally {
             setRemovingKeyId(null);
         }

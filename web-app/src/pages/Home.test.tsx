@@ -411,7 +411,7 @@ describe('Home', () => {
                 trial_eligible: false,
                 trial_days: 0,
             }))
-            .mockResolvedValueOnce(jsonResponse('Renewal in progress', 409));
+            .mockResolvedValueOnce(jsonResponse('renewal_in_progress', 409));
 
         renderWithAppProviders([
             { path: '/', element: <Home /> },
@@ -426,7 +426,7 @@ describe('Home', () => {
         fireEvent.click(confirmButton);
 
         // Dialog should remain open with error message, key card still in DOM
-        expect(await screen.findByRole('alert')).toHaveTextContent('Renewal in progress');
+        expect(await screen.findByRole('alert')).toHaveTextContent('Renewal in progress. Please try again shortly.');
         expect(screen.getByText('Key To Keep')).toBeTruthy();
     });
 

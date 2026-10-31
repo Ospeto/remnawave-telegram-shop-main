@@ -44,6 +44,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'btn_cancel_remove': 'Cancel',
         'removing_key': 'Removing...',
         'remove_key_error': 'Failed to remove key. Please try again.',
+        'renewal_in_progress': 'Renewal in progress. Please try again shortly.',
         'btn_buy_new': 'Buy New Key',
         'btn_get_started': 'Get Started',
 
@@ -456,6 +457,7 @@ export const translations: Record<Language, Record<string, string>> = {
         'btn_cancel_remove': 'မလုပ်တော့ပါ',
         'removing_key': 'ဖျက်နေပါသည်...',
         'remove_key_error': 'ကီးကို ဖျက်၍မရပါ။ ထပ်မံကြိုးစားပါ။',
+        'renewal_in_progress': 'သက်တမ်းတိုးခြင်း လုပ်ဆောင်နေဆဲဖြစ်ပါသည်။ ခဏအကြာတွင် ထပ်မံကြိုးစားပါ။',
         'btn_buy_new': 'Key အသစ် ဝယ်ယူရန်',
         'btn_get_started': 'စတင်ရန်',
 
