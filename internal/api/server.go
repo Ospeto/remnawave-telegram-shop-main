@@ -180,9 +180,10 @@ func RegisterHandlers(
 			return
 		}
 
-		// If the requested file exists, serve it directly
+		// If the requested regular file exists, serve it directly
+		// (never delegate directories such as /assets/ to http.FileServer: that renders a directory listing)
 		path := "./web-app/dist" + r.URL.Path
-		if _, err := os.Stat(path); err == nil {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			if strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/" {
 				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 			}
@@ -244,8 +245,8 @@ h1{font-size:20px;margin-bottom:8px;color:#fff}
     <p class="sub">Install Happ to add your VPN config automatically</p>
     <a id="btn-retry" href="{{.Target}}" class="btn btn-retry">🔄 Try Again</a>
     <div class="divider">— install Happ —</div>
-    <a id="btn-android" href="https://play.google.com/store/search?q=happ+vpn&c=apps" target="_blank" class="btn btn-android" style="display:none">▶️ Google Play Store</a>
-    <a id="btn-ios" href="https://apps.apple.com/search?term=happ+vpn" target="_blank" class="btn btn-ios" style="display:none">🍎 App Store</a>
+    <a id="btn-android" href="https://sub.wavypremium.xyz/downloads/Happ.apk" target="_blank" rel="noopener noreferrer" class="btn btn-android" style="display:none">⬇️ Download Happ APK (Direct)</a>
+    <a id="btn-ios" href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener noreferrer" class="btn btn-ios" style="display:none">🍎 App Store</a>
     <div class="divider">— or add manually —</div>
     <button onclick="copyUrl()" class="btn btn-copy">📋 Copy Subscription URL</button>
     <p class="copied" id="copied">✅ Copied to clipboard!</p>

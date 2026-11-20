@@ -430,9 +430,12 @@ func (h Handler) adminDashboardHeader(ctx context.Context) string {
 		testMode = "ON"
 	}
 
+	// Read the provider phones through the synchronized payment accessors
+	// instead of dereferencing the mutable payment globals directly.
 	providerCount := 0
-	for _, phone := range []string{payment.PhoneKPay, payment.PhoneWavePay, payment.PhoneAyaPay} {
-		if strings.TrimSpace(phone) != "" {
+	for _, key := range []string{"kpay", "wavepay", "ayapay"} {
+		provider, ok := payment.LookupPaymentProvider(key)
+		if ok && strings.TrimSpace(provider.Phone) != "" {
 			providerCount++
 		}
 	}

@@ -10,12 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgconn"
-	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
@@ -229,44 +229,58 @@ func (g *memoryInitDataExchangeGuard) consume(_ context.Context, bindingKey stri
 	return nil
 }
 
+const initDataExchangeCleanupInterval = 5 * time.Minute
+
 type dbInitDataExchangeGuard struct {
 	pool *pgxpool.Pool
+
+	cleanupMu     sync.Mutex
+	lastCleanedAt time.Time
 }
 
 func newDBInitDataExchangeGuard(pool *pgxpool.Pool) *dbInitDataExchangeGuard {
 	return &dbInitDataExchangeGuard{pool: pool}
 }
 
+// Re-exchanging the same Telegram initData while it is still within the
+// exchange freshness window is idempotent so reopening or recovering the Mini
+// App inside one Telegram WebView launch cannot trap the user on an expired
+// local bearer token.
 func (g *dbInitDataExchangeGuard) consume(ctx context.Context, bindingKey string, expiresAt time.Time) error {
 	if bindingKey == "" {
 		return nil
 	}
 
-	tx, err := g.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
-
-	if _, err := tx.Exec(ctx, `DELETE FROM telegram_init_data_exchange WHERE binding_key = $1 AND expires_at <= NOW()`, bindingKey); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM telegram_init_data_exchange WHERE expires_at <= NOW()`); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO telegram_init_data_exchange (binding_key, expires_at) VALUES ($1, $2)`, bindingKey, expiresAt); err != nil {
-		if isUniqueConstraintViolation(err) {
-			return nil
+	// Expired-row cleanup is a full-table scan, so it runs at most once every
+	// few minutes instead of on every login.
+	if g.shouldCleanupExpiredRows() {
+		if _, err := g.pool.Exec(ctx, `DELETE FROM telegram_init_data_exchange WHERE expires_at <= NOW()`); err != nil {
+			slog.Warn("Failed to clean expired initData exchange rows", "error", err)
 		}
-		return err
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return err
+	_, err := g.pool.Exec(ctx, `
+		INSERT INTO telegram_init_data_exchange (binding_key, expires_at)
+		VALUES ($1, $2)
+		ON CONFLICT (binding_key) DO UPDATE
+		SET expires_at = EXCLUDED.expires_at
+		WHERE telegram_init_data_exchange.expires_at <= NOW()
+	`, bindingKey, expiresAt)
+	return err
+}
+
+// shouldCleanupExpiredRows reports whether the throttled expired-row delete is
+// due, claiming the slot so concurrent logins do not all run it.
+func (g *dbInitDataExchangeGuard) shouldCleanupExpiredRows() bool {
+	g.cleanupMu.Lock()
+	defer g.cleanupMu.Unlock()
+
+	now := time.Now()
+	if !g.lastCleanedAt.IsZero() && now.Sub(g.lastCleanedAt) < initDataExchangeCleanupInterval {
+		return false
 	}
-	return nil
+	g.lastCleanedAt = now
+	return true
 }
 
 func ConfigureStateStores(pool *pgxpool.Pool, signingSecret string) error {

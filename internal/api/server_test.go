@@ -163,15 +163,15 @@ func TestRedirectHelpers(t *testing.T) {
 	}{
 		{
 			name:       "happ deep link",
-			target:     "happ://add/https://example.com/sub",
+			target:     "happ://add/https://sub.wavypremium.xyz/sub",
 			wantValid:  true,
-			wantSubURL: "https://example.com/sub",
+			wantSubURL: "https://sub.wavypremium.xyz/sub",
 		},
 		{
 			name:       "happproxy deep link",
-			target:     "happproxy://add/https://example.com/sub",
+			target:     "happproxy://add/https://sub.wavypremium.xyz/sub",
 			wantValid:  true,
-			wantSubURL: "https://example.com/sub",
+			wantSubURL: "https://sub.wavypremium.xyz/sub",
 		},
 		{
 			name:       "unsupported scheme",
@@ -251,7 +251,7 @@ func TestValidateInitDataRejectsStaleSessionExchange(t *testing.T) {
 func TestRedirectGrantStoreValidatesSignedToken(t *testing.T) {
 	store := newSignedRedirectGrantStore([]byte("test-secret"), 2*time.Minute)
 
-	token, err := store.issue("happ://add/https://example.com/sub", "https://example.com/sub")
+	token, err := store.issue("happ://add/https://sub.wavypremium.xyz/sub", "https://sub.wavypremium.xyz/sub")
 	if err != nil {
 		t.Fatalf("issue() error = %v", err)
 	}
@@ -260,7 +260,7 @@ func TestRedirectGrantStoreValidatesSignedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("consume() error = %v", err)
 	}
-	if grant.Target != "happ://add/https://example.com/sub" || grant.SubscriptionURL != "https://example.com/sub" {
+	if grant.Target != "happ://add/https://sub.wavypremium.xyz/sub" || grant.SubscriptionURL != "https://sub.wavypremium.xyz/sub" {
 		t.Fatalf("consume() returned unexpected grant: %+v", grant)
 	}
 }
@@ -268,7 +268,7 @@ func TestRedirectGrantStoreValidatesSignedToken(t *testing.T) {
 func TestRedirectGrantStoreRejectsExpiredToken(t *testing.T) {
 	store := newSignedRedirectGrantStore([]byte("test-secret"), time.Second)
 
-	token, err := store.issue("happ://add/https://example.com/sub", "https://example.com/sub")
+	token, err := store.issue("happ://add/https://sub.wavypremium.xyz/sub", "https://sub.wavypremium.xyz/sub")
 	if err != nil {
 		t.Fatalf("issue() error = %v", err)
 	}
@@ -423,6 +423,14 @@ func TestRedirectHandlerDirectSub(t *testing.T) {
 	mux.ServeHTTP(recUserInfo, reqUserInfo)
 	if recUserInfo.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400 for sub with userinfo, got %d", recUserInfo.Code)
+	}
+
+	// Invalid sub: untrusted external host from the allow-list
+	reqUntrustedHost := httptest.NewRequest(http.MethodGet, "/redirect?sub=https://evil.example.com/my-key", nil)
+	recUntrustedHost := httptest.NewRecorder()
+	mux.ServeHTTP(recUntrustedHost, reqUntrustedHost)
+	if recUntrustedHost.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400 for untrusted host, got %d", recUntrustedHost.Code)
 	}
 
 	// Missing both token and sub

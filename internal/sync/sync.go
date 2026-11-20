@@ -45,7 +45,7 @@ func (s SyncService) Sync() {
 	slog.Info("Starting sync")
 	ctx := context.Background()
 	var telegramIDs []int64
-	telegramIDsSet := make(map[int64]int64)
+	telegramIDToIndex := make(map[int64]int)
 	var mappedUsers []database.Customer
 	users, err := s.client.GetUsers(ctx)
 	if err != nil {
@@ -69,18 +69,37 @@ func (s SyncService) Sync() {
 		if user.TelegramId.Null {
 			continue
 		}
-		if _, exists := telegramIDsSet[int64(user.TelegramId.Value)]; exists {
+		telegramID := int64(user.TelegramId.Value)
+		expireAt := user.ExpireAt
+		subscriptionURL := user.SubscriptionUrl
+
+		if idx, exists := telegramIDToIndex[telegramID]; exists {
+			current := &mappedUsers[idx]
+			// A customer may own several keys in Remnawave (for example an old
+			// expired trial key plus a newer paid key). Always keep the key with
+			// the latest expiration so a stale key never overwrites an active one.
+			switch {
+			case current.ExpireAt == nil || expireAt.After(*current.ExpireAt):
+				current.ExpireAt = &expireAt
+				if subscriptionURL != "" {
+					current.SubscriptionLink = &subscriptionURL
+				}
+			case expireAt.Equal(*current.ExpireAt):
+				// Same expiration: fill in a missing subscription link without
+				// replacing one that is already known.
+				if (current.SubscriptionLink == nil || *current.SubscriptionLink == "") && subscriptionURL != "" {
+					current.SubscriptionLink = &subscriptionURL
+				}
+			}
 			continue
 		}
 
-		telegramIDsSet[int64(user.TelegramId.Value)] = int64(user.TelegramId.Value)
+		telegramIDToIndex[telegramID] = len(mappedUsers)
 
-		telegramIDs = append(telegramIDs, int64(user.TelegramId.Value))
+		telegramIDs = append(telegramIDs, telegramID)
 
-		expireAt := user.ExpireAt
-		subscriptionURL := user.SubscriptionUrl
 		mappedUsers = append(mappedUsers, database.Customer{
-			TelegramID:       int64(user.TelegramId.Value),
+			TelegramID:       telegramID,
 			ExpireAt:         &expireAt,
 			SubscriptionLink: &subscriptionURL,
 			Language:         config.DefaultLanguage(),

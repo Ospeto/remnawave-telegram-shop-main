@@ -1813,6 +1813,10 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	ctxRef := context.WithoutCancel(ctx)
 	customerID := utils.MaskHalfInt64(customer.ID)
 	customerTelegramID := utils.MaskHalfInt64(customer.TelegramID)
+	// Snapshot the configured bonus once so the referrer and referee paths
+	// cannot disagree if an admin updates it mid-flow (and so every read goes
+	// through the synchronized accessor).
+	bonusAmount := GetReferralBonusAmount()
 
 	slog.Info("[REFERRAL-DEBUG] processReferralBonus called",
 		"customer_id", customerID,
@@ -1853,7 +1857,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 
 		slog.Info("[REFERRAL-DEBUG] Referrer found, adding balance",
 			"referrer_customer_id", utils.MaskHalfInt64(referrerCustomer.ID),
-			"bonus_amount", ReferralBonusAmount,
+			"bonus_amount", bonusAmount,
 		)
 
 		dbTx, err := s.customerRepository.BeginTx(ctxRef)
@@ -1878,7 +1882,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			referrerTxDone = true
 			slog.Info("[REFERRAL-DEBUG] Referrer bonus already claimed by another worker, skipping")
 		} else {
-			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, referrerCustomer.ID, ReferralBonusAmount); err != nil {
+			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, referrerCustomer.ID, bonusAmount); err != nil {
 				slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referrer balance (non-fatal)", "error", err)
 				return
 			}
@@ -1888,7 +1892,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 				referralKind := database.WalletTransactionReferralKindReferrer
 				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
 					CustomerID:        referrerCustomer.ID,
-					Amount:            ReferralBonusAmount,
+					Amount:            bonusAmount,
 					Type:              database.WalletTransactionTypeReferral,
 					ReferralBonusKind: &referralKind,
 					Description:       referrerReferralBonusDescription,
@@ -1908,7 +1912,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Info(
 				"[REFERRAL-DEBUG] SUCCESS: Granted referral bonus to referrer",
 				"referrer_id", utils.MaskHalfInt64(referrerCustomer.ID),
-				"amount", ReferralBonusAmount,
+				"amount", bonusAmount,
 			)
 
 			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{
@@ -1949,7 +1953,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			refereeTxDone = true
 			slog.Info("[REFERRAL-DEBUG] Referee bonus already claimed by another worker, skipping")
 		} else {
-			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, customer.ID, ReferralBonusAmount); err != nil {
+			if err := s.customerRepository.AddBalanceTx(ctxRef, dbTx, customer.ID, bonusAmount); err != nil {
 				slog.Error("[REFERRAL-DEBUG] FAILED: failed to credit referee balance (non-fatal)", "error", err)
 				return
 			}
@@ -1959,7 +1963,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 				referralKind := database.WalletTransactionReferralKindReferee
 				if _, err := s.walletTxRepo.CreateTx(ctxRef, dbTx, &database.WalletTransaction{
 					CustomerID:        customer.ID,
-					Amount:            ReferralBonusAmount,
+					Amount:            bonusAmount,
 					Type:              database.WalletTransactionTypeReferral,
 					ReferralBonusKind: &referralKind,
 					Description:       refereeReferralBonusDescription,
@@ -1979,7 +1983,7 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 			slog.Info(
 				"[REFERRAL-DEBUG] SUCCESS: Granted welcome bonus to referee",
 				"referee_id", customerID,
-				"amount", ReferralBonusAmount,
+				"amount", bonusAmount,
 			)
 
 			if _, err := s.telegramBot.SendMessage(ctxRef, &bot.SendMessageParams{

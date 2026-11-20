@@ -55,7 +55,7 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 	}
 	restoreEmpty()
 
-	// Second row should contain iOS App Store and Android Play Store download buttons
+	// Second row should contain iOS App Store and direct Android APK download buttons
 	downloadRow := markup[1]
 	if len(downloadRow) != 2 {
 		t.Fatalf("download row button count = %d, want 2", len(downloadRow))
@@ -68,8 +68,8 @@ func TestBuildDirectSubscriptionKeyboard(t *testing.T) {
 		t.Fatalf("iosBtn.Text = %q, want iOS label", iosBtn.Text)
 	}
 	androidBtn := downloadRow[1]
-	if androidBtn.URL != "https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" {
-		t.Fatalf("androidBtn.URL = %q, want Google Play Store URL", androidBtn.URL)
+	if androidBtn.URL != "https://sub.wavypremium.xyz/downloads/Happ.apk" {
+		t.Fatalf("androidBtn.URL = %q, want direct Happ APK URL", androidBtn.URL)
 	}
 	if !strings.Contains(androidBtn.Text, "Android") {
 		t.Fatalf("androidBtn.Text = %q, want Android label", androidBtn.Text)

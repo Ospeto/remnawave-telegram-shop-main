@@ -365,7 +365,7 @@ func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][
 
 	markup = append(markup, []models.InlineKeyboardButton{
 		{Text: h.translation.GetText(lang, "download_happ_ios"), URL: "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
-		{Text: h.translation.GetText(lang, "download_happ_android"), URL: "https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US"},
+		{Text: h.translation.GetText(lang, "download_happ_android"), URL: "https://sub.wavypremium.xyz/downloads/Happ.apk"},
 	})
 
 	markup = append(markup, h.resolveConnectButton(lang))

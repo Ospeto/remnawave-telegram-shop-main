@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -17,7 +18,15 @@ type PaymentProvider struct {
 
 // Per-provider payment configuration. Values are loaded from app_config on
 // startup and can be updated at runtime by admin commands.
+//
+// The exported variables below are mutable shared state. All runtime reads and
+// writes MUST go through the accessor functions in this file (SetProviderPhone,
+// SetProviderAccountName, allPaymentProviders, Get/SetReferralBonusAmount) so
+// that the configMu read-write lock keeps concurrent HTTP handlers and Telegram
+// admin commands from racing on them.
 var (
+	configMu sync.RWMutex
+
 	PhoneKPay       string
 	PhoneWavePay    string
 	PhoneAyaPay     string
@@ -26,7 +35,62 @@ var (
 	AccountNameAya  string
 )
 
+// SetProviderPhone updates the receiving phone number for a provider key.
+// An empty phone disables the provider. Returns false for unknown providers.
+func SetProviderPhone(providerKey, phone string) bool {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	switch NormalizeProviderKey(providerKey) {
+	case "kpay":
+		PhoneKPay = phone
+	case "wavepay":
+		PhoneWavePay = phone
+	case "ayapay":
+		PhoneAyaPay = phone
+	default:
+		return false
+	}
+	return true
+}
+
+// SetProviderAccountName updates the recipient account name for a provider key.
+// An empty name clears it. Returns false for unknown providers.
+func SetProviderAccountName(providerKey, name string) bool {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	switch NormalizeProviderKey(providerKey) {
+	case "kpay":
+		AccountNameKPay = name
+	case "wavepay":
+		AccountNameWave = name
+	case "ayapay":
+		AccountNameAya = name
+	default:
+		return false
+	}
+	return true
+}
+
+// GetReferralBonusAmount returns the current referral bonus (MMK) under the lock.
+func GetReferralBonusAmount() float64 {
+	configMu.RLock()
+	defer configMu.RUnlock()
+	return ReferralBonusAmount
+}
+
+// SetReferralBonusAmount stores the new referral bonus (MMK) under the lock.
+func SetReferralBonusAmount(amount float64) {
+	configMu.Lock()
+	defer configMu.Unlock()
+	ReferralBonusAmount = amount
+}
+
 func allPaymentProviders() []PaymentProvider {
+	configMu.RLock()
+	defer configMu.RUnlock()
+
 	return []PaymentProvider{
 		{Key: "kpay", Label: "KPay", Phone: PhoneKPay, AccountName: AccountNameKPay},
 		{Key: "wavepay", Label: "WavePay", Phone: PhoneWavePay, AccountName: AccountNameWave},

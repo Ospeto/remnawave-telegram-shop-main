@@ -505,8 +505,8 @@ export function Home() {
                 </h3>
 
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <a href="https://play.google.com/store/apps/details?id=com.happproxy&hl=en_US" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
-                        Android
+                    <a href="https://sub.wavypremium.xyz/downloads/Happ.apk" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
+                        ⬇️ Android APK
                     </a>
                     <a href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener noreferrer" className="btn-secondary" style={{ flex: 1, fontSize: 'var(--font-caption)', padding: '8px', textDecoration: 'none', lineHeight: 1.2, height: 'auto', textAlign: 'center' }}>
                         iOS

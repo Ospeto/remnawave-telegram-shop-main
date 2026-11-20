@@ -843,6 +843,9 @@ const (
 	screenshotVerificationCooldown        = 15 * time.Second
 	screenshotVerificationWindow          = 10 * time.Minute
 	maxScreenshotVerificationsPerCustomer = 6
+	// screenshotAttemptMapSweepThreshold is the map size that triggers an
+	// opportunistic eviction pass inside beginScreenshotVerification.
+	screenshotAttemptMapSweepThreshold = 128
 )
 
 var errScreenshotVerificationRateLimited = errors.New("too many verification attempts")
@@ -909,14 +912,41 @@ func (h *APIHandler) beginScreenshotVerification(purchaseID, customerID int64) e
 	h.screenshotMu.Lock()
 	defer h.screenshotMu.Unlock()
 
+	now := time.Now()
+
+	// Opportunistic sweep: only pay the O(n) eviction cost once the maps grow
+	// past a small threshold, so per-request latency stays flat in normal
+	// operation while expired entries can never accumulate unboundedly.
+	if len(h.screenshotAttempts) > screenshotAttemptMapSweepThreshold {
+		for id, attemptAt := range h.screenshotAttempts {
+			if now.Sub(attemptAt) >= screenshotVerificationCooldown {
+				delete(h.screenshotAttempts, id)
+			}
+		}
+	}
+	if len(h.customerScreenshotAttempts) > screenshotAttemptMapSweepThreshold {
+		for cid, attempts := range h.customerScreenshotAttempts {
+			valid := attempts[:0]
+			for _, attemptAt := range attempts {
+				if now.Sub(attemptAt) < screenshotVerificationWindow {
+					valid = append(valid, attemptAt)
+				}
+			}
+			if len(valid) == 0 {
+				delete(h.customerScreenshotAttempts, cid)
+			} else {
+				h.customerScreenshotAttempts[cid] = valid
+			}
+		}
+	}
+
 	if _, exists := h.screenshotInFlight[purchaseID]; exists {
 		return fmt.Errorf("verification already in progress")
 	}
-	if lastAttempt, exists := h.screenshotAttempts[purchaseID]; exists && time.Since(lastAttempt) < screenshotVerificationCooldown {
+	if lastAttempt, exists := h.screenshotAttempts[purchaseID]; exists && now.Sub(lastAttempt) < screenshotVerificationCooldown {
 		return fmt.Errorf("verification throttled")
 	}
 
-	now := time.Now()
 	recentAttempts := h.customerScreenshotAttempts[customerID][:0]
 	for _, attemptAt := range h.customerScreenshotAttempts[customerID] {
 		if now.Sub(attemptAt) < screenshotVerificationWindow {
@@ -1551,7 +1581,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		TrialEligible:            trialEligible,
 		TrialDays:                config.TrialDays(),
 		ReferralStatsUnavailable: referralStatsUnavailable,
-		ReferralBonusAmount:      payment.ReferralBonusAmount,
+		ReferralBonusAmount:      payment.GetReferralBonusAmount(),
 		BotURL:                   config.BotURL(),
 		SupportURL:               config.SupportURL(),
 	}
@@ -2856,7 +2886,7 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"auto_renew":                 autoRenew,
 		"auto_renew_duration":        nil,
 		"bot_url":                    config.BotURL(),
-		"referral_bonus_amount":      payment.ReferralBonusAmount,
+		"referral_bonus_amount":      payment.GetReferralBonusAmount(),
 		"referral_stats_unavailable": referralStatsUnavailable,
 	}
 	if !referralStatsUnavailable {

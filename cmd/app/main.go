@@ -23,11 +23,12 @@ import (
 	"remnawave-tg-shop-bot/internal/service/backup"
 	"remnawave-tg-shop-bot/internal/service/healthcheck"
 	"remnawave-tg-shop-bot/internal/service/wallet"
-	"remnawave-tg-shop-bot/internal/sync"
+	syncservice "remnawave-tg-shop-bot/internal/sync"
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -291,7 +292,7 @@ func main() {
 	autoRenewCron.Start()
 	defer autoRenewCron.Stop()
 
-	syncService := sync.NewSyncService(remnawaveClient, customerRepository, subKeyRepo)
+	syncService := syncservice.NewSyncService(remnawaveClient, customerRepository, subKeyRepo)
 
 	appConfigRepo := database.NewAppConfigRepository(pool)
 	if err := config.LoadPlansCatalog(ctx, appConfigRepo); err != nil {
@@ -301,7 +302,7 @@ func main() {
 	if err == nil {
 		amount, errParse := strconv.ParseFloat(bonusStr, 64)
 		if errParse == nil {
-			payment.ReferralBonusAmount = amount
+			payment.SetReferralBonusAmount(amount)
 		}
 	} else {
 		// Just in case it wasn't pre-seeded
@@ -316,34 +317,30 @@ func main() {
 		legacyFallbackPhone = config.MobileBankingPhone()
 	}
 	for _, entry := range []struct {
+		providerKey   string
 		phoneKey      string
 		nameKey       string
-		phonePtr      *string
-		namePtr       *string
 		phoneFallback string
 		nameFallback  string
 	}{
 		{
+			providerKey:   "kpay",
 			phoneKey:      "phone_kpay",
 			nameKey:       "name_kpay",
-			phonePtr:      &payment.PhoneKPay,
-			namePtr:       &payment.AccountNameKPay,
 			phoneFallback: firstNonEmpty(os.Getenv("MOBILE_BANKING_PHONE_KPAY"), legacyFallbackPhone),
 			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_KPAY"),
 		},
 		{
+			providerKey:   "wavepay",
 			phoneKey:      "phone_wavepay",
 			nameKey:       "name_wavepay",
-			phonePtr:      &payment.PhoneWavePay,
-			namePtr:       &payment.AccountNameWave,
 			phoneFallback: firstNonEmpty(os.Getenv("MOBILE_BANKING_PHONE_WAVEPAY"), legacyFallbackPhone),
 			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_WAVEPAY"),
 		},
 		{
+			providerKey:   "ayapay",
 			phoneKey:      "phone_ayapay",
 			nameKey:       "name_ayapay",
-			phonePtr:      &payment.PhoneAyaPay,
-			namePtr:       &payment.AccountNameAya,
 			phoneFallback: os.Getenv("MOBILE_BANKING_PHONE_AYAPAY"),
 			nameFallback:  os.Getenv("MOBILE_BANKING_NAME_AYAPAY"),
 		},
@@ -351,18 +348,18 @@ func main() {
 		v, loadErr := appConfigRepo.Get(ctx, entry.phoneKey)
 		if loadErr == nil {
 			// Key exists in DB — use its value (empty = disabled)
-			*entry.phonePtr = v
+			payment.SetProviderPhone(entry.providerKey, v)
 		} else if entry.phoneFallback != "" {
 			// Key not in DB yet — seed with fallback
-			*entry.phonePtr = entry.phoneFallback
+			payment.SetProviderPhone(entry.providerKey, entry.phoneFallback)
 			appConfigRepo.Set(ctx, entry.phoneKey, entry.phoneFallback)
 		}
 
 		name, nameErr := appConfigRepo.Get(ctx, entry.nameKey)
 		if nameErr == nil {
-			*entry.namePtr = name
+			payment.SetProviderAccountName(entry.providerKey, name)
 		} else if entry.nameFallback != "" {
-			*entry.namePtr = entry.nameFallback
+			payment.SetProviderAccountName(entry.providerKey, entry.nameFallback)
 			appConfigRepo.Set(ctx, entry.nameKey, entry.nameFallback)
 		}
 	}
@@ -554,8 +551,11 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
-	mux.Handle("/readyz", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
-	mux.Handle("/healthcheck", fullHealthHandler(pool, remnawaveClient, paymentAnalyzer))
+	// One shared handler so /readyz and /healthcheck share one probe cache
+	// instead of each pinging PostgreSQL, Remnawave and the vision providers.
+	healthHandler := fullHealthHandler(pool, remnawaveClient, paymentAnalyzer)
+	mux.Handle("/readyz", healthHandler)
+	mux.Handle("/healthcheck", healthHandler)
 	api.RegisterHandlers(mux, customerRepository, paymentService, b, tm, subKeyRepo, promoCodeRepository, walletService, referralRepository, appConfigRepo, financeService, financialAdjustmentRepository, resellerCreditRepo, walletTxRepo)
 
 	// Rate Limiter: 10 req/s, burst 20
@@ -694,8 +694,41 @@ func healthProbeURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%d/readyz", port)
 }
 
+// healthProbeCacheTTL bounds how often the full readiness probe may hit
+// Postgres, the Remnawave panel and the vision providers. Docker healthchecks
+// and public /readyz callers otherwise generate thousands of upstream calls a
+// day and can be used to spam those providers.
+const healthProbeCacheTTL = 30 * time.Second
+
 func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini.Analyzer) http.Handler {
+	var (
+		cacheMu      sync.Mutex
+		cachedAt     time.Time
+		cachedStatus int
+		cachedBody   []byte
+	)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cacheMu.Lock()
+		if len(cachedBody) > 0 && time.Since(cachedAt) < healthProbeCacheTTL {
+			status := cachedStatus
+			body := cachedBody
+			cacheMu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write(body)
+			return
+		}
+		cacheMu.Unlock()
+
+		statusCode := http.StatusOK
+
+		// Probe on a detached context: the result is cached for every caller, so
+		// a client that disconnects mid-probe must not poison the cache with a
+		// cancelled-context failure.
+		probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer probeCancel()
+
 		status := map[string]any{
 			"status":           "ok",
 			"db":               "disabled",
@@ -711,9 +744,7 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 
 		if pool != nil {
 			status["db"] = "ok"
-			dbCtx, dbCancel := context.WithTimeout(r.Context(), 5*time.Second)
-			defer dbCancel()
-			if err := pool.Ping(dbCtx); err != nil {
+			if err := pool.Ping(probeCtx); err != nil {
 				status["status"] = "fail"
 				status["db"] = "error: " + err.Error()
 			}
@@ -721,18 +752,14 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 
 		if rw != nil {
 			status["rw"] = "ok"
-			rwCtx, rwCancel := context.WithTimeout(r.Context(), 5*time.Second)
-			defer rwCancel()
-			if err := rw.Ping(rwCtx); err != nil {
+			if err := rw.Ping(probeCtx); err != nil {
 				status["status"] = "fail"
 				status["rw"] = "error: " + err.Error()
 			}
 		}
 
 		if analyzer != nil {
-			gCtx, gCancel := context.WithTimeout(r.Context(), 5*time.Second)
-			defer gCancel()
-			readiness := analyzer.Readiness(gCtx)
+			readiness := analyzer.Readiness(probeCtx)
 			status["vision_analyzer"] = readiness.Status
 			status["vision_providers"] = readiness.Providers
 			if readiness.Status != "ok" {
@@ -754,16 +781,31 @@ func fullHealthHandler(pool *pgxpool.Pool, rw *remnawave.Client, analyzer gemini
 			status["vision_analyzer"] = "disabled"
 		}
 
-		// Set Content-Type before WriteHeader so it is actually sent.
-		w.Header().Set("Content-Type", "application/json")
-		if status["status"] == "ok" {
-			w.WriteHeader(http.StatusOK)
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		}
 		status["remnawave"] = status["rw"]
 		delete(status, "rw")
-		_ = json.NewEncoder(w).Encode(status)
+
+		if status["status"] != "ok" {
+			statusCode = http.StatusServiceUnavailable
+		}
+
+		body, err := json.Marshal(status)
+		if err != nil {
+			slog.Error("Health check failed: cannot encode payload", "error", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(statusCode)
+			return
+		}
+
+		cacheMu.Lock()
+		cachedAt = time.Now()
+		cachedStatus = statusCode
+		cachedBody = body
+		cacheMu.Unlock()
+
+		// Set Content-Type before WriteHeader so it is actually sent.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_, _ = w.Write(body)
 	})
 }
 

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	"github.com/jackc/pgconn"
 )
 
 var backupService *backup.Service
@@ -114,35 +116,33 @@ type providerConfig struct {
 	phoneKey string
 	nameKey  string
 	label    string
-	phonePtr *string
-	namePtr  *string
+	// key is the canonical payment provider key used with payment accessors.
+	key string
 }
 
 func resolveProviderConfig(provider string) (providerConfig, bool) {
-	switch payment.NormalizeProviderKey(provider) {
+	key := payment.NormalizeProviderKey(provider)
+	switch key {
 	case "kpay":
 		return providerConfig{
 			phoneKey: "phone_kpay",
 			nameKey:  "name_kpay",
 			label:    "KPay",
-			phonePtr: &payment.PhoneKPay,
-			namePtr:  &payment.AccountNameKPay,
+			key:      key,
 		}, true
 	case "wavepay":
 		return providerConfig{
 			phoneKey: "phone_wavepay",
 			nameKey:  "name_wavepay",
 			label:    "WavePay",
-			phonePtr: &payment.PhoneWavePay,
-			namePtr:  &payment.AccountNameWave,
+			key:      key,
 		}, true
 	case "ayapay":
 		return providerConfig{
 			phoneKey: "phone_ayapay",
 			nameKey:  "name_ayapay",
 			label:    "AYA Pay",
-			phonePtr: &payment.PhoneAyaPay,
-			namePtr:  &payment.AccountNameAya,
+			key:      key,
 		}, true
 	default:
 		return providerConfig{}, false
@@ -183,8 +183,8 @@ func (h Handler) SetReferralBonusCommandHandler(ctx context.Context, b *bot.Bot,
 		return
 	}
 
-	// Update the in-memory variable
-	payment.ReferralBonusAmount = amount
+	// Update the in-memory variable (synchronized via the payment accessor)
+	payment.SetReferralBonusAmount(amount)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
@@ -311,7 +311,16 @@ func (h Handler) ListPromosCommandHandler(ctx context.Context, b *bot.Bot, updat
 	})
 }
 
-// DeletePromoCommandHandler handles /deletepromo <code> — deletes a promo code.
+// isPromoForeignKeyViolation reports whether err is a PostgreSQL foreign-key
+// violation (SQLSTATE 23503), which happens when a promo code is still
+// referenced by a purchase row.
+func isPromoForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+// DeletePromoCommandHandler handles /deletepromo <code> — deletes a promo code,
+// or retires it when it is already referenced by purchases.
 func (h Handler) DeletePromoCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if !h.adminOnly(ctx, b, update) {
 		return
@@ -327,18 +336,29 @@ func (h Handler) DeletePromoCommandHandler(ctx context.Context, b *bot.Bot, upda
 	}
 
 	code := args[1]
+	retired := false
 	err := h.promoCodeRepository.Delete(ctx, code)
+	if err != nil && isPromoForeignKeyViolation(err) {
+		// Still referenced by purchase rows: soft-retire so history stays intact.
+		err = h.promoCodeRepository.Retire(ctx, code, time.Now().Add(-time.Second))
+		retired = err == nil
+	}
 	if err != nil {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   fmt.Sprintf("❌ %v", err),
+			Text:   fmt.Sprintf("❌ %s", html.EscapeString(err.Error())),
 		})
 		return
 	}
 
+	message := fmt.Sprintf("✅ Promo code <code>%s</code> deleted successfully.", html.EscapeString(code))
+	if retired {
+		message = fmt.Sprintf("✅ Promo code <code>%s</code> is already used by purchases, so it was retired (no longer redeemable) instead of deleted.", html.EscapeString(code))
+	}
+
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
-		Text:      fmt.Sprintf("✅ Promo code <code>%s</code> deleted successfully.", code),
+		Text:      message,
 		ParseMode: models.ParseModeHTML,
 	})
 }
@@ -378,8 +398,14 @@ func (h Handler) SetPhoneCommandHandler(ctx context.Context, b *bot.Bot, update 
 		return
 	}
 
-	// Update in-memory
-	*cfg.phonePtr = phone
+	// Update in-memory (synchronized via the payment accessor)
+	if !payment.SetProviderPhone(cfg.key, phone) {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
@@ -421,7 +447,13 @@ func (h Handler) SetNameCommandHandler(ctx context.Context, b *bot.Bot, update *
 		return
 	}
 
-	*cfg.namePtr = name
+	if !payment.SetProviderAccountName(cfg.key, name) {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
@@ -443,23 +475,27 @@ func (h Handler) PhonesCommandHandler(ctx context.Context, b *bot.Bot, update *m
 		return fmt.Sprintf("<code>%s</code>", html.EscapeString(value))
 	}
 
-	formatProvider := func(cfg providerConfig) string {
+	formatProvider := func(label, providerKey string) string {
+		provider, ok := payment.LookupPaymentProvider(providerKey)
+		if !ok {
+			provider = payment.PaymentProvider{Key: providerKey, Label: label}
+		}
 		status := "❌ <i>disabled</i>"
-		if strings.TrimSpace(*cfg.phonePtr) != "" {
+		if strings.TrimSpace(provider.Phone) != "" {
 			status = "✅ <i>enabled</i>"
 		}
 		return fmt.Sprintf("<b>%s</b> — %s\nPhone: %s\nName: %s",
-			cfg.label,
+			label,
 			status,
-			formatValue(*cfg.phonePtr),
-			formatValue(*cfg.namePtr),
+			formatValue(provider.Phone),
+			formatValue(provider.AccountName),
 		)
 	}
 
 	text := fmt.Sprintf("📱 <b>Payment Receivers</b>\n\n%s\n\n%s\n\n%s\n\nUse /setphone and /setname to update. Use /disablephone to hide a provider from checkout.",
-		formatProvider(providerConfig{label: "KPay", phonePtr: &payment.PhoneKPay, namePtr: &payment.AccountNameKPay}),
-		formatProvider(providerConfig{label: "WavePay", phonePtr: &payment.PhoneWavePay, namePtr: &payment.AccountNameWave}),
-		formatProvider(providerConfig{label: "AYA Pay", phonePtr: &payment.PhoneAyaPay, namePtr: &payment.AccountNameAya}),
+		formatProvider("KPay", "kpay"),
+		formatProvider("WavePay", "wavepay"),
+		formatProvider("AYA Pay", "ayapay"),
 	)
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -502,8 +538,14 @@ func (h Handler) DisablePhoneCommandHandler(ctx context.Context, b *bot.Bot, upd
 		return
 	}
 
-	// Clear in-memory
-	*cfg.phonePtr = ""
+	// Clear in-memory (synchronized via the payment accessor)
+	if !payment.SetProviderPhone(cfg.key, "") {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
@@ -544,7 +586,13 @@ func (h Handler) DisableNameCommandHandler(ctx context.Context, b *bot.Bot, upda
 		return
 	}
 
-	*cfg.namePtr = ""
+	if !payment.SetProviderAccountName(cfg.key, "") {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   "❌ Unknown provider. Use: kpay, wave, or aya",
+		})
+		return
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:    update.Message.Chat.ID,
