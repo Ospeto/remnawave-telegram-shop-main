@@ -1,4 +1,4 @@
--- 000037_add_processing_at_to_purchase.down.sql
+-- 000038_add_processing_at_to_purchase.down.sql
 
 DROP INDEX IF EXISTS idx_purchase_stale_processing;
 

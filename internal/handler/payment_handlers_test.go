@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -107,6 +109,69 @@ func TestMiniAppURLWithPath(t *testing.T) {
 	got := miniAppURLWithPath("https://mini.example.com/base/?v=123", "plans")
 	if got != "https://mini.example.com/base/plans?v=123" {
 		t.Fatalf("miniAppURLWithPath() = %q, want path appended with query preserved", got)
+	}
+}
+
+func TestNotifyProcessingPurchaseSpeaksUpInsteadOfDroppingThePhoto(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+	b, captured := newTestBot(t)
+
+	customer := &database.Customer{ID: 10, TelegramID: 12345}
+	h := Handler{
+		translation:              tm,
+		testFindCustomer:         func(context.Context, int64) (*database.Customer, error) { return customer, nil },
+		testFindInFlightPurchase: func(context.Context, int64) (*database.Purchase, error) {
+			return &database.Purchase{ID: 77, CustomerID: 10, Status: database.PurchaseStatusProcessing}, nil
+		},
+	}
+
+	if !h.notifyProcessingPurchase(context.Background(), b, 12345, "en") {
+		t.Fatal("notifyProcessingPurchase() = false, want true for a purchase in processing")
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("telegram calls = %d, want exactly one notice", len(*captured))
+	}
+	text, _ := (*captured)[0].Body["text"].(string)
+	if text == "" || text == "mobile_pay_already_processing" {
+		t.Fatalf("notice text = %q, want resolved copy for the customer", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "processed") {
+		t.Fatalf("notice text = %q, want it to say the payment is already being processed", text)
+	}
+}
+
+func TestNotifyProcessingPurchaseStaysQuietForEveryOtherState(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+	b, captured := newTestBot(t)
+
+	customer := &database.Customer{ID: 10, TelegramID: 12345}
+	states := map[string]func(context.Context, int64) (*database.Purchase, error){
+		"no purchase": func(context.Context, int64) (*database.Purchase, error) { return nil, nil },
+		"awaiting screenshot": func(context.Context, int64) (*database.Purchase, error) {
+			return &database.Purchase{ID: 78, CustomerID: 10, Status: database.PurchaseStatusPending}, nil
+		},
+		"lookup failed": func(context.Context, int64) (*database.Purchase, error) {
+			return nil, errors.New("database is down")
+		},
+	}
+
+	for name, find := range states {
+		find := find
+		t.Run(name, func(t *testing.T) {
+			*captured = nil
+			h := Handler{
+				translation:              tm,
+				testFindCustomer:         func(context.Context, int64) (*database.Customer, error) { return customer, nil },
+				testFindInFlightPurchase: find,
+			}
+			if h.notifyProcessingPurchase(context.Background(), b, 12345, "en") {
+				t.Fatal("notifyProcessingPurchase() = true, want false")
+			}
+			if len(*captured) != 0 {
+				t.Fatalf("telegram calls = %d, want none outside the processing state", len(*captured))
+			}
+		})
 	}
 }
 

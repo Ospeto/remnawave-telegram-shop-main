@@ -48,6 +48,10 @@ type Handler struct {
 	testFindCustomer   func(ctx context.Context, telegramID int64) (*database.Customer, error)
 	testFindPurchase   func(ctx context.Context, purchaseID int64) (*database.Purchase, error)
 	testCancelPurchase func(ctx context.Context, purchaseID, customerID int64) (bool, error)
+
+	// Optional seam for the in-flight purchase lookup that explains why a second
+	// receipt photo was not verified (A9).
+	testFindInFlightPurchase func(ctx context.Context, customerID int64) (*database.Purchase, error)
 }
 
 func NewHandler(

@@ -412,6 +412,12 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		}
 	}
 	if !hasPending {
+		// A9: a purchase stuck in 'processing' used to look like no purchase at all
+		// here, so a customer who re-sent the screenshot was simply ignored. Say what
+		// is actually happening instead of dropping the photo on the floor.
+		if h.notifyProcessingPurchase(ctx, b, chatID, langCode) {
+			return
+		}
 		// No pending payment — ignore the photo
 		return
 	}
@@ -441,6 +447,49 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		}
 		h.sendErrorReply(ctx, b, chatID, langCode, "mobile_pay_failed_generic", nil)
 	}
+}
+
+// notifyProcessingPurchase answers a screenshot sent against a purchase that is
+// already being fulfilled, and reports whether it found one.
+//
+// A9: the alternative to this message is silence. A customer whose receipt is
+// mid-verification re-sends the photo because nothing appeared to happen, and
+// the old handler discarded it with no reply at all.
+func (h Handler) notifyProcessingPurchase(ctx context.Context, b *bot.Bot, chatID int64, langCode string) bool {
+	if b == nil || h.translation == nil {
+		return false
+	}
+
+	customer, err := h.findCustomerForCancellation(ctx, chatID)
+	if err != nil || customer == nil {
+		return false
+	}
+
+	purchase, err := h.findInFlightPurchase(ctx, customer.ID)
+	if err != nil || purchase == nil || purchase.Status != database.PurchaseStatusProcessing {
+		return false
+	}
+
+	if _, sendErr := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    chatID,
+		ParseMode: models.ParseModeHTML,
+		Text: h.translation.GetText(langCode, "mobile_pay_already_processing"),
+	}); sendErr != nil {
+		slog.Error("Error sending already-processing notice", "error", sendErr, "purchase_id", purchase.ID)
+	}
+	return true
+}
+
+// findInFlightPurchase resolves the customer's newest unfinished purchase,
+// honouring the test seam when it is set.
+func (h Handler) findInFlightPurchase(ctx context.Context, customerID int64) (*database.Purchase, error) {
+	if h.testFindInFlightPurchase != nil {
+		return h.testFindInFlightPurchase(ctx, customerID)
+	}
+	if h.purchaseRepository == nil {
+		return nil, nil
+	}
+	return h.purchaseRepository.FindLatestInFlightByCustomer(ctx, customerID)
 }
 
 // verifyMobilePayScreenshot downloads the receipt photo and runs OCR against the

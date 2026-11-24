@@ -1,4 +1,4 @@
--- 000037_add_processing_at_to_purchase.up.sql
+-- 000038_add_processing_at_to_purchase.up.sql
 -- A9: a purchase stuck in 'processing' was invisible forever because nothing
 -- recorded when the claim happened. processing_at lets the reaper decide which
 -- in-flight rows are stale.

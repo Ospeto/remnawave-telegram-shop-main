@@ -21,7 +21,8 @@ func pendingPurchaseGetMeHandler(t *testing.T, pending *database.Purchase, looku
 	handler.findCustomerByTelegramID = func(_ context.Context, telegramID int64) (*database.Customer, error) {
 		return &database.Customer{ID: 7, TelegramID: telegramID, Language: "en"}, nil
 	}
-	handler.getCachedSyncKeys = func(int64) ([]syncKeyStats, bool) { return nil, false }
+	// A warm cache keeps these tests off the bounded cold-cache wait (U4).
+	handler.getCachedSyncKeys = func(int64) ([]syncKeyStats, bool) { return nil, true }
 	handler.triggerSyncKeys = func(context.Context, int64, int64) {}
 	handler.findPendingPurchase = func(context.Context, int64) (*database.Purchase, error) {
 		return pending, lookupErr

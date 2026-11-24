@@ -11,6 +11,7 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans } from '../lib/plans';
+import { useSessionExpired } from '../lib/sessionExpiry';
 import { useUserProfile } from '../lib/userData';
 
 
@@ -30,7 +31,7 @@ export function Plans() {
     const [appliedPromoCode, setAppliedPromoCode] = useState('');
     const [loadError, setLoadError] = useState<string | null>(null);
     const [promoError, setPromoError] = useState<string | null>(null);
-    const [authExpired, setAuthExpired] = useState(false);
+    const [authExpired, setAuthExpired] = useSessionExpired();
     const promoRequestRef = useRef(0);
 
     const extendKeyId = searchParams.get('extend');

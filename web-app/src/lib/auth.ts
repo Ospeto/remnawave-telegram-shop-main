@@ -130,8 +130,61 @@ export async function fetchWithTelegramAuth(
     }
 
     clearTelegramSession();
-    response = await executeAuthorizedFetch(input, initData, init);
+
+    // U6: retrying with the same initData is pointless when Telegram has rotated
+    // or aged it out — the signature check fails identically. Ask the WebView for
+    // its current initData first, so a live session recovers without a reload;
+    // only when it cannot produce a different value does the caller fall through
+    // to the "Reopen Mini App" screen, which reloads the WebView and is what
+    // actually mints fresh initData.
+    const refreshedInitData = refreshTelegramInitData(initData);
+    response = await executeAuthorizedFetch(input, refreshedInitData ?? initData, init);
+    if (response.status === 401 && !refreshedInitData) {
+        notifySessionExpired();
+    }
     return response;
+}
+
+/** InitData the client is currently holding, as reported by the live WebView. */
+export function currentTelegramInitData(): string {
+    if (typeof window === 'undefined') return '';
+    return window.Telegram?.WebApp?.initData || '';
+}
+
+/**
+ * Re-reads initData from the WebView, re-initialising the Telegram SDK.
+ *
+ * Returns the fresh value only when it actually differs from `staleInitData`:
+ * retrying with an identical payload would be rejected the same way and would
+ * only hide the fact that a reload is required.
+ */
+export function refreshTelegramInitData(staleInitData: string): string | null {
+    if (typeof window === 'undefined') return null;
+
+    const webApp = window.Telegram?.WebApp;
+    try {
+        webApp?.ready?.();
+        webApp?.expand?.();
+    } catch {
+        // A WebView without a working SDK cannot refresh anything; the caller
+        // then offers the reload path.
+    }
+
+    const fresh = currentTelegramInitData();
+    if (!fresh || fresh === staleInitData) return null;
+    return fresh;
+}
+
+/** Event emitted when the session cannot be recovered without a reload. */
+export const TELEGRAM_SESSION_EXPIRED_EVENT = 'telegram-session-expired';
+
+function notifySessionExpired() {
+    if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+    try {
+        window.dispatchEvent(new CustomEvent(TELEGRAM_SESSION_EXPIRED_EVENT));
+    } catch {
+        // Event dispatch is best effort; the screens render from their own state.
+    }
 }
 
 export async function fetchJSONWithTelegramAuth<T>(

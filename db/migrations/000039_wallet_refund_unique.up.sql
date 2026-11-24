@@ -1,4 +1,4 @@
--- 000038_wallet_refund_unique.up.sql
+-- 000039_wallet_refund_unique.up.sql
 -- A10: a wallet refund must be refused by the database, not by luck of timing.
 -- One refund row per purchase is the invariant; the partial unique index makes a
 -- concurrent second refundCredit fail with 23505 instead of double-crediting.

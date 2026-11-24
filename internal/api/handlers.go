@@ -73,6 +73,13 @@ type ValidationResponse struct {
 	// walking into Checkout and hitting the 409 conflict, so a customer who
 	// uploaded nothing simply saw an empty shop. Nil when nothing is in flight.
 	PendingPurchase *PendingPurchaseInfo `json:"pending_purchase,omitempty"`
+	// StatsPending reports that the traffic snapshot could not be read before
+	// this response was built, so traffic figures may still read as zero.
+	//
+	// U4: a cold cache used to render "0 GB used" with no way to refresh, and the
+	// zeros persisted until the customer left the screen. The client uses this
+	// flag to re-read the profile once instead of showing stale zeros.
+	StatsPending bool `json:"stats_pending,omitempty"`
 }
 
 // PendingPurchaseInfo is the Mini App view of an order that is still in flight.
@@ -1536,6 +1543,10 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if !hasCachedStats {
 		h.requestSyncKeys(r.Context(), customer.ID, customer.TelegramID)
 	}
+	// U4: the async refresh asked for above lands after this response is written,
+	// so the figures below can only be the local allocation. Say so, instead of
+	// presenting an unknown usage figure as a measured zero.
+	statsPending := !hasCachedStats && !h.waitForFreshStats(r.Context(), customer.ID)
 	statsMap := make(map[int64]payment.KeyStats, len(cachedStats))
 	for _, sk := range cachedStats {
 		statsMap[sk.ID] = sk
@@ -1652,6 +1663,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		TrialEligible:            trialEligible,
 		TrialDays:                config.TrialDays(),
 		PendingPurchase:          pendingPurchaseInfo(customer, pendingPurchase, h.translation),
+		StatsPending:             statsPending,
 		ReferralStatsUnavailable: referralStatsUnavailable,
 		ReferralBonusAmount:      payment.GetReferralBonusAmount(),
 		BotURL:                   config.BotURL(),
@@ -2965,6 +2977,15 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
+	// U3: the wallet shows money the customer has already committed, so the
+	// unfinished order travels with this response instead of costing the screen a
+	// second profile round trip.
+	pendingPurchase, pendingErr := h.pendingPurchaseByCustomer(r.Context(), customer.ID)
+	if pendingErr != nil {
+		slog.Warn("Failed to load the customer's pending purchase", "customer_id", customer.ID, "error", pendingErr)
+		pendingPurchase = nil
+	}
+
 	resp := map[string]interface{}{
 		"balance":                    balance,
 		"currency":                   config.Currency(),
@@ -2973,6 +2994,7 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"bot_url":                    config.BotURL(),
 		"referral_bonus_amount":      payment.GetReferralBonusAmount(),
 		"referral_stats_unavailable": referralStatsUnavailable,
+		"pending_purchase":           pendingPurchaseInfo(customer, pendingPurchase, h.translation),
 	}
 	if !referralStatsUnavailable {
 		resp["referral_count"] = referralCount

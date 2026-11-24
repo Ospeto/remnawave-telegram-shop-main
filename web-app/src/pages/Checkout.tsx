@@ -13,6 +13,8 @@ import { buildTelegramStartUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
+import { prepareReceiptUpload } from '../lib/imageUpload';
+import { useSessionExpired } from '../lib/sessionExpiry';
 import { useUserProfile } from '../lib/userData';
 
 interface PaymentProvider {
@@ -98,7 +100,7 @@ export function Checkout() {
     const [pendingPaymentNotice, setPendingPaymentNotice] = useState<string | null>(null);
     const [cancellingPayment, setCancellingPayment] = useState(false);
     const [cancelPaymentError, setCancelPaymentError] = useState<string | null>(null);
-    const [authExpired, setAuthExpired] = useState(false);
+    const [authExpired, setAuthExpired] = useSessionExpired();
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const purchaseIntentRef = useRef<{ action: CheckoutAction | null; key: string | null }>({ action: null, key: null });
@@ -472,8 +474,12 @@ export function Checkout() {
 
         setUploading(true);
         setVerificationResult(null);
+
+        // A12: shrink a camera-sized receipt before spending the customer's
+        // mobile data on it. A failed preparation falls back to the original.
+        const prepared = await prepareReceiptUpload(file);
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('file', prepared.file);
 
         try {
             const res = await fetchWithTelegramAuth(`/api/upload_screenshot?id=${purchase.purchase_id}`, initData, {
