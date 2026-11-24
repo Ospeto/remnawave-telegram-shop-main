@@ -2,7 +2,10 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"time"
+
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/remnawave"
@@ -41,26 +44,73 @@ func NewSyncService(client *remnawave.Client, customerRepository *database.Custo
 	}
 }
 
+// Result reports what one sync pass changed. U10: the command used to answer a
+// bare "Users synced" even when the panel read had failed, so an admin could not
+// tell a clean run from a silent one.
+type Result struct {
+	// RemoteUsers is how many panel users the snapshot contained.
+	RemoteUsers int
+	// Added, Updated and Deleted count customers and subscription keys written.
+	Added   int
+	Updated int
+	Deleted int
+	// Failed counts operations that were attempted and rejected.
+	Failed int
+	// Errors collects the failure descriptions, one per failed step.
+	Errors []string
+	// Duration is the wall-clock time the pass took.
+	Duration time.Duration
+}
+
+// recordFailure counts one failed step and keeps its description.
+func (r *Result) recordFailure(format string, args ...any) {
+	r.Failed++
+	r.Errors = append(r.Errors, fmt.Sprintf(format, args...))
+}
+
+// OK reports whether the pass finished without a failed step.
+func (r Result) OK() bool {
+	return r.Failed == 0
+}
+
 func (s SyncService) Sync() {
+	_ = s.SyncWithContext(context.Background())
+}
+
+// SyncWithContext runs the sync and reports what it did. Callers that want to
+// show an admin the outcome use this; the cron-free legacy path keeps Sync().
+func (s SyncService) SyncWithContext(ctx context.Context) Result {
+	startedAt := time.Now()
+
+	result := s.sync(ctx, Result{})
+	result.Duration = time.Since(startedAt)
+
+	return result
+}
+
+func (s SyncService) sync(ctx context.Context, result Result) Result {
 	slog.Info("Starting sync")
-	ctx := context.Background()
 	var telegramIDs []int64
 	telegramIDToIndex := make(map[int64]int)
 	var mappedUsers []database.Customer
 	users, err := s.client.GetUsers(ctx)
 	if err != nil {
 		slog.Error("Error while getting users from remnawave", "error", err)
-		return
+		result.recordFailure("read panel users: %v", err)
+		return result
 	}
 	if users == nil {
 		slog.Warn("Remnawave returned no user list during sync")
-		return
+		result.recordFailure("read panel users: remnawave returned no user list")
+		return result
 	}
+
+	result.RemoteUsers = len(*users)
 
 	if len(*users) == 0 {
 		slog.Warn("No users found in remnawave")
 		slog.Info("Synchronization completed")
-		return
+		return result
 	}
 
 	for _, user := range *users {
@@ -106,15 +156,17 @@ func (s SyncService) Sync() {
 
 	if s.customerRepository == nil {
 		slog.Error("Customer repository is unavailable during sync")
-		return
+		result.recordFailure("customer repository is unavailable")
+		return result
 	}
 
 	var existingCustomers []database.Customer
 	if len(telegramIDs) > 0 {
 		existingCustomers, err = s.customerRepository.FindByTelegramIds(ctx, telegramIDs)
 		if err != nil {
-			slog.Error("Error while searching users by telegram ids")
-			return
+			slog.Error("Error while searching users by telegram ids", "error", err)
+			result.recordFailure("read local customers: %v", err)
+			return result
 		}
 	}
 	existingMap := make(map[int64]database.Customer)
@@ -126,7 +178,7 @@ func (s SyncService) Sync() {
 
 	// Reconcile deleted keys only for the customers this snapshot actually covers:
 	// a customer missing from the read is never treated as gone.
-	s.markMissingRemoteKeysDeleted(ctx, *users, existingCustomerIDs)
+	result.Deleted = s.markMissingRemoteKeysDeleted(ctx, *users, existingCustomerIDs, &result)
 
 	var toCreate []database.Customer
 	var toUpdate []database.Customer
@@ -148,7 +200,8 @@ func (s SyncService) Sync() {
 	tx, err := s.customerRepository.BeginTx(ctx)
 	if err != nil {
 		slog.Error("Error while starting sync transaction", "error", err)
-		return
+		result.recordFailure("begin sync transaction: %v", err)
+		return result
 	}
 	defer func() {
 		_ = tx.Rollback(ctx)
@@ -156,37 +209,54 @@ func (s SyncService) Sync() {
 
 	if len(toCreate) > 0 {
 		if err := s.customerRepository.CreateBatchTx(ctx, tx, toCreate); err != nil {
-			slog.Error("Error while creating users")
-			return
+			slog.Error("Error while creating users", "error", err)
+			result.recordFailure("create %d customers: %v", len(toCreate), err)
+			return result
 		} else {
+			result.Added = len(toCreate)
 			slog.Info("Created clients", "count", len(toCreate))
 		}
 	}
 
 	if len(toUpdate) > 0 {
 		if err := s.customerRepository.UpdateBatchTx(ctx, tx, toUpdate); err != nil {
-			slog.Error("Error while updating users")
-			return
+			slog.Error("Error while updating users", "error", err)
+			result.recordFailure("update %d customers: %v", len(toUpdate), err)
+			return result
 		} else {
+			result.Updated = len(toUpdate)
 			slog.Info("Updated clients", "count", len(toUpdate))
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		slog.Error("Error while committing sync transaction", "error", err)
-		return
+		result.recordFailure("commit sync transaction: %v", err)
+		// The batch writes did not land, so their counts are not achievements.
+		result.Added = 0
+		result.Updated = 0
+		return result
 	}
-	slog.Info("Synchronization completed")
+	slog.Info("Synchronization completed",
+		"remote_users", result.RemoteUsers,
+		"added", result.Added,
+		"updated", result.Updated,
+		"deleted", result.Deleted,
+		"failed", result.Failed,
+	)
+	return result
 }
 
-func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []remapi.User, customerIDs []int64) {
+// markMissingRemoteKeysDeleted reconciles local keys against the panel snapshot
+// and returns how many keys it marked deleted.
+func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []remapi.User, customerIDs []int64, result *Result) int {
 	if s.subscriptionKeys == nil {
-		return
+		return 0
 	}
 	if len(customerIDs) == 0 {
 		// No locally known customer was observed in this snapshot: nothing is in
 		// scope, so nothing may be deleted.
-		return
+		return 0
 	}
 
 	remoteUUIDs := make([]uuid.UUID, 0, len(users))
@@ -198,15 +268,22 @@ func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []r
 	}
 	if len(users) > 0 && len(remoteUUIDs) == 0 {
 		slog.Error("Remnawave sync returned users without UUIDs; skipping deleted key reconciliation")
-		return
+		if result != nil {
+			result.recordFailure("reconcile deleted keys: panel users carried no UUIDs")
+		}
+		return 0
 	}
 
 	deletedCount, err := s.subscriptionKeys.MarkMissingRemoteKeysDeletedForCustomers(ctx, customerIDs, remoteUUIDs)
 	if err != nil {
 		slog.Error("Error while marking missing remote subscription keys deleted", "error", err, "customers", len(customerIDs))
-		return
+		if result != nil {
+			result.recordFailure("reconcile deleted keys: %v", err)
+		}
+		return 0
 	}
 	if deletedCount > 0 {
 		slog.Info("Marked local subscription keys deleted after Remnawave sync", "count", deletedCount, "customers", len(customerIDs))
 	}
+	return int(deletedCount)
 }

@@ -144,32 +144,37 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	callbackQuery := parseCallbackData(update.CallbackQuery.Data)
 	planIdx, err := strconv.Atoi(callbackQuery["plan"])
 	if err != nil {
-		slog.Error("Error getting plan index from query", "error", err)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, update.CallbackQuery.From.LanguageCode,
+			translationKeyGenericError, err)
 		return
 	}
 
 	if planIdx < 0 {
-		slog.Error("Invalid plan index (negative)", "index", planIdx)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, update.CallbackQuery.From.LanguageCode,
+			translationKeyGenericError, fmt.Errorf("invalid plan index %d", planIdx))
 		return
 	}
 
 	plan := config.PlanByIndex(planIdx)
 	if plan == nil {
-		slog.Error("Invalid plan index", "index", planIdx)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, update.CallbackQuery.From.LanguageCode,
+			translationKeyGenericError, fmt.Errorf("plan index %d is no longer available", planIdx))
 		return
 	}
 
 	invoiceType := database.InvoiceType(callbackQuery["invoiceType"])
 
-	dbCtx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second*10)
 	defer cancel()
 	customer, err := h.customerRepository.FindByTelegramId(dbCtx, callback.Chat.ID)
 	if err != nil {
-		slog.Error("Error finding customer", "error", err)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, update.CallbackQuery.From.LanguageCode,
+			translationKeyGenericError, err)
 		return
 	}
 	if customer == nil {
-		slog.Error("customer not exist", "chatID", callback.Chat.ID, "error", err)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, update.CallbackQuery.From.LanguageCode,
+			translationKeyGenericError, fmt.Errorf("no customer row for chat %d", callback.Chat.ID))
 		return
 	}
 
@@ -182,6 +187,8 @@ func (h Handler) PaymentCallbackHandler(ctx context.Context, b *bot.Bot, update 
 		h.handleMobileBankingPayment(ctxWithUsername, b, callback, plan, customer, planIdx, langCode)
 	default:
 		slog.Warn("Rejected unavailable payment method callback", "invoice_type", invoiceType, "telegram_id", callback.Chat.ID)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, langCode, translationKeyGenericError,
+			fmt.Errorf("payment method %q is not available", invoiceType))
 	}
 }
 
@@ -195,7 +202,9 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 			h.handlePendingMobileBankingPayment(ctx, b, callback, pendingErr.Purchase, planIdx, langCode)
 			return
 		}
-		slog.Error("Error creating mobile banking purchase", "error", err)
+		// U1: a failed purchase used to log and return, leaving the customer on the
+		// plan keyboard with no idea whether money moved. Answer them instead.
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, langCode, translationKeyPaymentStart, err)
 		return
 	}
 
@@ -203,7 +212,7 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 	h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
 
 	// Instructions show resolved amount (wholesale for resellers when configured).
-	h.editMobileBankingInstructions(ctx, b, callback, amount, planIdx, langCode, false)
+	h.editMobileBankingInstructions(ctx, b, callback, amount, planIdx, langCode, false, purchaseId)
 }
 
 func (h Handler) handlePendingMobileBankingPayment(ctx context.Context, b *bot.Bot, callback *models.Message, pending *database.Purchase, planIdx int, langCode string) {
@@ -221,14 +230,14 @@ func (h Handler) handlePendingMobileBankingPayment(ctx context.Context, b *bot.B
 		MessageID:   callback.ID,
 		ParseMode:   models.ParseModeHTML,
 		Text:        text,
-		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), true),
+		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), true, pending.ID),
 	})
 	if err != nil {
 		slog.Error("Error sending pending mobile pay instructions", "error", err)
 	}
 }
 
-func (h Handler) editMobileBankingInstructions(ctx context.Context, b *bot.Bot, callback *models.Message, amount int, planIdx int, langCode string, includeChangePlan bool) {
+func (h Handler) editMobileBankingInstructions(ctx context.Context, b *bot.Bot, callback *models.Message, amount int, planIdx int, langCode string, includeChangePlan bool, purchaseID int64) {
 	instructions := fmt.Sprintf(
 		h.translation.GetText(langCode, "mobile_pay_instructions"),
 		amount,
@@ -240,7 +249,7 @@ func (h Handler) editMobileBankingInstructions(ctx context.Context, b *bot.Bot, 
 		MessageID:   callback.ID,
 		ParseMode:   models.ParseModeHTML,
 		Text:        instructions,
-		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), includeChangePlan),
+		ReplyMarkup: h.buildMobilePayKeyboard(langCode, planIdx, config.GetMiniAppURL(), includeChangePlan, purchaseID),
 	})
 	if err != nil {
 		slog.Error("Error sending mobile pay instructions", "error", err)
@@ -255,9 +264,21 @@ func (h Handler) mobilePayInstructions(langCode string, amount int) string {
 	)
 }
 
-func (h Handler) buildMobilePayKeyboard(langCode string, planIdx int, miniAppURL string, includeChangePlan bool) models.InlineKeyboardMarkup {
+// buildMobilePayKeyboard renders the controls under a payment instruction
+// message.
+//
+// U2: cancellation used to be a WebApp button that dropped the customer into the
+// Mini App, so the only way to abandon a pending screenshot payment was to leave
+// the chat. The first row is now a real in-chat cancel callback that asks for
+// confirmation before releasing the purchase.
+func (h Handler) buildMobilePayKeyboard(langCode string, planIdx int, miniAppURL string, includeChangePlan bool, purchaseID int64) models.InlineKeyboardMarkup {
 	inlineKeyboard := make([][]models.InlineKeyboardButton, 0, 2)
-	if includeChangePlan {
+	if includeChangePlan && purchaseID > 0 {
+		inlineKeyboard = append(inlineKeyboard, []models.InlineKeyboardButton{{
+			Text:         h.translation.GetText(langCode, "cancel_pending_button"),
+			CallbackData: fmt.Sprintf("%s?id=%d", CallbackCancelPendingPurchase, purchaseID),
+		}})
+	} else if includeChangePlan {
 		if plansURL := miniAppURLWithPath(miniAppURL, "/plans"); plansURL != "" {
 			inlineKeyboard = append(inlineKeyboard, []models.InlineKeyboardButton{{
 				Text: h.translation.GetText(langCode, "mobile_pay_cancel_change_plan_button"),
@@ -401,20 +422,44 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		Text:   h.translation.GetText(langCode, "mobile_pay_verifying"),
 	})
 
+	// Get the highest resolution photo
+	photo := update.Message.Photo[len(update.Message.Photo)-1]
+
+	// P8: hand the slow part to the verification pool instead of holding this
+	// Telegram worker for up to a minute.
+	purchaseIDValue := int64(purchaseID)
+	submitted := screenshotVerificationPool().submit(ctx, func(jobCtx context.Context) {
+		h.verifyMobilePayScreenshot(jobCtx, b, chatID, langCode, purchaseIDValue, pendingPurchase, photo.FileID, verifyMsg)
+	})
+	if !submitted {
+		slog.Warn("Screenshot verification queue is full; asking customer to retry", "telegram_id", chatID)
+		if verifyMsg != nil {
+			_, _ = b.DeleteMessage(context.WithoutCancel(ctx), &bot.DeleteMessageParams{
+				ChatID:    chatID,
+				MessageID: verifyMsg.ID,
+			})
+		}
+		h.sendErrorReply(ctx, b, chatID, langCode, "mobile_pay_failed_generic", nil)
+	}
+}
+
+// verifyMobilePayScreenshot downloads the receipt photo and runs OCR against the
+// pending purchase. It runs on the verification pool, so jobCtx outlives the
+// Telegram update that queued it.
+func (h Handler) verifyMobilePayScreenshot(jobCtx context.Context, b *bot.Bot, chatID int64, langCode string, purchaseID int64, pendingPurchase *database.Purchase, fileID string, verifyMsg *models.Message) {
+	ctx := jobCtx
+
 	defer func() {
 		// Delete the "verifying" message later
 		if verifyMsg != nil {
-			_, _ = b.DeleteMessage(context.Background(), &bot.DeleteMessageParams{
+			_, _ = b.DeleteMessage(context.WithoutCancel(ctx), &bot.DeleteMessageParams{
 				ChatID:    chatID,
 				MessageID: verifyMsg.ID,
 			})
 		}
 	}()
 
-	// Get the highest resolution photo
-	photo := update.Message.Photo[len(update.Message.Photo)-1]
-
-	imageBytes, mimeType, err := h.downloadTelegramFile(ctx, b, photo.FileID)
+	imageBytes, mimeType, err := h.downloadTelegramFile(ctx, b, fileID)
 	if err != nil {
 		slog.Error("Error downloading telegram file", "error", err)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
@@ -422,10 +467,10 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	}
 
 	// Verify the payment
-	verifyCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	verifyCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	result, err := h.paymentService.VerifyMobilePayment(verifyCtx, int64(purchaseID), imageBytes, mimeType)
+	result, err := h.paymentService.VerifyMobilePayment(verifyCtx, purchaseID, imageBytes, mimeType)
 	if err != nil {
 		slog.Error("Error verifying mobile payment", "error", err)
 		h.sendMobilePayResult(ctx, b, chatID, langCode, "mobile_pay_failed_generic", 0)
@@ -442,7 +487,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 		return
 	}
 
-	purchase, pErr := h.purchaseRepository.FindById(ctx, int64(purchaseID))
+	purchase, pErr := h.purchaseRepository.FindById(ctx, purchaseID)
 	if pErr == nil && purchase != nil && purchase.Status != database.PurchaseStatusPending && purchase.Status != database.PurchaseStatusNew {
 		h.mobilePayCache.Delete(chatID)
 	}
@@ -450,7 +495,7 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	// For amount mismatch, pass the expected purchase amount
 	var expectedAmount int
 	if result.ReasonKey == "mobile_pay_failed_amount" {
-		purchase, pErr := h.purchaseRepository.FindById(ctx, int64(purchaseID))
+		purchase, pErr := h.purchaseRepository.FindById(ctx, purchaseID)
 		if pErr == nil && purchase != nil {
 			expectedAmount = int(purchase.Amount)
 		}

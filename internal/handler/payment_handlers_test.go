@@ -43,11 +43,34 @@ func TestMobilePayResultTextUsesProviderAuthTranslation(t *testing.T) {
 	}
 }
 
-func TestBuildMobilePayKeyboardAddsChangePlanWebAppButton(t *testing.T) {
+func TestBuildMobilePayKeyboardAddsInChatCancelButton(t *testing.T) {
 	tm := loadHandlerTestTranslations(t)
 	h := Handler{translation: tm}
 
-	markup := h.buildMobilePayKeyboard("en", 2, "https://mini.example.com/app?source=bot", true)
+	markup := h.buildMobilePayKeyboard("en", 2, "https://mini.example.com/app?source=bot", true, 77)
+
+	if len(markup.InlineKeyboard) != 2 {
+		t.Fatalf("buildMobilePayKeyboard() rows = %d, want 2", len(markup.InlineKeyboard))
+	}
+	cancel := markup.InlineKeyboard[0][0]
+	if cancel.CallbackData != "cancel_pending_purchase?id=77" {
+		t.Fatalf("cancel callback = %q, want an in-chat cancel callback for purchase 77", cancel.CallbackData)
+	}
+	if cancel.WebApp != nil {
+		t.Fatalf("cancel button = %+v, want a callback button, not a WebApp that leaves the chat", cancel)
+	}
+
+	back := markup.InlineKeyboard[1][0]
+	if back.CallbackData != "sell?plan=2" {
+		t.Fatalf("back callback = %q, want sell?plan=2", back.CallbackData)
+	}
+}
+
+func TestBuildMobilePayKeyboardFallsBackToWebAppWithoutPurchaseID(t *testing.T) {
+	tm := loadHandlerTestTranslations(t)
+	h := Handler{translation: tm}
+
+	markup := h.buildMobilePayKeyboard("en", 2, "https://mini.example.com/app?source=bot", true, 0)
 
 	if len(markup.InlineKeyboard) != 2 {
 		t.Fatalf("buildMobilePayKeyboard() rows = %d, want 2", len(markup.InlineKeyboard))
@@ -59,27 +82,24 @@ func TestBuildMobilePayKeyboardAddsChangePlanWebAppButton(t *testing.T) {
 	if changePlan.WebApp.URL != "https://mini.example.com/app/plans?source=bot" {
 		t.Fatalf("change-plan URL = %q, want plans URL", changePlan.WebApp.URL)
 	}
-	if !strings.Contains(strings.ToLower(changePlan.Text), "change") {
-		t.Fatalf("change-plan text = %q, want change-plan copy", changePlan.Text)
-	}
-
-	back := markup.InlineKeyboard[1][0]
-	if back.CallbackData != "sell?plan=2" {
-		t.Fatalf("back callback = %q, want sell?plan=2", back.CallbackData)
-	}
 }
 
-func TestBuildMobilePayKeyboardFallsBackWithoutMiniAppURL(t *testing.T) {
+func TestBuildMobilePayKeyboardCancelWorksWithoutMiniAppURL(t *testing.T) {
 	tm := loadHandlerTestTranslations(t)
 	h := Handler{translation: tm}
 
-	markup := h.buildMobilePayKeyboard("en", 4, "", true)
+	// No Mini App configured: cancellation must still be reachable, because the
+	// in-chat callback needs no WebApp.
+	markup := h.buildMobilePayKeyboard("en", 4, "", true, 88)
 
-	if len(markup.InlineKeyboard) != 1 {
-		t.Fatalf("buildMobilePayKeyboard() rows = %d, want only back row", len(markup.InlineKeyboard))
+	if len(markup.InlineKeyboard) != 2 {
+		t.Fatalf("buildMobilePayKeyboard() rows = %d, want cancel + back", len(markup.InlineKeyboard))
 	}
-	if markup.InlineKeyboard[0][0].CallbackData != "sell?plan=4" {
-		t.Fatalf("back callback = %q, want sell?plan=4", markup.InlineKeyboard[0][0].CallbackData)
+	if markup.InlineKeyboard[0][0].CallbackData != "cancel_pending_purchase?id=88" {
+		t.Fatalf("cancel callback = %q, want the purchase id", markup.InlineKeyboard[0][0].CallbackData)
+	}
+	if markup.InlineKeyboard[1][0].CallbackData != "sell?plan=4" {
+		t.Fatalf("back callback = %q, want sell?plan=4", markup.InlineKeyboard[1][0].CallbackData)
 	}
 }
 

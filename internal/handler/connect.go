@@ -19,17 +19,42 @@ import (
 func (h Handler) ConnectCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	customer, err := h.customerRepository.FindByTelegramId(ctx, update.Message.Chat.ID)
 	if err != nil {
-		slog.Error("Error finding customer", "error", err)
+		// U9: the flow used to log and return, so the customer saw nothing after
+		// tapping a button that clearly did something.
+		h.sendErrorReply(ctx, b, update.Message.Chat.ID, resolveEffectiveLanguage(nil, update.Message.From.LanguageCode),
+			translationKeyGenericError, err)
 		return
 	}
 	if customer == nil {
-		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(update.Message.Chat.ID), "error", err)
+		h.sendErrorReply(ctx, b, update.Message.Chat.ID, resolveEffectiveLanguage(nil, update.Message.From.LanguageCode),
+			translationKeyGenericError, fmt.Errorf("no customer row for telegram id %s", utils.MaskHalfInt64(update.Message.Chat.ID)))
+		h.sendMissingCustomerHint(ctx, b, update.Message.Chat.ID, update.Message.From.LanguageCode)
 		return
 	}
 	h.applyCanonicalConnectState(ctx, customer)
 
 	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
 	h.sendConnectionMessage(ctx, b, update.Message.Chat.ID, customer, langCode)
+}
+
+// sendMissingCustomerHint follows a "we could not find your account" error with
+// the one action that fixes it: starting the bot, which creates the customer row.
+func (h Handler) sendMissingCustomerHint(ctx context.Context, b *bot.Bot, chatID int64, telegramLang string) {
+	if b == nil {
+		return
+	}
+	langCode := resolveEffectiveLanguage(nil, telegramLang)
+	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID: chatID,
+		Text:   h.translation.GetText(langCode, "connect_no_customer_hint"),
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}},
+			},
+		},
+	}); err != nil {
+		slog.Error("Error sending missing-customer hint", "error", err)
+	}
 }
 
 func (h Handler) sendConnectionMessage(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
@@ -79,11 +104,13 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 
 	customer, err := h.customerRepository.FindByTelegramId(ctx, callback.Chat.ID)
 	if err != nil {
-		slog.Error("Error finding customer", "error", err)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, resolveEffectiveLanguage(nil, update.CallbackQuery.From.LanguageCode),
+			translationKeyGenericError, err)
 		return
 	}
 	if customer == nil {
-		slog.Error("customer not exist", "telegramId", utils.MaskHalfInt64(callback.Chat.ID), "error", err)
+		h.editErrorReply(ctx, b, callback.Chat.ID, callback.ID, resolveEffectiveLanguage(nil, update.CallbackQuery.From.LanguageCode),
+			"connect_no_customer", fmt.Errorf("no customer row for telegram id %s", utils.MaskHalfInt64(callback.Chat.ID)))
 		return
 	}
 	h.applyCanonicalConnectState(ctx, customer)
@@ -128,6 +155,19 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	}
 }
 
+// formatExpiryDateTime renders an expiry in the customer's own date convention.
+//
+// U9: the connect screen hardcoded 02.01.2006 15:04 for every language, so an
+// English reader saw "03.04.2026" and had to guess whether that was March or
+// April. English now gets an unambiguous month name; Myanmar keeps the day-first
+// numeric form its readers expect.
+func formatExpiryDateTime(expireAt time.Time, langCode string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(langCode)), "en") {
+		return expireAt.Format("Jan 2, 2006 15:04")
+	}
+	return expireAt.Format("02.01.2006 15:04")
+}
+
 func buildConnectText(customer *database.Customer, langCode string) string {
 	var info strings.Builder
 
@@ -137,7 +177,9 @@ func buildConnectText(customer *database.Customer, langCode string) string {
 		currentTime := time.Now()
 
 		if currentTime.Before(*customer.ExpireAt) {
-			formattedDate := customer.ExpireAt.Format("02.01.2006 15:04")
+			// U9: the expiry used to be rendered with one hardcoded German-style
+			// layout (02.01.2006), which an English reader parses as month-first.
+			formattedDate := formatExpiryDateTime(*customer.ExpireAt, langCode)
 
 			subscriptionActiveText := tm.GetText(langCode, "subscription_active")
 			info.WriteString(fmt.Sprintf(subscriptionActiveText, formattedDate))
