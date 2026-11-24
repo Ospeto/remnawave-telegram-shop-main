@@ -60,6 +60,10 @@ var (
 	ErrTrialUnavailable = errors.New("trial is unavailable")
 	// ErrTrialAlreadyUsed means the customer has already consumed a trial or has prior subscription history.
 	ErrTrialAlreadyUsed = errors.New("trial already used")
+	// ErrExistingPanelUser means the panel already holds a Remnawave user for this
+	// Telegram id (for example a paid key), so a trial must not be minted on top of
+	// it. Distinct from ErrTrialAlreadyUsed: local history looks clean, the panel does not.
+	ErrExistingPanelUser = errors.New("customer already has a panel user")
 	// ErrCustomerNotFound means the customer record does not exist.
 	ErrCustomerNotFound = errors.New("customer not found")
 	// ErrSubscriptionKeyUnavailable means an extension target is no longer a
@@ -1144,9 +1148,9 @@ func (s *PaymentService) restorePurchaseState(ctx context.Context, purchaseID in
 	}
 }
 
-// applyWalletRefundIfNeeded is the A7 sequential best-effort duplicate-refund
-// guard. When alreadyRefunded is true, creditFn is not called. This is NOT fully
-// concurrent-safe without an atomic DB uniqueness constraint on refund rows.
+// applyWalletRefundIfNeeded is the sequential duplicate-refund guard used when no
+// wallet ledger is configured. When alreadyRefunded is true, creditFn is not
+// called. Production paths are additionally guarded by the database (A10).
 func applyWalletRefundIfNeeded(alreadyRefunded bool, creditFn func() error) (skipped bool, err error) {
 	if alreadyRefunded {
 		return true, nil
@@ -1157,55 +1161,121 @@ func applyWalletRefundIfNeeded(alreadyRefunded bool, creditFn func() error) (ski
 	return false, nil
 }
 
+// walletRefundTx is the transaction surface a wallet refund needs.
+type walletRefundTx interface {
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+}
+
+// walletRefundStore is the narrow persistence surface refundWalletCharge needs.
+type walletRefundStore interface {
+	BeginTx(ctx context.Context) (walletRefundTx, error)
+	ExistsRefund(ctx context.Context, purchaseID int64) (bool, error)
+	LogRefund(ctx context.Context, tx walletRefundTx, customerID int64, amount float64, purchaseID int64, description string) error
+	AddBalance(ctx context.Context, tx walletRefundTx, customerID int64, amount float64) error
+}
+
+// repositoryWalletRefundStore is the production walletRefundStore.
+type repositoryWalletRefundStore struct {
+	customerRepo *database.CustomerRepository
+	walletTxRepo *database.WalletTransactionRepository
+}
+
+func (s repositoryWalletRefundStore) BeginTx(ctx context.Context) (walletRefundTx, error) {
+	return s.customerRepo.BeginTx(ctx)
+}
+
+func (s repositoryWalletRefundStore) ExistsRefund(ctx context.Context, purchaseID int64) (bool, error) {
+	if s.walletTxRepo == nil {
+		return false, nil
+	}
+	return s.walletTxRepo.ExistsByPurchaseIDAndType(ctx, purchaseID, database.WalletTransactionTypeRefund)
+}
+
+func (s repositoryWalletRefundStore) LogRefund(ctx context.Context, tx walletRefundTx, customerID int64, amount float64, purchaseID int64, description string) error {
+	if s.walletTxRepo == nil {
+		return nil
+	}
+
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet refund transaction has unexpected type %T", tx)
+	}
+
+	_, err := s.walletTxRepo.CreateTx(ctx, pgxTx, &database.WalletTransaction{
+		CustomerID:  customerID,
+		Amount:      amount,
+		Type:        database.WalletTransactionTypeRefund,
+		PurchaseID:  &purchaseID,
+		Description: description,
+	})
+	return err
+}
+
+func (s repositoryWalletRefundStore) AddBalance(ctx context.Context, tx walletRefundTx, customerID int64, amount float64) error {
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet refund transaction has unexpected type %T", tx)
+	}
+	return s.customerRepo.AddBalanceTx(ctx, pgxTx, customerID, amount)
+}
+
+// refundWalletCharge credits a customer's wallet back for a purchase.
+//
+// A10: double-refund safety is enforced by the database. Migration
+// 000038_wallet_refund_unique creates a partial unique index on
+// wallet_transaction (purchase_id) WHERE type = 'refund', so a competing or
+// repeated refund attempt fails inside the transaction and rolls the balance
+// credit back with it. The ledger insert is intentionally issued before the
+// balance credit so the index decides first.
 func (s *PaymentService) refundWalletCharge(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error {
+	return s.refundWalletChargeWith(ctx, repositoryWalletRefundStore{
+		customerRepo: s.customerRepository,
+		walletTxRepo: s.walletTxRepo,
+	}, customerID, amount, purchaseID, description)
+}
+
+func (s *PaymentService) refundWalletChargeWith(ctx context.Context, store walletRefundStore, customerID int64, amount float64, purchaseID int64, description string) error {
 	refundCtx := context.WithoutCancel(ctx)
 
-	// A7: best-effort sequential guard — skip if a refund was already logged.
-	// Concurrent double-refund is still possible without atomic DB protection.
-	alreadyRefunded := false
-	if s.walletTxRepo != nil {
-		already, err := s.walletTxRepo.ExistsByPurchaseIDAndType(refundCtx, purchaseID, database.WalletTransactionTypeRefund)
-		if err != nil {
-			return fmt.Errorf("failed to check existing wallet refund: %w", err)
-		}
-		alreadyRefunded = already
-	}
-
-	skipped, err := applyWalletRefundIfNeeded(alreadyRefunded, func() error {
-		dbTx, err := s.customerRepository.BeginTx(refundCtx)
-		if err != nil {
-			return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
-		}
-		defer func() {
-			_ = dbTx.Rollback(refundCtx)
-		}()
-
-		if err := s.customerRepository.AddBalanceTx(refundCtx, dbTx, customerID, amount); err != nil {
-			return fmt.Errorf("failed to refund wallet balance: %w", err)
-		}
-
-		if s.walletTxRepo != nil {
-			if _, err := s.walletTxRepo.CreateTx(refundCtx, dbTx, &database.WalletTransaction{
-				CustomerID:  customerID,
-				Amount:      amount,
-				Type:        database.WalletTransactionTypeRefund,
-				PurchaseID:  &purchaseID,
-				Description: description,
-			}); err != nil {
-				return fmt.Errorf("failed to log wallet refund: %w", err)
-			}
-		}
-
-		if err := dbTx.Commit(refundCtx); err != nil {
-			return fmt.Errorf("failed to commit wallet refund: %w", err)
-		}
-		return nil
-	})
+	// Cheap sequential pre-check so an obviously repeated refund never opens a
+	// transaction. This is not the safety guarantee: the partial unique index is.
+	already, err := store.ExistsRefund(refundCtx, purchaseID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to check existing wallet refund: %w", err)
 	}
-	if skipped {
+	if already {
 		slog.Info("Skipping wallet refund; already refunded for purchase", "purchase_id", purchaseID, "customer_id", customerID)
+		return nil
+	}
+
+	dbTx, err := store.BeginTx(refundCtx)
+	if err != nil {
+		return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
+	}
+	defer func() {
+		_ = dbTx.Rollback(refundCtx)
+	}()
+
+	// The partial unique index on (purchase_id) WHERE type = 'refund' is the
+	// authority: a second refund for this purchase fails right here.
+	if err := store.LogRefund(refundCtx, dbTx, customerID, amount, purchaseID, description); err != nil {
+		if isUniqueViolation(err) {
+			slog.Info("Skipping wallet refund; database refused a duplicate refund row",
+				"purchase_id", purchaseID,
+				"customer_id", customerID,
+			)
+			return nil
+		}
+		return fmt.Errorf("failed to log wallet refund: %w", err)
+	}
+
+	if err := store.AddBalance(refundCtx, dbTx, customerID, amount); err != nil {
+		return fmt.Errorf("failed to refund wallet balance: %w", err)
+	}
+
+	if err := dbTx.Commit(refundCtx); err != nil {
+		return fmt.Errorf("failed to commit wallet refund: %w", err)
 	}
 	return nil
 }
@@ -2296,12 +2366,30 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 	ctxWithUsername := context.WithValue(ctx, "username", trialUsername(ctx, telegramId))
 	user, err := s.remnawaveClient.CreateOrUpdateUser(ctxWithUsername, customer.ID, telegramId, config.TrialTrafficLimit(), config.TrialDays(), true)
 	if err != nil {
+		if errors.Is(err, remnawave.ErrExistingPanelUser) {
+			// A8: never mint a trial key on top of an existing panel user. The
+			// unique index on subscription_key.remnawave_uuid would fail anyway,
+			// but the operator needs a distinct, actionable error instead of a
+			// generic 500 after a half-applied write.
+			slog.Warn("Trial refused: telegram id already has a panel user", "customer_id", utils.MaskHalfInt64(customer.ID))
+			return "", ErrExistingPanelUser
+		}
 		slog.Error("Error creating user", "error", err)
 		return "", err
 	}
 
 	if user.UUID == uuid.Nil || strings.TrimSpace(user.SubscriptionUrl) == "" {
 		return "", ErrSubscriptionKeyUnavailable
+	}
+	existing, err := s.subKeyRepo.FindByRemnawaveUUID(ctx, user.UUID)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		// A8: the local subscription_key row already owns this panel UUID, so a
+		// second row would collide on idx_sub_key_uuid.
+		slog.Warn("Trial refused: panel UUID already linked to a subscription key", "customer_id", utils.MaskHalfInt64(customer.ID))
+		return "", ErrExistingPanelUser
 	}
 	_, err = s.subKeyRepo.CreateTx(ctx, tx, &database.SubscriptionKey{
 		CustomerID:      customer.ID,

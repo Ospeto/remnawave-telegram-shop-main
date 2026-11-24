@@ -2261,6 +2261,8 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "User not found", http.StatusNotFound)
 		case errors.Is(err, payment.ErrTrialAlreadyUsed):
 			http.Error(w, "Trial already used", http.StatusConflict)
+		case errors.Is(err, payment.ErrExistingPanelUser):
+			writeSanitizedError(w, http.StatusConflict, "Trial unavailable: this Telegram account already has a subscription in the panel", err)
 		default:
 			http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
 		}
