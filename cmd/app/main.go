@@ -181,7 +181,14 @@ func main() {
 	if err != nil {
 		fatalStartup("database", err)
 	}
-	if err := api.ConfigureStateStores(pool, config.TelegramToken()); err != nil {
+	sessionKey, usedFallback, err := api.ResolveSessionSigningKey(config.SessionSigningSecret(), config.TelegramToken())
+	if err != nil {
+		fatalStartup("api session signing key", err)
+	}
+	if usedFallback {
+		slog.Warn("SESSION_SIGNING_SECRET is not set; deriving the Mini App session signing key from TELEGRAM_TOKEN. Set a dedicated SESSION_SIGNING_SECRET so a leaked bot token cannot forge Mini App sessions.")
+	}
+	if err := api.ConfigureStateStores(pool, sessionKey); err != nil {
 		fatalStartup("api state stores", err)
 	}
 

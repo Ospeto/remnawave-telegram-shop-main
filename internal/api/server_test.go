@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -82,23 +83,6 @@ func TestGetIPIgnoresForwardedFor(t *testing.T) {
 
 	if got := getIP(req); got != "203.0.113.7" {
 		t.Fatalf("getIP() = %q, want %q", got, "203.0.113.7")
-	}
-}
-
-func TestRequestFingerprintIsStableAcrossRequests(t *testing.T) {
-	reqA := httptest.NewRequest("GET", "http://example.com/", nil)
-	reqA.RemoteAddr = "203.0.113.7:12345"
-	reqA.Header.Set("User-Agent", "TelegramBot (iOS)")
-
-	reqB := httptest.NewRequest("GET", "http://example.com/", nil)
-	reqB.RemoteAddr = "198.51.100.9:54321"
-	reqB.Header.Set("User-Agent", "TelegramBot (Android)")
-
-	if gotA, gotB := requestFingerprint(reqA), requestFingerprint(reqB); gotA != gotB {
-		t.Fatalf("requestFingerprint() should stay stable across Mini App requests, got %q vs %q", gotA, gotB)
-	}
-	if got := requestFingerprint(reqA); got != "telegram-webapp" {
-		t.Fatalf("requestFingerprint() = %q, want %q", got, "telegram-webapp")
 	}
 }
 
@@ -193,22 +177,22 @@ func TestRedirectHelpers(t *testing.T) {
 	}
 }
 
-func TestInitDataExchangeGuardAllowsReuseWhileInitDataIsStillValid(t *testing.T) {
+func TestInitDataExchangeGuardRefusesSecondUseInsideFreshnessWindow(t *testing.T) {
 	guard := newMemoryInitDataExchangeGuard()
 	expiresAt := time.Now().Add(time.Minute)
 
 	if err := guard.consume(context.Background(), "binding-key", expiresAt); err != nil {
 		t.Fatalf("consume() first call error = %v", err)
 	}
-	if err := guard.consume(context.Background(), "binding-key", expiresAt); err != nil {
-		t.Fatalf("consume() second call error = %v, want idempotent success", err)
+	if err := guard.consume(context.Background(), "binding-key", expiresAt); !errors.Is(err, errInitDataAlreadyConsumed) {
+		t.Fatalf("consume() second call error = %v, want %v", err, errInitDataAlreadyConsumed)
 	}
 }
 
 func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
 	store := newSignedAuthSessionStore([]byte("test-secret"), 30*time.Minute)
 
-	token, expiresAt, err := store.create(context.Background(), 42, "alice", "ua:test")
+	token, expiresAt, err := store.create(context.Background(), 42, "alice")
 	if err != nil {
 		t.Fatalf("create() error = %v", err)
 	}
@@ -216,27 +200,18 @@ func TestAuthSessionStoreAuthenticatesAndRefreshes(t *testing.T) {
 		t.Fatal("create() returned empty token")
 	}
 
-	session, err := store.authenticate(context.Background(), token, "ua:test")
+	session, err := store.authenticate(context.Background(), token)
 	if err != nil {
 		t.Fatalf("authenticate() error = %v", err)
 	}
 	if session.TelegramID != 42 || session.Username != "alice" {
 		t.Fatalf("authenticate() returned unexpected session: %+v", session)
 	}
-	if session.Token == token {
-		t.Fatal("authenticate() did not rotate bearer token")
+	if session.Token != token {
+		t.Fatal("authenticate() re-signed a token that still has most of its life left")
 	}
-
-	refreshed, err := store.authenticate(context.Background(), session.Token, "ua:test")
-	if err != nil {
-		t.Fatalf("authenticate() second call error = %v", err)
-	}
-	if !refreshed.ExpiresAt.After(expiresAt) {
-		t.Fatalf("authenticate() did not refresh expiry: original=%v refreshed=%v", expiresAt, refreshed.ExpiresAt)
-	}
-
-	if _, err := store.authenticate(context.Background(), session.Token, "ua:other"); err == nil {
-		t.Fatal("authenticate() fingerprint mismatch error = nil, want rejection")
+	if !session.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("authenticate() changed the expiry of a fresh token: got %v want %v", session.ExpiresAt, expiresAt)
 	}
 }
 
@@ -290,7 +265,7 @@ func TestConfigureStateStoresRejectsEmptySigningSecret(t *testing.T) {
 		redirectGrants = previousRedirectGrants
 	})
 
-	if err := ConfigureStateStores(nil, ""); err == nil {
+	if err := ConfigureStateStores(nil, nil); err == nil {
 		t.Fatal("ConfigureStateStores() error = nil, want missing secret rejection")
 	}
 }

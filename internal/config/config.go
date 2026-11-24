@@ -26,6 +26,7 @@ type Plan struct {
 
 type config struct {
 	telegramToken                                             string
+	sessionSigningSecret                                      string
 	plans                                                     []Plan
 	plansMu                                                   sync.RWMutex
 	remnawaveUrl, remnawaveToken, remnawaveMode, remnawaveTag string
@@ -233,6 +234,13 @@ func ExternalSquadUUID() uuid.UUID {
 
 func TelegramToken() string {
 	return conf.telegramToken
+}
+
+// SessionSigningSecret returns the configured Mini App session signing secret.
+// An empty value means startup must derive the signing key from the bot token
+// instead; see api.ResolveSessionSigningKey.
+func SessionSigningSecret() string {
+	return conf.sessionSigningSecret
 }
 func RemnawaveUrl() string {
 	return conf.remnawaveUrl
@@ -537,6 +545,10 @@ func InitConfig() (err error) {
 	if err != nil {
 		return err
 	}
+	// Optional: when unset, the Mini App session signing key is derived from the
+	// bot token at startup (see api.ResolveSessionSigningKey) so an existing
+	// deploy still starts after this change.
+	conf.sessionSigningSecret = strings.TrimSpace(os.Getenv("SESSION_SIGNING_SECRET"))
 
 	conf.isWebAppLinkEnabled = func() bool {
 		isWebAppLinkEnabled := os.Getenv("IS_WEB_APP_LINK") == "true"

@@ -60,6 +60,7 @@ func setBaseConfigEnv(t *testing.T) {
 		"BACKUP_JOB_TIMEOUT_SECONDS",
 		"BACKUP_RESTORE_TIMEOUT_SECONDS",
 		"RESELLER_DEFAULT_CREDIT_LIMIT",
+		"SESSION_SIGNING_SECRET",
 	} {
 		t.Setenv(key, "")
 	}
@@ -126,6 +127,31 @@ func TestInitConfigLoadsMinimalValidEnvironment(t *testing.T) {
 	}
 	if got := RemnawaveMode(); got != "remote" {
 		t.Fatalf("RemnawaveMode() = %q, want remote", got)
+	}
+}
+
+func TestInitConfigReadsOptionalSessionSigningSecret(t *testing.T) {
+	setBaseConfigEnv(t)
+	t.Setenv("SESSION_SIGNING_SECRET", "  dedicated-secret  ")
+
+	if err := InitConfig(); err != nil {
+		t.Fatalf("InitConfig() error = %v", err)
+	}
+	if got := SessionSigningSecret(); got != "dedicated-secret" {
+		t.Fatalf("SessionSigningSecret() = %q, want the trimmed dedicated secret", got)
+	}
+}
+
+func TestInitConfigAllowsEmptySessionSigningSecret(t *testing.T) {
+	setBaseConfigEnv(t)
+
+	// Unset means startup derives the signing key from the bot token instead of
+	// refusing to start, so an existing deploy keeps running after this change.
+	if err := InitConfig(); err != nil {
+		t.Fatalf("InitConfig() error = %v", err)
+	}
+	if got := SessionSigningSecret(); got != "" {
+		t.Fatalf("SessionSigningSecret() = %q, want empty so the fallback derives a key", got)
 	}
 }
 
