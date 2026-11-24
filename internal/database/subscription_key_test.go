@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,18 +13,143 @@ import (
 
 func TestSubscriptionKeyRepositoryCanMarkMissingRemoteKeysDeleted(t *testing.T) {
 	var _ interface {
-		MarkMissingRemoteKeysDeleted(context.Context, []uuid.UUID) (int64, error)
+		MarkMissingRemoteKeysDeletedForCustomers(context.Context, []int64, []uuid.UUID) (int64, error)
 	} = (*SubscriptionKeyRepository)(nil)
 }
 
 func TestMarkMissingRemoteKeysDeletedSkipsEmptyRemoteUUIDs(t *testing.T) {
-	affected, err := (&SubscriptionKeyRepository{}).MarkMissingRemoteKeysDeleted(context.Background(), nil)
+	affected, err := (&SubscriptionKeyRepository{}).MarkMissingRemoteKeysDeletedForCustomers(context.Background(), []int64{1}, nil)
 	if err != nil {
-		t.Fatalf("MarkMissingRemoteKeysDeleted() error = %v", err)
+		t.Fatalf("MarkMissingRemoteKeysDeletedForCustomers() error = %v", err)
 	}
 	if affected != 0 {
-		t.Fatalf("MarkMissingRemoteKeysDeleted() affected = %d, want 0", affected)
+		t.Fatalf("MarkMissingRemoteKeysDeletedForCustomers() affected = %d, want 0", affected)
 	}
+}
+
+func TestMarkMissingRemoteKeysDeletedSkipsEmptyCustomerScope(t *testing.T) {
+	affected, err := (&SubscriptionKeyRepository{}).MarkMissingRemoteKeysDeletedForCustomers(context.Background(), nil, []uuid.UUID{uuid.New()})
+	if err != nil {
+		t.Fatalf("MarkMissingRemoteKeysDeletedForCustomers() error = %v", err)
+	}
+	if affected != 0 {
+		t.Fatalf("MarkMissingRemoteKeysDeletedForCustomers() affected = %d, want 0", affected)
+	}
+}
+
+// TestMissingRemoteKeyPlanIsScopedToObservedCustomers is the A3 guardrail test:
+// the deletion plan must carry a customer_id filter, otherwise one bad panel read
+// can mark every key in the database deleted.
+func TestMissingRemoteKeyPlanIsScopedToObservedCustomers(t *testing.T) {
+	customerIDs := []int64{11, 22}
+	remoteUUIDs := []uuid.UUID{uuid.New()}
+
+	query := buildMissingRemoteKeysPlanQuery(customerIDs, remoteUUIDs)
+	sql, args, err := query.ToSql()
+	if err != nil {
+		t.Fatalf("ToSql() error = %v", err)
+	}
+
+	if !strings.Contains(sql, "customer_id IN (") {
+		t.Fatalf("plan SQL = %q, want a customer_id IN filter", sql)
+	}
+	if !strings.Contains(sql, "status <> ") {
+		t.Fatalf("plan SQL = %q, want already-deleted keys excluded", sql)
+	}
+	if !strings.Contains(sql, "remnawave_uuid NOT IN (") {
+		t.Fatalf("plan SQL = %q, want the observed remote UUIDs excluded", sql)
+	}
+
+	for _, want := range customerIDs {
+		if !containsInt64Arg(args, want) {
+			t.Fatalf("plan args %#v never carry customer id %d", args, want)
+		}
+	}
+	if !containsUUIDArg(args, remoteUUIDs[0]) {
+		t.Fatalf("plan args %#v never carry the observed remote uuid", args)
+	}
+}
+
+// TestMissingRemoteKeyPlanCeilingRefusesLargeDeletes covers the second A3
+// guardrail: an anomalously large plan aborts instead of applying.
+func TestMissingRemoteKeyPlanCeilingRefusesLargeDeletes(t *testing.T) {
+	if err := validateKeyDeletionPlan(SyncMaxKeyDeletesPerRun, 10); err != nil {
+		t.Fatalf("validateKeyDeletionPlan(at ceiling) error = %v, want nil", err)
+	}
+
+	err := validateKeyDeletionPlan(SyncMaxKeyDeletesPerRun+1, 10)
+	if !errors.Is(err, ErrSyncDeletionPlanTooLarge) {
+		t.Fatalf("validateKeyDeletionPlan() error = %v, want ErrSyncDeletionPlanTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("validateKeyDeletionPlan() error = %q, want it to name the ceiling", err)
+	}
+}
+
+// TestMissingRemoteKeyDeleteTargetsPlannedIDs keeps the destructive statement
+// anchored to the ids the plan selected and to keys that are still not deleted.
+func TestMissingRemoteKeyDeleteTargetsPlannedIDs(t *testing.T) {
+	keyIDs := []int64{7, 8}
+	query := buildMissingRemoteKeysDeleteQuery(keyIDs)
+	sql, args, err := query.ToSql()
+	if err != nil {
+		t.Fatalf("ToSql() error = %v", err)
+	}
+	if !strings.Contains(sql, "UPDATE subscription_key SET status = ") {
+		t.Fatalf("delete SQL = %q, want an UPDATE subscription_key statement", sql)
+	}
+	if !strings.Contains(sql, "id IN (") {
+		t.Fatalf("delete SQL = %q, want an id IN filter", sql)
+	}
+	if !strings.Contains(sql, "status <> ") {
+		t.Fatalf("delete SQL = %q, want already-deleted keys excluded", sql)
+	}
+
+	for _, want := range keyIDs {
+		if !containsInt64Arg(args, want) {
+			t.Fatalf("delete args %#v never carry planned key id %d", args, want)
+		}
+	}
+}
+
+// containsInt64Arg reports whether any argument of a built query carries the
+// wanted integer, whether as a bare value or inside a slice argument.
+func containsInt64Arg(args []any, want int64) bool {
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case int64:
+			if value == want {
+				return true
+			}
+		case []int64:
+			for _, item := range value {
+				if item == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// containsUUIDArg reports whether any argument of a built query carries the
+// wanted UUID, whether as a bare value or inside a slice argument.
+func containsUUIDArg(args []any, want uuid.UUID) bool {
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case uuid.UUID:
+			if value == want {
+				return true
+			}
+		case []uuid.UUID:
+			for _, item := range value {
+				if item == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func TestPrimarySubscriptionKey(t *testing.T) {

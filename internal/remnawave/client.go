@@ -115,12 +115,24 @@ func (r *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
-	pager := remapi.NewPaginationHelper(250)
-	users := make([]remapi.User, 0)
+// usersPageSize is the page size requested from the panel user list endpoint.
+const usersPageSize = 250
 
-	for {
-		resp, err := r.client.Users().GetAllUsers(ctx, float64(pager.Limit), float64(pager.Offset))
+// GetUsers returns the complete panel user list.
+//
+// It pages against the panel's reported Total instead of trusting a short page:
+// a panel that clamps the requested page size would otherwise end the walk early
+// and hand back a partial fleet, which downstream reconciliation would treat as
+// authoritative. A short read, a total that changes mid-walk, or a total that the
+// collected users do not match is returned as an error so callers reconcile
+// nothing rather than reconciling against a partial snapshot.
+func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
+	users := make([]remapi.User, 0, usersPageSize)
+	seen := make(map[uuid.UUID]struct{}, usersPageSize)
+	expectedTotal := -1
+
+	for offset := 0; ; {
+		resp, err := r.client.Users().GetAllUsers(ctx, float64(usersPageSize), float64(offset))
 		if err != nil {
 			return nil, err
 		}
@@ -130,15 +142,40 @@ func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
 			return nil, panelResponseError(resp)
 		}
 		response := responseDto.GetResponse()
-		users = append(users, response.Users...)
 
-		if len(response.Users) < pager.Limit {
+		pageTotal := int(response.Total)
+		if expectedTotal < 0 {
+			expectedTotal = pageTotal
+		} else if pageTotal != expectedTotal {
+			return nil, fmt.Errorf("remnawave user total changed during pagination (%d -> %d), refusing partial fleet read", expectedTotal, pageTotal)
+		}
+
+		added := 0
+		for _, user := range response.Users {
+			if user.UUID != uuid.Nil {
+				if _, duplicate := seen[user.UUID]; duplicate {
+					continue
+				}
+				seen[user.UUID] = struct{}{}
+			}
+			users = append(users, user)
+			added++
+		}
+
+		if added == 0 {
 			break
 		}
 
-		if !pager.NextPage() {
+		// Advance by what the panel actually returned, not by what we asked for:
+		// a clamped page size must not skip users.
+		offset += len(response.Users)
+		if offset >= expectedTotal {
 			break
 		}
+	}
+
+	if expectedTotal >= 0 && len(users) != expectedTotal {
+		return nil, fmt.Errorf("remnawave returned %d of %d users, refusing partial fleet read", len(users), expectedTotal)
 	}
 
 	return &users, nil
