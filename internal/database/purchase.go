@@ -236,6 +236,36 @@ func buildLatestAwaitingVerificationByCustomerSelect(customerID int64, now time.
 		PlaceholderFormat(sq.Dollar)
 }
 
+// FindLatestInFlightByCustomer returns the newest purchase the customer still
+// has to act on: awaiting a receipt upload (pending/new) or being fulfilled
+// right now (processing).
+//
+// A9: a purchase stuck in 'processing' used to be invisible to the Mini App, so
+// the customer saw a normal shop while one of their orders was in limbo. Unlike
+// buildLatestAwaitingVerificationByCustomerSelect — which gates purchase
+// creation and must not treat an in-flight fulfillment as acceptable — this
+// lookup only feeds the customer-facing status surface.
+func (cr *PurchaseRepository) FindLatestInFlightByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
+	buildSelect := sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.And{
+			sq.Eq{"customer_id": customerID},
+			sq.Eq{"invoice_type": []InvoiceType{InvoiceTypeMobileBanking, InvoiceTypeWalletTopUp}},
+			sq.Eq{"status": []PurchaseStatus{PurchaseStatusNew, PurchaseStatusPending, PurchaseStatusProcessing}},
+			sq.GtOrEq{"created_at": time.Now().Add(-promoReservationHoldWindow)},
+		}).
+		OrderBy("created_at DESC").
+		Limit(1).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
+
 func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase, error) {
 	buildSelect := sq.Select(purchaseColumns...).
 		From("purchase").

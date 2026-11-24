@@ -41,7 +41,7 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 
-	customer, err := h.customerRepository.FindByTelegramId(dbCtx, chatID)
+	customer, err := h.findCustomerForCancellation(dbCtx, chatID)
 	if err != nil || customer == nil {
 		h.editErrorReply(ctx, b, chatID, message.ID, update.CallbackQuery.From.LanguageCode,
 			translationKeyGenericError, err)
@@ -50,7 +50,7 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 
 	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
 
-	purchase, err := h.purchaseRepository.FindById(dbCtx, purchaseID)
+	purchase, err := h.findPurchaseForCancellation(dbCtx, purchaseID)
 	if err != nil || purchase == nil || purchase.CustomerID != customer.ID {
 		h.editErrorReply(ctx, b, chatID, message.ID, langCode, "cancel_pending_not_found", err)
 		return
@@ -61,7 +61,7 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 		return
 	}
 
-	cancelled, err := h.paymentService.CancelAwaitingVerificationPurchase(dbCtx, purchaseID, customer.ID)
+	cancelled, err := h.cancelAwaitingVerificationPurchase(dbCtx, purchaseID, customer.ID)
 	if err != nil {
 		h.editErrorReply(ctx, b, chatID, message.ID, langCode, translationKeyGenericError, err)
 		return
@@ -99,6 +99,40 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 	}); err != nil {
 		slog.Error("Error sending cancel confirmation", "error", err)
 	}
+}
+
+// findCustomerForCancellation resolves the caller, honouring the test seam when it is set.
+func (h Handler) findCustomerForCancellation(ctx context.Context, telegramID int64) (*database.Customer, error) {
+	if h.testFindCustomer != nil {
+		return h.testFindCustomer(ctx, telegramID)
+	}
+	if h.customerRepository == nil {
+		return nil, nil
+	}
+	return h.customerRepository.FindByTelegramId(ctx, telegramID)
+}
+
+// findPurchaseForCancellation loads the purchase being cancelled.
+func (h Handler) findPurchaseForCancellation(ctx context.Context, purchaseID int64) (*database.Purchase, error) {
+	if h.testFindPurchase != nil {
+		return h.testFindPurchase(ctx, purchaseID)
+	}
+	if h.purchaseRepository == nil {
+		return nil, nil
+	}
+	return h.purchaseRepository.FindById(ctx, purchaseID)
+}
+
+// cancelAwaitingVerificationPurchase releases the purchase through the same
+// payment-service path the Mini App uses.
+func (h Handler) cancelAwaitingVerificationPurchase(ctx context.Context, purchaseID, customerID int64) (bool, error) {
+	if h.testCancelPurchase != nil {
+		return h.testCancelPurchase(ctx, purchaseID, customerID)
+	}
+	if h.paymentService == nil {
+		return false, nil
+	}
+	return h.paymentService.CancelAwaitingVerificationPurchase(ctx, purchaseID, customerID)
 }
 
 // editCancelConfirmation replaces the instruction message with a yes/no prompt.

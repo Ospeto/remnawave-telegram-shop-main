@@ -334,6 +334,8 @@ type PaymentService struct {
 	testModeMu          sync.RWMutex
 	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
 	syncInFlight        sync.Map // key: customerID int64, value: struct{}
+	syncFetchMu         sync.Mutex
+	syncFetches         map[int64]*syncFetchState // in-flight shared panel reads
 	visionAlertMu       sync.Mutex
 	visionAlertLastSent map[string]time.Time
 	now                 func() time.Time
@@ -393,6 +395,19 @@ func NewPaymentService(
 // Prefer this over exposing the raw repository.
 func (s *PaymentService) GetPurchaseByID(ctx context.Context, id int64) (*database.Purchase, error) {
 	return s.purchaseRepository.FindById(ctx, id)
+}
+
+// FindLatestInFlightPurchase returns the newest purchase the customer still has
+// to act on, or nil when there is none.
+//
+// A9/U3: this is what lets the Mini App show an order that is awaiting a receipt
+// or already being fulfilled, instead of silently showing a normal shop while a
+// purchase sits in limbo.
+func (s *PaymentService) FindLatestInFlightPurchase(ctx context.Context, customerID int64) (*database.Purchase, error) {
+	if s == nil || s.purchaseRepository == nil {
+		return nil, nil
+	}
+	return s.purchaseRepository.FindLatestInFlightByCustomer(ctx, customerID)
 }
 
 // GetRevenueSummary returns daily revenue aggregated over the last N days.
@@ -647,7 +662,50 @@ func (s *PaymentService) GetTestTransactionID() string {
 	return testTransactionID
 }
 
-const syncCacheTTL = 2 * time.Minute
+const (
+	// syncCacheTTL is how long a freshly synced key snapshot stays usable.
+	//
+	// P6: before this, every key expired from the cache after two minutes, so a
+	// shop with a few hundred customers re-read the whole panel fleet several
+	// times a minute — traffic that scales with customers rather than with real
+	// changes.
+	syncCacheTTL = 2 * time.Minute
+
+	// syncCacheFarFromExpiryTTL applies when no key is close to expiring. A key
+	// that is weeks from expiry does not need its usage figure re-read every two
+	// minutes; the numbers that actually decide anything (days left, status)
+	// change slowly.
+	syncCacheFarFromExpiryTTL = 15 * time.Minute
+
+	// syncCacheNearExpiryWindow is the window in which the shorter TTL is kept,
+	// because that is when a key flips to expired and the customer must see it.
+	syncCacheNearExpiryWindow = 24 * time.Hour
+)
+
+// syncCacheTTLFor picks a cache lifetime for one customer's key snapshot.
+//
+// Any key inside syncCacheNearExpiryWindow keeps the short TTL, and so does an
+// empty or expiryless snapshot, where the state is not known well enough to
+// trust a longer cache.
+func syncCacheTTLFor(keys []KeyStats, now time.Time) time.Duration {
+	if len(keys) == 0 {
+		return syncCacheTTL
+	}
+	for _, key := range keys {
+		if key.ExpireAt.IsZero() || key.ExpireAt.Sub(now) < syncCacheNearExpiryWindow {
+			return syncCacheTTL
+		}
+	}
+	return syncCacheFarFromExpiryTTL
+}
+
+// syncFetchState is one in-flight panel read shared by every caller that asked
+// for the same customer while the cache was cold.
+type syncFetchState struct {
+	done chan struct{}
+	keys []KeyStats
+	err  error
+}
 
 // FinalizeProcessingWalletTopUpIfSettled marks a stuck processing wallet top-up as
 // paid when local ledger proof shows the top-up already settled. It never credits
@@ -792,16 +850,66 @@ func settleWalletTopUp(
 // on every GET /api/me request.
 func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
 	// Return cached result if still fresh
-	if v, ok := s.syncCache.Load(customerID); ok {
-		entry := v.(syncCacheEntry)
-		if time.Now().Before(entry.expiresAt) {
-			return entry.keys, nil
-		}
+	if cached, ok := s.GetCachedSyncKeys(customerID); ok {
+		return cached, nil
 	}
 
 	if s.subKeyRepo == nil {
 		return nil, nil
 	}
+
+	// P6: a cold cache used to mean one panel read per request, so a burst of
+	// /api/me calls (Home, Wallet and Checkout polling at once) multiplied the
+	// same fleet read. Concurrent callers for one customer now share a single
+	// read instead of racing to start their own.
+	state, leader := s.beginSyncFetch(customerID)
+	if !leader {
+		select {
+		case <-state.done:
+			return state.keys, state.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	keys, err := s.syncKeysFromPanel(ctx, customerID, telegramID)
+	s.finishSyncFetch(customerID, state, keys, err)
+
+	return keys, err
+}
+
+// beginSyncFetch returns the shared in-flight read for a customer, or elects the
+// caller as the leader that performs it.
+func (s *PaymentService) beginSyncFetch(customerID int64) (*syncFetchState, bool) {
+	s.syncFetchMu.Lock()
+	defer s.syncFetchMu.Unlock()
+
+	if s.syncFetches == nil {
+		s.syncFetches = make(map[int64]*syncFetchState)
+	}
+	if state, ok := s.syncFetches[customerID]; ok {
+		return state, false
+	}
+
+	state := &syncFetchState{done: make(chan struct{})}
+	s.syncFetches[customerID] = state
+
+	return state, true
+}
+
+// finishSyncFetch hands the panel result to every waiting caller and clears the
+// in-flight slot.
+func (s *PaymentService) finishSyncFetch(customerID int64, state *syncFetchState, keys []KeyStats, err error) {
+	s.syncFetchMu.Lock()
+	delete(s.syncFetches, customerID)
+	s.syncFetchMu.Unlock()
+
+	state.keys, state.err = keys, err
+	close(state.done)
+}
+
+// syncKeysFromPanel performs the actual panel read and local reconciliation.
+func (s *PaymentService) syncKeysFromPanel(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
 
 	// 1. Fetch fresh keys from Remnawave
 	users, err := s.remnawaveClient.GetUsersByTelegramId(ctx, telegramID)
@@ -984,10 +1092,12 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		})
 	}
 
-	// Cache the result in the sync cache
+	// Cache the result in the sync cache, for longer when nothing is close to
+	// expiring.
+	now := time.Now()
 	s.syncCache.Store(customerID, syncCacheEntry{
 		keys:      result,
-		expiresAt: time.Now().Add(syncCacheTTL),
+		expiresAt: now.Add(syncCacheTTLFor(result, now)),
 	})
 
 	return result, nil
