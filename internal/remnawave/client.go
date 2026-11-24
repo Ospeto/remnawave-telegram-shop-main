@@ -125,7 +125,11 @@ func (r *Client) GetUsers(ctx context.Context) (*[]remapi.User, error) {
 			return nil, err
 		}
 
-		response := resp.(*remapi.GetAllUsersResponseDto).GetResponse()
+		responseDto, ok := resp.(*remapi.GetAllUsersResponseDto)
+		if !ok {
+			return nil, panelResponseError(resp)
+		}
+		response := responseDto.GetResponse()
 		users = append(users, response.Users...)
 
 		if len(response.Users) < pager.Limit {
@@ -349,11 +353,12 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 		}
 		return nil, err
 	}
-	if value, ok := updateUser.(*remapi.InternalServerError); ok {
-		return nil, errors.New("error while updating user. message: " + value.GetMessage().Value + ". code: " + value.GetErrorCode().Value)
+	userResponse, ok := updateUser.(*remapi.UserResponse)
+	if !ok {
+		return nil, panelResponseError(updateUser)
 	}
 
-	updatedUser := &updateUser.(*remapi.UserResponse).Response
+	updatedUser := &userResponse.Response
 	if err := validateUpdatedUserState(updatedUser, newExpire, trafficLimit); err != nil {
 		return nil, err
 	}
@@ -445,8 +450,49 @@ func (r *Client) createUser(ctx context.Context, customerId int64, telegramId in
 		}
 		return nil, err
 	}
+	userResponse, ok := userCreate.(*remapi.UserResponse)
+	if !ok {
+		return nil, panelResponseError(userCreate)
+	}
+
 	slog.Info("created user", "telegramId", utils.MaskHalf(strconv.FormatInt(telegramId, 10)), "username", utils.MaskHalf(tgUsername), "key", username, "days", days)
-	return &userCreate.(*remapi.UserResponse).Response, nil
+	return &userResponse.Response, nil
+}
+
+// panelResponseError converts a typed error payload returned by the generated
+// Remnawave client into a plain Go error.
+//
+// The generated client decodes 4xx/5xx JSON bodies into typed error structs and
+// returns them with a nil Go error, so every polymorphic response must be type
+// checked before it is dereferenced. Callers use this helper to turn an
+// unexpected response into an ordinary error instead of panicking.
+func panelResponseError(resp any) error {
+	switch value := resp.(type) {
+	case *remapi.BadRequestError:
+		message := value.GetMessage()
+		if message == "" {
+			message = "bad request"
+		}
+		if errorsDetail := value.GetErrors(); len(errorsDetail) > 0 {
+			messages := make([]string, 0, len(errorsDetail))
+			for _, validationError := range errorsDetail {
+				messages = append(messages, validationError.GetMessage())
+			}
+			message = message + ": " + strings.Join(messages, "; ")
+		}
+		return fmt.Errorf("remnawave API rejected the request (status %d): %s", int(value.GetStatusCode()), message)
+	case *remapi.InternalServerError:
+		message := value.GetMessage().Value
+		if message == "" {
+			message = "internal server error"
+		}
+		if code := value.GetErrorCode().Value; code != "" {
+			message = message + ". code: " + code
+		}
+		return errors.New("error while updating user. message: " + message)
+	default:
+		return errors.New("unknown response type from Remnawave API")
+	}
 }
 
 func isDecodeResponseError(err error) bool {

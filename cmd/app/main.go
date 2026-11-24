@@ -257,7 +257,7 @@ func main() {
 		)
 	}
 
-	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3), bot.WithSkipGetMe())
+	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3), bot.WithSkipGetMe(), bot.WithMiddlewares(handler.PanicRecoveryMiddleware))
 	if err != nil {
 		fatalStartup("telegram bot", err)
 	}
