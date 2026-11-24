@@ -3,6 +3,7 @@ package autorenew
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
@@ -935,6 +936,66 @@ func TestJobRun_PreExtendStampFailureDoesNotCharge(t *testing.T) {
 	// Pre-side-effect abort should release claim for retry.
 	if repo.releaseCalls != 1 {
 		t.Fatalf("releaseCalls = %d, want 1 after pre-extend stamp abort", repo.releaseCalls)
+	}
+}
+
+func TestJobRun_AmbiguousExtendFailureHoldsCycleLockInsteadOfRecharging(t *testing.T) {
+	// A7 money-safety: when the extension outcome is unconfirmed the wallet
+	// charge was kept, so clearing the cycle lock would let the next hourly run
+	// charge and extend the same key again.
+	now := time.Date(2026, time.April, 1, 9, 0, 0, 0, time.UTC)
+	expireAt := now.Add(2 * time.Hour)
+	repo := &statefulClaimRepo{
+		now:      now,
+		claimTTL: autoRenewClaimTTL,
+		key: database.SubscriptionKey{
+			ID:                9,
+			CustomerID:        42,
+			ExpireAt:          &expireAt,
+			TrafficLimitGB:    0,
+			AutoRenewPlanDays: intPtr(1),
+		},
+	}
+	walletSvc := &fakeAutoRenewWallet{err: fmt.Errorf("%w: %s", payment.ErrPurchaseFinalizationPending, "remnawave did not confirm the new expiry")}
+	telegram := &fakeTelegramClient{}
+	job := &Job{
+		subKeyRepo: repo,
+		customerRepo: &fakeAutoRenewCustomerRepo{customers: map[int64]*database.Customer{
+			42: {ID: 42, TelegramID: 1, Language: "en", Balance: 15000},
+		}},
+		walletService: walletSvc,
+		tm:            testTranslationManager(t),
+		telegramBot:   telegram,
+		nowFn:         func() time.Time { return repo.now },
+		selectPlanFn: func(database.SubscriptionKey) (*config.Plan, error) {
+			return &config.Plan{Label: "Daily", Days: 1, Price: 500, TrafficLimitGB: 0}, nil
+		},
+	}
+
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("Extend calls = %d, want 1", len(walletSvc.calls))
+	}
+	if repo.key.LastAutoRenewedAt == nil {
+		t.Fatal("ambiguous extend failure must keep the durable cycle lock (no second charge path)")
+	}
+	if repo.key.AutoRenewClaimedAt == nil {
+		t.Fatal("ambiguous extend failure must hold the claim for manual recovery")
+	}
+	if repo.releaseCalls != 0 {
+		t.Fatalf("releaseCalls = %d, want 0 for an unconfirmed extension", repo.releaseCalls)
+	}
+	for _, msg := range telegram.messages {
+		if strings.Contains(msg.Text, "Auto-renewal failed") {
+			t.Fatalf("unconfirmed extension must not tell the customer the renewal failed: %q", msg.Text)
+		}
+	}
+
+	// The next hourly run must not charge the same key again.
+	repo.now = now.Add(time.Hour)
+	job.Run(context.Background())
+	if len(walletSvc.calls) != 1 {
+		t.Fatalf("second run Extend calls = %d, want 1 (no duplicate charge on an unconfirmed extension)", len(walletSvc.calls))
 	}
 }
 

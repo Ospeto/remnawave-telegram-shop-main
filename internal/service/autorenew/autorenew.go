@@ -248,6 +248,16 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 	err = j.walletService.ExtendKeyWithBalance(extendCtx, key.ID, customer.ID, charge, plan.Days, plan.TrafficLimitGB)
 	if err != nil {
 		log.Error("Auto-renew: key extension failed", "error", err)
+		if errors.Is(err, payment.ErrPurchaseFinalizationPending) || payment.ExtensionOutcomeUnconfirmed(err) {
+			// The extension may already have landed on the panel and the wallet
+			// charge was kept. Clearing the cycle lock here would let the next
+			// hourly run extend and charge the same key again, so hold it for
+			// manual recovery instead (money-safe stuck residual).
+			log.Error("Auto-renew: extension outcome is unconfirmed; holding cycle lock for manual recovery",
+				"error", err)
+			claimFinalized = true
+			return
+		}
 		// Undo optimistic cycle lock so a later run may retry this cycle.
 		if clearErr := j.subKeyRepo.ClearKeyLastAutoRenewed(ctx, key.ID, *claimedAt); clearErr != nil {
 			log.Error("Auto-renew: failed to clear cycle lock after extend failure",

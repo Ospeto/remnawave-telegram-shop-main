@@ -281,27 +281,111 @@ func (r *SubscriptionKeyRepository) SyncExpiryStatus(ctx context.Context, id int
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *SubscriptionKeyRepository) MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error) {
-	if len(remoteUUIDs) == 0 {
+// SyncMaxKeyDeletesPerRun is the hard ceiling on how many subscription keys one
+// reconciliation run may mark deleted. Deletion is irreversible from the
+// application (SyncKeys never resurrects a 'deleted' row), so an anomalously
+// large plan aborts the whole run instead of applying a partial, unverifiable
+// mass delete.
+const SyncMaxKeyDeletesPerRun = 250
+
+// ErrSyncDeletionPlanTooLarge is returned when a reconciliation plan exceeds
+// SyncMaxKeyDeletesPerRun. Nothing is written when it is returned.
+var ErrSyncDeletionPlanTooLarge = errors.New("subscription key deletion plan exceeds the per-run safety ceiling")
+
+// MarkMissingRemoteKeysDeletedForCustomers marks local subscription keys deleted
+// only for the given customers, and only when their remnawave_uuid is absent from
+// remoteUUIDs.
+//
+// customerIDs must be the customers actually observed in the current panel
+// snapshot, so a key is never deleted on the strength of a record the snapshot
+// did not cover. Two guardrails keep the destructive step survivable:
+//   - an empty remoteUUIDs or empty customerIDs set deletes nothing at all;
+//   - a plan larger than SyncMaxKeyDeletesPerRun returns
+//     ErrSyncDeletionPlanTooLarge without writing anything.
+func (r *SubscriptionKeyRepository) MarkMissingRemoteKeysDeletedForCustomers(ctx context.Context, customerIDs []int64, remoteUUIDs []uuid.UUID) (int64, error) {
+	if len(customerIDs) == 0 || len(remoteUUIDs) == 0 {
 		return 0, nil
 	}
 
-	query := sq.Update("subscription_key").
-		Set("status", "deleted").
-		Where(sq.NotEq{"status": "deleted"}).
-		Where(sq.NotEq{"remnawave_uuid": remoteUUIDs}).
-		PlaceholderFormat(sq.Dollar)
+	planQuery := buildMissingRemoteKeysPlanQuery(customerIDs, remoteUUIDs)
 
-	sql, args, err := query.ToSql()
+	planSQL, planArgs, err := planQuery.ToSql()
+	if err != nil {
+		return 0, fmt.Errorf("failed to build missing remote key plan: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, planSQL, planArgs...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read missing remote key plan: %w", err)
+	}
+
+	keyIDs := make([]int64, 0, len(customerIDs))
+	for rows.Next() {
+		var keyID int64
+		if err := rows.Scan(&keyID); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan missing remote key plan: %w", err)
+		}
+		keyIDs = append(keyIDs, keyID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("failed to iterate missing remote key plan: %w", err)
+	}
+
+	if err := validateKeyDeletionPlan(len(keyIDs), len(customerIDs)); err != nil {
+		return 0, err
+	}
+	if len(keyIDs) == 0 {
+		return 0, nil
+	}
+
+	updateQuery := buildMissingRemoteKeysDeleteQuery(keyIDs)
+
+	updateSQL, updateArgs, err := updateQuery.ToSql()
 	if err != nil {
 		return 0, fmt.Errorf("failed to build missing remote key update: %w", err)
 	}
 
-	tag, err := r.pool.Exec(ctx, sql, args...)
+	tag, err := r.pool.Exec(ctx, updateSQL, updateArgs...)
 	if err != nil {
 		return 0, fmt.Errorf("failed to mark missing remote keys deleted: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// buildMissingRemoteKeysPlanQuery selects the local keys that reconciliation may
+// mark deleted: keys owned by an observed customer whose remnawave_uuid is absent
+// from the snapshot. The customer_id filter is what keeps the destructive step
+// scoped to the customers the snapshot actually covered.
+func buildMissingRemoteKeysPlanQuery(customerIDs []int64, remoteUUIDs []uuid.UUID) sq.SelectBuilder {
+	return sq.Select("id").
+		From("subscription_key").
+		Where(sq.And{
+			sq.Eq{"customer_id": customerIDs},
+			sq.NotEq{"status": "deleted"},
+			sq.NotEq{"remnawave_uuid": remoteUUIDs},
+		}).
+		PlaceholderFormat(sq.Dollar)
+}
+
+// buildMissingRemoteKeysDeleteQuery marks exactly the planned key IDs deleted.
+func buildMissingRemoteKeysDeleteQuery(keyIDs []int64) sq.UpdateBuilder {
+	return sq.Update("subscription_key").
+		Set("status", "deleted").
+		Where(sq.Eq{"id": keyIDs}).
+		Where(sq.NotEq{"status": "deleted"}).
+		PlaceholderFormat(sq.Dollar)
+}
+
+// validateKeyDeletionPlan enforces the per-run deletion ceiling. It returns
+// ErrSyncDeletionPlanTooLarge and writes nothing when the plan is too big, so an
+// anomalous snapshot can never mass-delete subscription keys.
+func validateKeyDeletionPlan(plannedKeys int, observedCustomers int) error {
+	if plannedKeys > SyncMaxKeyDeletesPerRun {
+		return fmt.Errorf("%w: %d keys for %d customers exceeds %d", ErrSyncDeletionPlanTooLarge, plannedKeys, observedCustomers, SyncMaxKeyDeletesPerRun)
+	}
+	return nil
 }
 
 func (r *SubscriptionKeyRepository) UpdateSubscriptionURL(ctx context.Context, id int64, url string) error {
@@ -494,20 +578,29 @@ func (r *SubscriptionKeyRepository) ValidateExtendKeyTx(ctx context.Context, tx 
 	return nil
 }
 
-// FindExpiringAutoRenewKeys returns all active keys with auto_renew=true
-// whose expire_at is between 'after' and 'before'.
-// Used exclusively by the auto-renew cron job.
-func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]SubscriptionKey, error) {
-	query := sq.Select(subKeyColumns...).
+// buildFindExpiringAutoRenewKeysQuery builds the auto-renew eligibility query.
+// Extracted so the eligibility filter can be asserted without a live database.
+func buildFindExpiringAutoRenewKeysQuery(after time.Time, before time.Time) sq.SelectBuilder {
+	return sq.Select(subKeyColumns...).
 		From("subscription_key").
 		Where(sq.And{
 			sq.Eq{"auto_renew": true},
-			sq.Eq{"status": "active"},
+			sq.Eq{"status": []string{"active", "expired"}},
 			sq.NotEq{"expire_at": nil},
 			sq.Gt{"expire_at": after},
 			sq.LtOrEq{"expire_at": before},
 		}).
 		PlaceholderFormat(sq.Dollar)
+}
+
+// FindExpiringAutoRenewKeys returns all active or expired keys with auto_renew=true
+// whose expire_at is between 'after' and 'before'.
+// Used exclusively by the auto-renew cron job. Expired keys are included on purpose:
+// SyncKeys marks lapsed keys 'expired', and the lookback window exists to rescue keys
+// that expired inside it. It remains bounded to explicit known statuses, never a
+// wildcard, so a 'deleted' or 'hidden' key is never auto-renewed.
+func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]SubscriptionKey, error) {
+	query := buildFindExpiringAutoRenewKeysQuery(after, before)
 
 	sql, args, err := query.ToSql()
 	if err != nil {
@@ -545,6 +638,22 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID
 	return r.TryClaimAutoRenewWithTTL(ctx, keyID, expectedLast, AutoRenewClaimTTL)
 }
 
+// autoRenewClaimSQL claims one key for processing. It is declared separately so
+// the eligibility filter (auto_renew, status, cycle marker, stale claim) can be
+// asserted by tests without a live database.
+const autoRenewClaimSQL = `
+		UPDATE subscription_key
+		SET auto_renew_claimed_at = NOW()
+		WHERE id = $1
+		  AND auto_renew = TRUE
+		  AND status IN ('active', 'expired')
+		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
+		  AND (
+		        auto_renew_claimed_at IS NULL
+		        OR auto_renew_claimed_at <= NOW() - make_interval(secs => $3::double precision)
+		      )
+		RETURNING auto_renew_claimed_at`
+
 // TryClaimAutoRenewWithTTL is like TryClaimAutoRenew but accepts an explicit TTL
 // (for tests and shared constants).
 func (r *SubscriptionKeyRepository) TryClaimAutoRenewWithTTL(ctx context.Context, keyID int64, expectedLast *time.Time, claimTTL time.Duration) (*time.Time, bool, error) {
@@ -554,19 +663,7 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenewWithTTL(ctx context.Context
 	// Pass seconds as float so Postgres can build an interval without driver-specific types.
 	ttlSeconds := claimTTL.Seconds()
 	var claimedAt time.Time
-	err := r.pool.QueryRow(ctx, `
-		UPDATE subscription_key
-		SET auto_renew_claimed_at = NOW()
-		WHERE id = $1
-		  AND auto_renew = TRUE
-		  AND status = 'active'
-		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
-		  AND (
-		        auto_renew_claimed_at IS NULL
-		        OR auto_renew_claimed_at <= NOW() - make_interval(secs => $3::double precision)
-		      )
-		RETURNING auto_renew_claimed_at
-	`, keyID, expectedLast, ttlSeconds).Scan(&claimedAt)
+	err := r.pool.QueryRow(ctx, autoRenewClaimSQL, keyID, expectedLast, ttlSeconds).Scan(&claimedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil

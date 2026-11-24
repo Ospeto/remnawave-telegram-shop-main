@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"log/slog"
+	"runtime/debug"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -28,6 +29,37 @@ func (h Handler) AcknowledgeCallbackQueryMiddleware(next bot.HandlerFunc) bot.Ha
 
 		next(ctx, b, update)
 	}
+}
+
+// PanicRecoveryMiddleware contains a panic raised while handling one update so a
+// single failed update cannot terminate the bot process for every customer.
+// The telegram/bot library has no recover of its own: a panic inside a handler
+// goroutine crashes the whole process.
+//
+// It is a package-level function because the bot is constructed before the
+// Handler instance exists, and global middlewares can only be supplied at
+// construction time.
+func PanicRecoveryMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("recovered panic while handling update",
+					"panic", recovered,
+					"stack", string(debug.Stack()),
+					"update_id", updateID(update),
+				)
+			}
+		}()
+
+		next(ctx, b, update)
+	}
+}
+
+func updateID(update *models.Update) int64 {
+	if update == nil {
+		return 0
+	}
+	return update.ID
 }
 
 func (h Handler) CreateCustomerIfNotExistMiddleware(next bot.HandlerFunc) bot.HandlerFunc {

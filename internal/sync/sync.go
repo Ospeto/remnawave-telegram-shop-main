@@ -24,7 +24,7 @@ type customerStore interface {
 }
 
 type subscriptionKeyStore interface {
-	MarkMissingRemoteKeysDeleted(ctx context.Context, remoteUUIDs []uuid.UUID) (int64, error)
+	MarkMissingRemoteKeysDeletedForCustomers(ctx context.Context, customerIDs []int64, remoteUUIDs []uuid.UUID) (int64, error)
 }
 
 type SyncService struct {
@@ -62,8 +62,6 @@ func (s SyncService) Sync() {
 		slog.Info("Synchronization completed")
 		return
 	}
-
-	s.markMissingRemoteKeysDeleted(ctx, *users)
 
 	for _, user := range *users {
 		if user.TelegramId.Null {
@@ -111,15 +109,24 @@ func (s SyncService) Sync() {
 		return
 	}
 
-	existingCustomers, err := s.customerRepository.FindByTelegramIds(ctx, telegramIDs)
-	if err != nil {
-		slog.Error("Error while searching users by telegram ids")
-		return
+	var existingCustomers []database.Customer
+	if len(telegramIDs) > 0 {
+		existingCustomers, err = s.customerRepository.FindByTelegramIds(ctx, telegramIDs)
+		if err != nil {
+			slog.Error("Error while searching users by telegram ids")
+			return
+		}
 	}
 	existingMap := make(map[int64]database.Customer)
+	existingCustomerIDs := make([]int64, 0, len(existingCustomers))
 	for _, cust := range existingCustomers {
 		existingMap[cust.TelegramID] = cust
+		existingCustomerIDs = append(existingCustomerIDs, cust.ID)
 	}
+
+	// Reconcile deleted keys only for the customers this snapshot actually covers:
+	// a customer missing from the read is never treated as gone.
+	s.markMissingRemoteKeysDeleted(ctx, *users, existingCustomerIDs)
 
 	var toCreate []database.Customer
 	var toUpdate []database.Customer
@@ -172,8 +179,13 @@ func (s SyncService) Sync() {
 	slog.Info("Synchronization completed")
 }
 
-func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []remapi.User) {
+func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []remapi.User, customerIDs []int64) {
 	if s.subscriptionKeys == nil {
+		return
+	}
+	if len(customerIDs) == 0 {
+		// No locally known customer was observed in this snapshot: nothing is in
+		// scope, so nothing may be deleted.
 		return
 	}
 
@@ -189,12 +201,12 @@ func (s SyncService) markMissingRemoteKeysDeleted(ctx context.Context, users []r
 		return
 	}
 
-	deletedCount, err := s.subscriptionKeys.MarkMissingRemoteKeysDeleted(ctx, remoteUUIDs)
+	deletedCount, err := s.subscriptionKeys.MarkMissingRemoteKeysDeletedForCustomers(ctx, customerIDs, remoteUUIDs)
 	if err != nil {
-		slog.Error("Error while marking missing remote subscription keys deleted", "error", err)
+		slog.Error("Error while marking missing remote subscription keys deleted", "error", err, "customers", len(customerIDs))
 		return
 	}
 	if deletedCount > 0 {
-		slog.Info("Marked local subscription keys deleted after Remnawave sync", "count", deletedCount)
+		slog.Info("Marked local subscription keys deleted after Remnawave sync", "count", deletedCount, "customers", len(customerIDs))
 	}
 }

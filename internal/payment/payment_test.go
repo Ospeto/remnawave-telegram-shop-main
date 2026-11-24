@@ -10,6 +10,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/gemini"
+	"remnawave-tg-shop-bot/internal/remnawave"
 
 	remapi "github.com/Jolymmiles/remnawave-api-go/v2/api"
 	"github.com/google/uuid"
@@ -2427,4 +2428,78 @@ func TestResumeAfterInvalidPromo_UsesAssertIdempotentResumeAllowed(t *testing.T)
 	if !errors.Is(err, ErrIdempotencyKeyConflict) {
 		t.Fatalf("resumeExistingAfterInvalidPromo() error = %v, want ErrIdempotencyKeyConflict", err)
 	}
+}
+
+// TestExtensionOutcomeUnconfirmedTracksPanelAmbiguity is the A7 regression test:
+// an unconfirmed extend failure is what forces a panel re-read, while a definite
+// pre-mutation refusal must stay refundable.
+func TestExtensionOutcomeUnconfirmedTracksPanelAmbiguity(t *testing.T) {
+	if ExtensionOutcomeUnconfirmed(nil) {
+		t.Fatal("ExtensionOutcomeUnconfirmed(nil) = true, want false")
+	}
+	if ExtensionOutcomeUnconfirmed(errors.New("extend failed")) {
+		t.Fatal("ExtensionOutcomeUnconfirmed(definite error) = true, want false (refund path)")
+	}
+	if !ExtensionOutcomeUnconfirmed(remnawave.ErrUpdateStateUnconfirmed) {
+		t.Fatal("ExtensionOutcomeUnconfirmed(ErrUpdateStateUnconfirmed) = false, want true")
+	}
+	if !ExtensionOutcomeUnconfirmed(fmt.Errorf("%w: timeout", remnawave.ErrUpdateStateUnconfirmed)) {
+		t.Fatal("ExtensionOutcomeUnconfirmed(wrapped) = false, want true")
+	}
+	// The wallet path signals the same ambiguity through a distinct sentinel.
+	if !ExtensionOutcomeUnconfirmed(fmt.Errorf("%w: remnawave did not confirm", ErrPurchaseFinalizationPending)) {
+		t.Fatal("ExtensionOutcomeUnconfirmed(ErrPurchaseFinalizationPending) = false, want true")
+	}
+}
+
+// TestResolveExtensionOutcomeDecidesFromPanelState proves the refund decision
+// comes from what the panel holds, not from the error text.
+func TestResolveExtensionOutcomeDecidesFromPanelState(t *testing.T) {
+	currentExpire := time.Date(2026, time.April, 18, 12, 0, 0, 0, time.UTC)
+	key := &database.SubscriptionKey{RemnawaveUUID: uuid.New(), ExpireAt: &currentExpire}
+	days := 30
+	expectedExpire := remnawave.ExtendedExpireAfter(currentExpire, days)
+
+	t.Run("applied", func(t *testing.T) {
+		readUser := func(context.Context, uuid.UUID) (*remapi.User, error) {
+			return &remapi.User{ExpireAt: expectedExpire}, nil
+		}
+		outcome, observed := resolveExtensionOutcome(context.Background(), readUser, key, days)
+		if outcome != extensionConfirmedApplied {
+			t.Fatalf("outcome = %v, want extensionConfirmedApplied", outcome)
+		}
+		if observed == nil {
+			t.Fatal("observed panel user = nil, want the re-read user")
+		}
+	})
+
+	t.Run("not-applied", func(t *testing.T) {
+		readUser := func(context.Context, uuid.UUID) (*remapi.User, error) {
+			return &remapi.User{ExpireAt: currentExpire}, nil
+		}
+		outcome, _ := resolveExtensionOutcome(context.Background(), readUser, key, days)
+		if outcome != extensionConfirmedNotApplied {
+			t.Fatalf("outcome = %v, want extensionConfirmedNotApplied (refundable)", outcome)
+		}
+	})
+
+	t.Run("unreadable", func(t *testing.T) {
+		readUser := func(context.Context, uuid.UUID) (*remapi.User, error) {
+			return nil, errors.New("panel unreachable")
+		}
+		outcome, observed := resolveExtensionOutcome(context.Background(), readUser, key, days)
+		if outcome != extensionUnobservable {
+			t.Fatalf("outcome = %v, want extensionUnobservable (hold, never refund)", outcome)
+		}
+		if observed != nil {
+			t.Fatalf("observed = %v, want nil for an unreadable panel", observed)
+		}
+	})
+
+	t.Run("no-reader", func(t *testing.T) {
+		outcome, _ := resolveExtensionOutcome(context.Background(), nil, key, days)
+		if outcome != extensionUnobservable {
+			t.Fatalf("outcome = %v, want extensionUnobservable without a reader", outcome)
+		}
+	})
 }
