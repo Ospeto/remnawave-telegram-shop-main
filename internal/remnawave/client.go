@@ -276,28 +276,10 @@ func (r *Client) ForceCreateNewUser(ctx context.Context, customerId int64, teleg
 // Traffic is accumulated (added to existing limit), not replaced.
 // An existing unlimited key stays unlimited; extending with an unlimited plan (additionalTraffic = 0) upgrades to unlimited (0).
 func (r *Client) ExtendUser(ctx context.Context, userUUID uuid.UUID, additionalTraffic int, days int) (*remapi.User, error) {
-	// Fetch the specific user by UUID
-	resp, err := r.client.Users().GetUserByUuid(ctx, userUUID.String())
+	existingUser, err := r.GetUserByUUID(ctx, userUUID)
 	if err != nil {
-		if isDecodeResponseError(err) {
-			slog.Warn("Remnawave decode failure on GetUserByUuid, falling back to permissive parser", "user_uuid", userUUID.String(), "error", err)
-			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, userUUID)
-			if fallbackErr == nil && fallbackUser != nil {
-				resp = &remapi.UserResponse{Response: *fallbackUser}
-			} else if fallbackErr != nil {
-				return nil, fmt.Errorf("failed to get user %s (fallback): %w", userUUID, fallbackErr)
-			} else {
-				return nil, fmt.Errorf("failed to get user %s: not found after fallback", userUUID)
-			}
-		} else {
-			return nil, fmt.Errorf("failed to get user %s: %w", userUUID, err)
-		}
+		return nil, err
 	}
-	userResp, ok := resp.(*remapi.UserResponse)
-	if !ok {
-		return nil, errors.New("unknown response type from GetUserByUuid")
-	}
-	existingUser := &userResp.Response
 
 	// Calculate new traffic limit
 	newTraffic := additionalTraffic
@@ -378,26 +360,37 @@ func (r *Client) updateUser(ctx context.Context, existingUser *remapi.User, traf
 			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, existingUser.UUID)
 			if fallbackErr == nil && fallbackUser != nil {
 				if err := validateUpdatedUserState(fallbackUser, newExpire, trafficLimit); err != nil {
-					return nil, fmt.Errorf("update user fallback did not confirm requested state: %w", err)
+					return nil, unconfirmedUpdateError(fmt.Errorf("update user fallback did not confirm requested state: %w", err))
 				}
 				tgid, _ := fallbackUser.TelegramId.Get()
 				slog.Info("updated user (fallback)", "telegramId", utils.MaskHalf(strconv.Itoa(tgid)), "username", utils.MaskHalf(fallbackUser.Username), "days", days)
 				return fallbackUser, nil
 			}
 			if fallbackErr != nil {
-				return nil, fmt.Errorf("update user decode fallback failed: %w", fallbackErr)
+				return nil, unconfirmedUpdateError(fmt.Errorf("update user decode fallback failed: %w", fallbackErr))
 			}
 		}
-		return nil, err
+		// A transport error or timeout says nothing about whether the panel
+		// applied the mutation, so callers must re-read panel state.
+		return nil, unconfirmedUpdateError(err)
 	}
 	userResponse, ok := updateUser.(*remapi.UserResponse)
 	if !ok {
-		return nil, panelResponseError(updateUser)
+		respErr := panelResponseError(updateUser)
+		if isPreMutationRejection(updateUser) {
+			// The panel refused the request outright, so the key was never
+			// touched and the caller may safely refund or retry.
+			return nil, respErr
+		}
+		return nil, unconfirmedUpdateError(respErr)
 	}
 
 	updatedUser := &userResponse.Response
 	if err := validateUpdatedUserState(updatedUser, newExpire, trafficLimit); err != nil {
-		return nil, err
+		// The mutation already reached the panel; only the confirmed state is
+		// short of the request. Refunding here would charge the customer for a
+		// key the panel may have extended.
+		return nil, unconfirmedUpdateError(err)
 	}
 
 	tgid, _ := existingUser.TelegramId.Get()
@@ -544,6 +537,90 @@ func isDecodeResponseError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// GetUserByUUID reads the current panel state of one user.
+//
+// It is the read side of the ambiguous-update recovery path: a caller that
+// cannot tell whether an extend landed re-reads the user here instead of
+// refunding or retrying blind. A panel refusal is returned as an error; the
+// response envelope is never asserted unchecked.
+func (r *Client) GetUserByUUID(ctx context.Context, userUUID uuid.UUID) (*remapi.User, error) {
+	existingUser, err := r.readUserByUUID(ctx, userUUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user %s: %w", userUUID, err)
+	}
+	return existingUser, nil
+}
+
+func (r *Client) readUserByUUID(ctx context.Context, userUUID uuid.UUID) (*remapi.User, error) {
+	resp, err := r.client.Users().GetUserByUuid(ctx, userUUID.String())
+	if err != nil {
+		if isDecodeResponseError(err) {
+			slog.Warn("Remnawave decode failure on GetUserByUuid, falling back to permissive parser", "user_uuid", userUUID.String(), "error", err)
+			fallbackUser, fallbackErr := r.getUserByUUIDFallback(ctx, userUUID)
+			if fallbackErr == nil && fallbackUser != nil {
+				return fallbackUser, nil
+			}
+			if fallbackErr != nil {
+				return nil, fmt.Errorf("fallback: %w", fallbackErr)
+			}
+			return nil, errors.New("not found after fallback")
+		}
+		return nil, err
+	}
+
+	userResp, ok := resp.(*remapi.UserResponse)
+	if !ok {
+		return nil, panelResponseError(resp)
+	}
+	return &userResp.Response, nil
+}
+
+// ExtendedExpireAfter reports the expiry a successful extension would leave on
+// the panel, using the same day arithmetic the update request uses.
+func ExtendedExpireAfter(currentExpire time.Time, days int) time.Time {
+	return getNewExpire(days, currentExpire)
+}
+
+// ExtensionApplied reports whether the observed panel state matches an
+// extension that was supposed to land, so an ambiguous failure can be resolved
+// from what the panel actually shows instead of from the error alone.
+func ExtensionApplied(expectedExpire time.Time, observed *remapi.User) bool {
+	if observed == nil {
+		return false
+	}
+	return !observed.ExpireAt.Before(expectedExpire.Add(-updateStateConfirmationSkew))
+}
+
+// ErrUpdateStateUnconfirmed marks a request whose outcome cannot be decided from
+// the call itself: the panel may already hold the mutation, or the response
+// never arrived. Callers must re-read panel state before treating it as
+// "nothing happened".
+var ErrUpdateStateUnconfirmed = errors.New("remnawave update outcome is unconfirmed")
+
+// UpdateOutcomeUnconfirmed reports whether an extend failure is ambiguous, so a
+// caller can re-read the panel instead of refunding or retrying blind.
+func UpdateOutcomeUnconfirmed(err error) bool {
+	return errors.Is(err, ErrUpdateStateUnconfirmed)
+}
+
+// unconfirmedUpdateError wraps an ambiguous update failure with
+// ErrUpdateStateUnconfirmed. A panel refusal is a definite answer and must stay
+// unwrapped: the panel rejected the request before applying it.
+func unconfirmedUpdateError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %v", ErrUpdateStateUnconfirmed, err)
+}
+
+// isPreMutationRejection reports whether a typed panel error proves the request
+// was rejected before it could be applied. A 4xx validation refusal is such a
+// proof; a server error is not, because the panel may have committed first.
+func isPreMutationRejection(resp any) bool {
+	_, rejected := resp.(*remapi.BadRequestError)
+	return rejected
 }
 
 const updateStateConfirmationSkew = 2 * time.Second

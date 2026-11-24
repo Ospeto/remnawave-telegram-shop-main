@@ -156,6 +156,54 @@ func trafficLimitGBFromBytes(limitBytes int) int {
 	return int(math.Ceil(float64(limitBytes) / 1073741824.0))
 }
 
+// extensionOutcome is what a re-read of panel state says about an extension
+// whose ExtendUser call failed ambiguously.
+type extensionOutcome int
+
+const (
+	// extensionUnobservable: panel state could not be read, so whether the
+	// extension landed is unknown.
+	extensionUnobservable extensionOutcome = iota
+	// extensionConfirmedApplied: the panel already shows the extension.
+	extensionConfirmedApplied
+	// extensionConfirmedNotApplied: the panel shows the key untouched, so the
+	// failure happened before the mutation.
+	extensionConfirmedNotApplied
+)
+
+// ExtensionOutcomeUnconfirmed reports whether a failed key extension may still
+// have been applied, so callers must re-read panel state and must not refund or
+// retry. A purchase that stopped at finalization is the same class of outcome:
+// the panel was mutated and the customer was already charged.
+func ExtensionOutcomeUnconfirmed(err error) bool {
+	return remnawave.UpdateOutcomeUnconfirmed(err) || errors.Is(err, ErrPurchaseFinalizationPending)
+}
+
+// resolveExtensionOutcome re-reads panel state after an ambiguous extend
+// failure. It exists so a stuck key is neither refunded nor extended twice: the
+// decision is made from what the panel actually holds, not from the error text.
+func resolveExtensionOutcome(
+	ctx context.Context,
+	readUser func(context.Context, uuid.UUID) (*remapi.User, error),
+	key *database.SubscriptionKey,
+	days int,
+) (extensionOutcome, *remapi.User) {
+	if readUser == nil || key == nil || key.ExpireAt == nil {
+		return extensionUnobservable, nil
+	}
+
+	observed, err := readUser(ctx, key.RemnawaveUUID)
+	if err != nil || observed == nil {
+		return extensionUnobservable, nil
+	}
+
+	expectedExpire := remnawave.ExtendedExpireAfter(*key.ExpireAt, days)
+	if remnawave.ExtensionApplied(expectedExpire, observed) {
+		return extensionConfirmedApplied, observed
+	}
+	return extensionConfirmedNotApplied, observed
+}
+
 func accumulatedTrafficLimitGB(existing database.SubscriptionKey, updatedUser *remapi.User, purchasedTrafficGB int) int {
 	if updatedUser != nil && updatedUser.TrafficLimitBytes.IsSet() {
 		return trafficLimitGBFromBytes(updatedUser.TrafficLimitBytes.Value)
@@ -1529,8 +1577,33 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 				slog.Warn("Remote extension target missing; retrying fulfillment with a fresh key", "purchase_id", utils.MaskHalfInt64(purchase.ID), "key_id", existingKey.ID)
 				return s.ProcessPurchaseById(ctx, purchase.ID)
 			}
-			s.restorePurchaseState(ctx, purchase.ID, originalStatus)
-			return err
+			if !ExtensionOutcomeUnconfirmed(err) {
+				s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+				return err
+			}
+
+			// The extend call failed, but the panel may already hold the mutation.
+			// Re-read the user before deciding anything: refunding an applied
+			// extension gives away a key for free, and retrying it charges the
+			// customer twice.
+			outcome, observed := resolveExtensionOutcome(ctx, s.remnawaveClient.GetUserByUUID, existingKey, purchase.Days)
+			switch outcome {
+			case extensionConfirmedApplied:
+				slog.Warn("Extend reported an error but the panel shows the extension applied; keeping the charge",
+					"purchase_id", utils.MaskHalfInt64(purchase.ID), "key_id", existingKey.ID, "error", err)
+				remnawaveUser = observed
+			case extensionConfirmedNotApplied:
+				slog.Info("Extend failed before mutating the panel; refunding the charge",
+					"purchase_id", utils.MaskHalfInt64(purchase.ID), "key_id", existingKey.ID, "error", err)
+				s.restorePurchaseState(ctx, purchase.ID, originalStatus)
+				return err
+			default:
+				// Panel state is unknown. Refunding would leak revenue and retrying
+				// could double-extend, so hold the purchase for manual recovery.
+				slog.Error("CRITICAL: extend outcome unknown and panel state unreadable; holding purchase for manual recovery",
+					"purchase_id", purchase.ID, "key_id", existingKey.ID, "error", err)
+				return ErrPurchaseFinalizationPending
+			}
 		}
 		newTrafficLimitGB := accumulatedTrafficLimitGB(*existingKey, remnawaveUser, purchase.TrafficLimitGB)
 		if err := persistExtendedSubscriptionKey(ctx, s.subKeyRepo, existingKey.ID, remnawaveUser, purchase.Days, purchase.TrafficLimitGB, newTrafficLimitGB); err != nil {
