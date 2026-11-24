@@ -474,6 +474,29 @@ body.theme-light {
   }
 }
 
+/* Route-level loading skeleton shown while a lazy page chunk is fetched */
+.skeleton-block {
+  background: var(--card-border);
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes skeletonPulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+  }
+}
+
 /* Full-screen centered layout (used by LoadingScreen, ErrorScreen) */
 .screen-center {
   display: flex;
