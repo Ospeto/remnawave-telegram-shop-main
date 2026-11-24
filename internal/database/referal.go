@@ -111,21 +111,76 @@ func NormalizeReferralsByReferee(ctx context.Context, referrals []Referral, reso
 		return nil, nil
 	}
 
-	grouped := make(map[int64][]Referral, len(referrals))
+	resolvedIDs := make(map[int64]int64, len(referrals))
 	resolvedCustomers := make(map[int64]*Customer, len(referrals))
 	for _, ref := range referrals {
 		normalizedID := ref.RefereeID
-		customer, ok := resolvedCustomers[ref.RefereeID]
-		if !ok {
-			var err error
-			customer, err = ResolveReferralCustomer(ctx, resolver, ref.RefereeID)
-			if err != nil {
-				return nil, err
+		if _, ok := resolvedIDs[ref.RefereeID]; !ok {
+			customer, ok := resolvedCustomers[ref.RefereeID]
+			if !ok {
+				var err error
+				customer, err = ResolveReferralCustomer(ctx, resolver, ref.RefereeID)
+				if err != nil {
+					return nil, err
+				}
+				resolvedCustomers[ref.RefereeID] = customer
 			}
-			resolvedCustomers[ref.RefereeID] = customer
+			if customer != nil {
+				normalizedID = customer.ID
+			}
+			resolvedIDs[ref.RefereeID] = normalizedID
 		}
-		if customer != nil {
-			normalizedID = customer.ID
+	}
+
+	return normalizeReferralsByResolvedID(referrals, func(ref Referral) int64 {
+		if id, ok := resolvedIDs[ref.RefereeID]; ok {
+			return id
+		}
+		return ref.RefereeID
+	}), nil
+}
+
+// ReferralWithReferee is a referral row joined with the customer identity of its referee.
+// The join exists because the schema carries two referee identities (customer_id and
+// telegram_id), so resolving each referee took up to two extra queries per row.
+type ReferralWithReferee struct {
+	Referral
+	RefereeCustomerID int64 `db:"referee_customer_id"`
+	RefereeTelegramID int64 `db:"referee_telegram_id"`
+}
+
+// NormalizeReferralsWithResolvedReferee deduplicates referrals by the referee customer
+// identity already resolved by the JOIN, so no per-referee lookups are needed.
+func NormalizeReferralsWithResolvedReferee(referrals []ReferralWithReferee) []Referral {
+	if len(referrals) == 0 {
+		return nil
+	}
+
+	refs := make([]Referral, len(referrals))
+	resolvedIDs := make(map[int64]int64, len(referrals))
+	for i, ref := range referrals {
+		refs[i] = ref.Referral
+		id := ref.RefereeCustomerID
+		if id == 0 {
+			id = ref.RefereeID
+		}
+		resolvedIDs[ref.Referral.ID] = id
+	}
+
+	return normalizeReferralsByResolvedID(refs, func(ref Referral) int64 {
+		if id, ok := resolvedIDs[ref.ID]; ok {
+			return id
+		}
+		return ref.RefereeID
+	})
+}
+
+func normalizeReferralsByResolvedID(referrals []Referral, resolvedID func(Referral) int64) []Referral {
+	grouped := make(map[int64][]Referral, len(referrals))
+	for _, ref := range referrals {
+		normalizedID := resolvedID(ref)
+		if normalizedID == 0 {
+			normalizedID = ref.RefereeID
 		}
 		grouped[normalizedID] = append(grouped[normalizedID], ref)
 	}
@@ -146,7 +201,7 @@ func NormalizeReferralsByReferee(ctx context.Context, referrals []Referral, reso
 		return normalized[i].ID > normalized[j].ID
 	})
 
-	return normalized, nil
+	return normalized
 }
 
 func (r *ReferralRepository) Create(ctx context.Context, referrerID, refereeID int64) (*Referral, error) {
@@ -241,6 +296,21 @@ func (r *ReferralRepository) CountByReferrer(ctx context.Context, referrerID int
 	return count, nil
 }
 
+func buildReferralsWithResolvedRefereeSelect(identityIDs []int64) sq.SelectBuilder {
+	return sq.Select(
+		"r.id", "r.referrer_id", "r.referee_id", "r.used_at", "r.bonus_granted", "r.bonus_granted_at",
+		"r.referee_bonus_granted", "r.referee_bonus_granted_at",
+		"COALESCE(c1.id, c2.id, r.referee_id) AS referee_customer_id",
+		"COALESCE(c1.telegram_id, c2.telegram_id, r.referee_id) AS referee_telegram_id",
+	).
+		From("referral r").
+		LeftJoin("customer c1 ON c1.id = r.referee_id").
+		LeftJoin("customer c2 ON c1.id IS NULL AND c2.telegram_id = r.referee_id").
+		Where(sq.Eq{"r.referrer_id": identityIDs}).
+		OrderBy("r.used_at DESC", "r.id DESC").
+		PlaceholderFormat(sq.Dollar)
+}
+
 func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64) (*Referral, error) {
 	query := sq.Select("id", "referrer_id", "referee_id", "used_at", "bonus_granted", "bonus_granted_at", "referee_bonus_granted", "referee_bonus_granted_at").
 		From("referral").
@@ -271,6 +341,56 @@ func (r *ReferralRepository) FindByReferee(ctx context.Context, refereeID int64)
 		return nil, fmt.Errorf("failed to query referral by referee: %w", err)
 	}
 	return &ref, nil
+}
+
+// FindByReferrerWithResolvedReferee loads a referrer's referrals in ONE query, resolving each
+// referee to its customer row through a LEFT JOIN instead of a per-referee lookup loop.
+// A referee identity matches by customer.id first and falls back to customer.telegram_id
+// (legacy rows), exactly like ResolveReferralCustomer, and the raw identity is kept when
+// neither matches.
+func (r *ReferralRepository) FindByReferrerWithResolvedReferee(ctx context.Context, referrerIDs ...int64) ([]ReferralWithReferee, error) {
+	identityIDs := ReferralIdentityValues(referrerIDs...)
+	if len(identityIDs) == 0 {
+		return nil, nil
+	}
+
+	query := buildReferralsWithResolvedRefereeSelect(identityIDs)
+
+	sql, args, err := query.ToSql()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build select referrals with resolved referee query: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query referrals with resolved referee: %w", err)
+	}
+	defer rows.Close()
+
+	var list []ReferralWithReferee
+	for rows.Next() {
+		var ref ReferralWithReferee
+		if err := rows.Scan(
+			&ref.ID,
+			&ref.ReferrerID,
+			&ref.RefereeID,
+			&ref.UsedAt,
+			&ref.BonusGranted,
+			&ref.BonusGrantedAt,
+			&ref.RefereeBonusGranted,
+			&ref.RefereeBonusGrantedAt,
+			&ref.RefereeCustomerID,
+			&ref.RefereeTelegramID,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan referral with resolved referee: %w", err)
+		}
+		list = append(list, ref)
+	}
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("error iterating referrals with resolved referee: %w", rows.Err())
+	}
+
+	return list, nil
 }
 
 func (r *ReferralRepository) FindByRefereeAny(ctx context.Context, refereeIDs ...int64) ([]Referral, error) {
