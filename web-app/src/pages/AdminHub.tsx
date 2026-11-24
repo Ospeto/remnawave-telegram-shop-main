@@ -3,12 +3,12 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
-import { clearTelegramSession, fetchUserScopedJSONWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession } from '../lib/auth';
 import { isAPIStatus } from '../lib/http';
 import { useLanguage } from '../lib/LanguageContext';
-import { UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { useTelegram } from '../lib/twa';
+import { useUserProfile } from '../lib/userData';
 
 type ToolCard = {
     to: string;
@@ -20,6 +20,7 @@ type ToolCard = {
 export function AdminHub() {
     const { tg, initData, close } = useTelegram();
     const { t } = useLanguage();
+    const userProfile = useUserProfile();
     const navigate = useNavigate();
     const { playClick } = useMXBrownSound();
     const [loading, setLoading] = useState(true);
@@ -43,11 +44,7 @@ export function AdminHub() {
         setAccessDenied(false);
 
         try {
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
+            const meData = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id);
             if (!meData.is_admin) {
                 setAccessDenied(true);
                 return;
@@ -66,7 +63,7 @@ export function AdminHub() {
         } finally {
             setLoading(false);
         }
-    }, [initData, t, tg]);
+    }, [initData, t, tg, userProfile]);
 
     useEffect(() => {
         if (!tg) return;

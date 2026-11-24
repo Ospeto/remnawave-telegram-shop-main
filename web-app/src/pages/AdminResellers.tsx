@@ -6,7 +6,6 @@ import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import {
     clearTelegramSession,
     fetchJSONWithTelegramAuth,
-    fetchUserScopedJSONWithTelegramAuth,
     fetchWithTelegramAuth,
 } from '../lib/auth';
 import { APIError, isAPIStatus } from '../lib/http';
@@ -15,10 +14,10 @@ import {
     AdminReseller,
     ResellerLedgerEntry,
     ResellerSettlementResponse,
-    UserData,
 } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { createIdempotencyKey, useTelegram } from '../lib/twa';
+import { useUserProfile } from '../lib/userData';
 
 function formatMoney(value: number): string {
     return (value || 0).toLocaleString();
@@ -53,6 +52,7 @@ export function AdminResellers() {
     const { t } = useLanguage();
     const navigate = useNavigate();
     const { playClick } = useMXBrownSound();
+    const userProfile = useUserProfile();
 
     const [resellers, setResellers] = useState<AdminReseller[]>([]);
     const [loading, setLoading] = useState(true);
@@ -92,11 +92,7 @@ export function AdminResellers() {
         setAccessDenied(false);
 
         try {
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
+            const meData = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id);
             if (!meData.is_admin) {
                 setAccessDenied(true);
                 return;
@@ -132,7 +128,7 @@ export function AdminResellers() {
         } finally {
             setLoading(false);
         }
-    }, [initData, t, tg]);
+    }, [initData, t, tg, userProfile]);
 
     useEffect(() => {
         if (!tg) return;

@@ -6,7 +6,6 @@ import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import {
     clearTelegramSession,
     fetchJSONWithTelegramAuth,
-    fetchUserScopedJSONWithTelegramAuth,
 } from '../lib/auth';
 import { APIError, isAPIStatus } from '../lib/http';
 import { useLanguage } from '../lib/LanguageContext';
@@ -14,9 +13,9 @@ import {
     ResellerAccount as ResellerAccountData,
     ResellerLedgerEntry,
     ResellerSettlementResponse,
-    UserData,
 } from '../lib/types';
 import { createIdempotencyKey, useTelegram } from '../lib/twa';
+import { useUserProfile } from '../lib/userData';
 
 function formatMoney(value: number): string {
     return (value || 0).toLocaleString();
@@ -52,6 +51,7 @@ export function ResellerAccount() {
     const { tg, initData, close } = useTelegram();
     const { t } = useLanguage();
     const navigate = useNavigate();
+    const userProfile = useUserProfile();
 
     const [account, setAccount] = useState<ResellerAccountData | null>(null);
     const [ledger, setLedger] = useState<ResellerLedgerEntry[]>([]);
@@ -81,11 +81,7 @@ export function ResellerAccount() {
         setAccessDenied(false);
 
         try {
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
+            const meData = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id);
 
             if (!meData.is_reseller) {
                 setAccessDenied(true);
@@ -121,7 +117,7 @@ export function ResellerAccount() {
         } finally {
             setLoading(false);
         }
-    }, [initData, t, tg]);
+    }, [initData, t, tg, userProfile]);
 
     useEffect(() => {
         if (!tg) return;
