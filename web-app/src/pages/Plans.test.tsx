@@ -370,4 +370,43 @@ describe('Plans', () => {
             expect(headers.get('Authorization')).toBe('Bearer session-token');
         });
     });
+
+    it('requests plans and the profile together instead of one after the other', async () => {
+        const resolvers: Array<() => void> = [];
+        const bodies: Record<string, unknown> = {
+            '/api/plans': [{ id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 }],
+            '/api/me': {
+                user: { id: 1, telegram_id: 42 },
+                keys: [],
+                is_active: false,
+                expire_at: null,
+                days_remaining: 0,
+                trial_eligible: false,
+                trial_days: 0,
+            },
+        };
+
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            const body = bodies[url];
+            if (!body) throw new Error(`Unhandled fetch: ${url}`);
+            await new Promise<void>((resolve) => { resolvers.push(resolve); });
+            return jsonResponse(body);
+        });
+
+        renderWithAppProviders([
+            { path: '/plans', element: <Plans /> },
+            { path: '/checkout/:planIndex', element: <div>Checkout with plan</div> },
+        ], ['/plans']);
+
+        // Both reads are in flight with neither resolved: no serial round trip.
+        await waitFor(() => {
+            expect(resolvers).toHaveLength(2);
+        });
+        const requested = fetchMock.mock.calls.map(([url]) => String(url)).sort();
+        expect(requested).toEqual(['/api/me', '/api/plans']);
+
+        resolvers.forEach((resolve) => resolve());
+        expect(await screen.findByText('1 Month')).toBeTruthy();
+    });
 });

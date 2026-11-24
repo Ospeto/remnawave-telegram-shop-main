@@ -9,13 +9,15 @@ import { TipBox } from '../components/TipBox';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans } from '../lib/plans';
+import { useUserProfile } from '../lib/userData';
 
 
 export function Plans() {
     const { tg, initData, close } = useTelegram();
     const { t, language } = useLanguage();
+    const userProfile = useUserProfile();
     const navigate = useNavigate();
     const { playClick } = useMXBrownSound();
     const [searchParams] = useSearchParams();
@@ -60,19 +62,13 @@ export function Plans() {
         setAuthExpired(false);
 
         try {
-            const plansData = await fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData);
+            // The plan list and the profile are independent reads: fetch both at
+            // once instead of paying two serial round trips before first paint.
+            const [plansData, meData] = await Promise.all([
+                fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData),
+                isWalletTopup ? Promise.resolve(null) : userProfile.load(initData, tg?.initDataUnsafe?.user?.id),
+            ]);
             setPlans(getVisiblePlans(Array.isArray(plansData) ? plansData : []));
-
-            if (isWalletTopup) {
-                setUserData(null);
-                return;
-            }
-
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
             setUserData(meData);
         } catch (err) {
             console.warn('Plans load error:', err);
@@ -89,7 +85,7 @@ export function Plans() {
         } finally {
             setLoading(false);
         }
-    }, [initData, isWalletTopup, t, tg]);
+    }, [initData, isWalletTopup, t, tg, userProfile]);
 
     useEffect(() => {
         void loadPlans();

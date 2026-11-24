@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, vi } from 'vitest';
+import { invalidateUserData } from '../lib/userData';
 
 const storage = new Map<string, string>();
 
@@ -85,5 +86,6 @@ afterEach(() => {
     cleanup();
     localStorageMock.clear();
     sessionStorageMock.clear();
+    invalidateUserData();
     vi.restoreAllMocks();
 });

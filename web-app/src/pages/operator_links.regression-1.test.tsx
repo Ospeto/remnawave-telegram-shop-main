@@ -4,6 +4,7 @@ import { Home } from './Home';
 import { Wallet } from './Wallet';
 import { Checkout } from './Checkout';
 import { jsonResponse, renderWithAppProviders, seedTelegramSession } from '../test/test-utils';
+import { invalidateUserData } from '../lib/userData';
 
 const telegramState = vi.hoisted(() => ({
     tg: {
@@ -68,6 +69,9 @@ describe('operator link regressions', () => {
         expect(await screen.findByRole('link', { name: /Contact Support/i })).toHaveAttribute('href', 'https://t.me/custom-support');
 
         unmount();
+        // The shared /api/me store keeps the first profile for its TTL; drop it so
+        // this render reads the second (bot_url-only) response.
+        invalidateUserData();
         fetchMock.mockReset();
         fetchMock.mockResolvedValueOnce(jsonResponse({
             user: { id: 1, telegram_id: 42 },
