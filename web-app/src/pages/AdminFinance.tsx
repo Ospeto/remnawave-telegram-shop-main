@@ -5,7 +5,6 @@ import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import {
   clearTelegramSession,
   fetchJSONWithTelegramAuth,
-  fetchUserScopedJSONWithTelegramAuth,
   fetchWithTelegramAuth,
 } from '../lib/auth';
 import { APIError, isAPIStatus } from '../lib/http';
@@ -19,9 +18,9 @@ import {
   type FinanceReport,
 } from '../lib/finance';
 import { useLanguage } from '../lib/LanguageContext';
-import { UserData } from '../lib/types';
 import { useTelegram } from '../lib/twa';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
+import { useUserProfile } from '../lib/userData';
 
 const PERIOD_TABS = [
   ['day', 'Daily'],
@@ -106,6 +105,7 @@ export function AdminFinance() {
   const { playClick } = useMXBrownSound();
   const navigate = useNavigate();
   const { tg, initData, close } = useTelegram();
+  const userProfile = useUserProfile();
   const [period, setPeriod] = useState<FinancePeriod>('day');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -141,11 +141,7 @@ export function AdminFinance() {
     }
     setError(null);
     try {
-      const me = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-        '/api/me',
-        initData,
-        tg?.initDataUnsafe?.user?.id,
-      );
+      const me = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id);
       if (!me.is_admin) {
         setIsAdmin(false);
         setLoading(false);
@@ -179,7 +175,7 @@ export function AdminFinance() {
     }
     // report intentionally omitted from deps: used only as "has prior data" flag for soft loading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, from, to, initData, tg]);
+  }, [period, from, to, initData, tg, userProfile]);
 
   useEffect(() => {
     void load();

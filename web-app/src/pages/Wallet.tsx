@@ -6,8 +6,9 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth } from '../lib/auth';
 import { buildTelegramStartUrl } from '../lib/externalLinks';
+import { useUserProfile } from '../lib/userData';
 
 interface WalletData {
   balance: number;
@@ -40,6 +41,7 @@ export function Wallet() {
   const { tg, initData, close } = useTelegram();
   const { t } = useLanguage();
   const navigate = useNavigate();
+  const userProfile = useUserProfile();
 
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -67,14 +69,25 @@ export function Wallet() {
     setAuthExpired(false);
 
     try {
-      await fetchUserScopedJSONWithTelegramAuth('/api/me', initData, tg?.initDataUnsafe?.user?.id);
+      // No standalone /api/me probe here: the wallet response already carries the
+      // balance and the referral totals, so the first real call is what reports
+      // an expired session. The shared profile is only read, never fetched, to
+      // skip the referral list when the user provably has no referrals.
+      const knownProfile = userProfile.peek(initData);
+      const referralListIsRedundant = Boolean(
+        knownProfile &&
+        !knownProfile.referral_stats_unavailable &&
+        (knownProfile.referral_count ?? 0) === 0,
+      );
 
       const [walletData, historyData, referralResult] = await Promise.all([
         fetchJSONWithTelegramAuth<WalletData>('/api/wallet', initData),
         fetchJSONWithTelegramAuth<Transaction[]>('/api/wallet/history?limit=10', initData),
-        fetchJSONWithTelegramAuth<ReferralItem[]>('/api/referrals', initData)
-          .then((data) => ({ ok: true as const, data }))
-          .catch((error) => ({ ok: false as const, error })),
+        referralListIsRedundant
+          ? Promise.resolve({ ok: true as const, data: [] as ReferralItem[] })
+          : fetchJSONWithTelegramAuth<ReferralItem[]>('/api/referrals', initData)
+              .then((data) => ({ ok: true as const, data }))
+              .catch((error) => ({ ok: false as const, error })),
       ]);
 
       setWallet(walletData);
@@ -101,7 +114,7 @@ export function Wallet() {
     } finally {
       setLoading(false);
     }
-  }, [initData, t, tg]);
+  }, [initData, t, userProfile]);
 
   useEffect(() => {
     if (!tg) return;

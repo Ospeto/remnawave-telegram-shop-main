@@ -255,16 +255,13 @@ func (h *APIHandler) referralSummary(ctx context.Context, customer *database.Cus
 		return 0, 0, false
 	}
 
-	referrals, err := h.referralRepo.FindByReferrerAny(ctx, database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
+	referralsRaw, err := h.referralRepo.FindByReferrerWithResolvedReferee(ctx, database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
 	if err != nil {
 		slog.Warn("Failed to load referrals", "customer_id", customer.ID, "error", err)
 		return 0, 0, true
 	}
-	referrals, err = database.NormalizeReferralsByReferee(ctx, referrals, h.customerRepo)
-	if err != nil {
-		slog.Warn("Failed to normalize referrals", "customer_id", customer.ID, "error", err)
-		return 0, 0, true
-	}
+	// The referee identity is resolved by the JOIN, so no per-referee lookups are needed.
+	referrals := database.NormalizeReferralsWithResolvedReferee(referralsRaw)
 
 	count := len(referrals)
 	total := 0.0
@@ -278,14 +275,6 @@ func (h *APIHandler) referralSummary(ctx context.Context, customer *database.Cus
 	}
 
 	return count, total, false
-}
-
-func (h *APIHandler) referralMaskedTelegramID(ctx context.Context, customerID int64) string {
-	customer, err := database.ResolveReferralCustomer(ctx, h.customerRepo, customerID)
-	if err != nil || customer == nil {
-		return maskHalfInt64(customerID)
-	}
-	return maskHalfInt64(customer.TelegramID)
 }
 
 func writeSanitizedError(w http.ResponseWriter, status int, publicMessage string, err error) {
@@ -2807,24 +2796,29 @@ func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
 
 	var items []ReferralItem
 	if h.referralRepo != nil {
-		refs, err := h.referralRepo.FindByReferrerAny(r.Context(), database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
+		refsRaw, err := h.referralRepo.FindByReferrerWithResolvedReferee(r.Context(), database.ReferralIdentityValues(customer.ID, customer.TelegramID)...)
 		if err != nil {
 			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load referrals", err)
 			return
 		}
-		refs, err = database.NormalizeReferralsByReferee(r.Context(), refs, h.customerRepo)
-		if err != nil {
-			writeSanitizedError(w, http.StatusInternalServerError, "Failed to load referrals", err)
-			return
+		// Referee telegram IDs come from the JOIN, so no per-referee lookup is needed here.
+		maskedByReferralID := make(map[int64]string, len(refsRaw))
+		for _, ref := range refsRaw {
+			maskedByReferralID[ref.ID] = maskHalfInt64(ref.RefereeTelegramID)
 		}
+		refs := database.NormalizeReferralsWithResolvedReferee(refsRaw)
 		for _, ref := range refs {
 			status := "pending"
 			if ref.BonusGranted {
 				status = "bonus_received"
 			}
+			maskedID, ok := maskedByReferralID[ref.ID]
+			if !ok {
+				maskedID = maskHalfInt64(ref.RefereeID)
+			}
 			items = append(items, ReferralItem{
 				ID:        ref.ID,
-				MaskedID:  h.referralMaskedTelegramID(r.Context(), ref.RefereeID),
+				MaskedID:  maskedID,
 				CreatedAt: referralActivityAt(ref),
 				Status:    status,
 			})

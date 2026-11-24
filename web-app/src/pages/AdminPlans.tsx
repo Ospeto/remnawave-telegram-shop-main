@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { APIError, isAPIStatus } from '../lib/http';
 import { useLanguage } from '../lib/LanguageContext';
-import { AdminPlan, UserData } from '../lib/types';
+import { AdminPlan } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { useTelegram } from '../lib/twa';
+import { useUserProfile } from '../lib/userData';
 
 interface PlanFormState {
     label: string;
@@ -51,6 +52,7 @@ export function AdminPlans() {
     const { t } = useLanguage();
     const navigate = useNavigate();
     const { playClick } = useMXBrownSound();
+    const userProfile = useUserProfile();
 
     const [plans, setPlans] = useState<AdminPlan[]>([]);
     const [loading, setLoading] = useState(true);
@@ -81,11 +83,7 @@ export function AdminPlans() {
         setAccessDenied(false);
 
         try {
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
+            const meData = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id);
             if (!meData.is_admin) {
                 setAccessDenied(true);
                 return;
@@ -120,7 +118,7 @@ export function AdminPlans() {
         } finally {
             setLoading(false);
         }
-    }, [initData, t, tg]);
+    }, [initData, t, tg, userProfile]);
 
     useEffect(() => {
         if (!tg) return;

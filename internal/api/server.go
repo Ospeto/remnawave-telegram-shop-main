@@ -174,8 +174,13 @@ func RegisterHandlers(
 		// (never delegate directories such as /assets/ to http.FileServer: that renders a directory listing)
 		path := "./web-app/dist" + r.URL.Path
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			if strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/" {
+			switch {
+			case strings.HasSuffix(r.URL.Path, ".html") || r.URL.Path == "/":
+				// The shell must always be revalidated so a new deploy is picked up.
 				w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+			case isImmutableAssetPath(r.URL.Path):
+				// Vite content-hashes every /assets/ filename, so the bytes behind it never change.
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			fs.ServeHTTP(w, r)
 			return
@@ -184,6 +189,12 @@ func RegisterHandlers(
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		http.ServeFile(w, r, "./web-app/dist/index.html")
 	})
+}
+
+// isImmutableAssetPath reports whether a served path is a content-hashed build asset
+// (Vite emits dist/assets/<name>-<hash>.<ext>), which is safe to cache forever.
+func isImmutableAssetPath(urlPath string) bool {
+	return strings.HasPrefix(urlPath, "/assets/")
 }
 
 func renderRedirectPage(target, subURL string) (string, error) {

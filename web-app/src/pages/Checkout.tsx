@@ -11,8 +11,9 @@ import { Plan, ResellerAccount, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
 import { buildTelegramStartUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { getVisiblePlans, resolvePlanReference } from '../lib/plans';
+import { useUserProfile } from '../lib/userData';
 
 interface PaymentProvider {
     key: string;
@@ -57,6 +58,7 @@ export function Checkout() {
     const { planIndex } = useParams();
     const { tg, initData, close } = useTelegram();
     const { t } = useLanguage();
+    const userProfile = useUserProfile();
     const { playClick } = useMXBrownSound();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -246,7 +248,21 @@ export function Checkout() {
         purchaseIntentRef.current = { action: null, key: null };
 
         try {
-            const plansData = await fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData);
+            // Plans and the profile are independent reads, and the wallet balance
+            // does not depend on either: issue all three together instead of
+            // paying for them one after another before first paint.
+            const [plansData, meData, walletBalanceData] = await Promise.all([
+                fetchJSONWithTelegramAuth<Plan[]>('/api/plans', initData),
+                isWalletTopup ? Promise.resolve(null) : userProfile.load(initData, tg?.initDataUnsafe?.user?.id),
+                isWalletTopup
+                    ? Promise.resolve(null)
+                    : fetchJSONWithTelegramAuth<{ balance?: number }>('/api/wallet', initData).catch((err) => {
+                        // Only an expired session takes over the page; any other balance
+                        // read failure degrades to the "unavailable" note, as before.
+                        if (isAPIStatus(err, 401)) throw err;
+                        return null;
+                    }),
+            ]);
             const normalizedPlans = getVisiblePlans(Array.isArray(plansData) ? plansData : []);
 
             if (!isWalletTopup && !resolvePlanReference(normalizedPlans, planIndex).plan) {
@@ -256,19 +272,22 @@ export function Checkout() {
 
             setPlans(normalizedPlans);
 
-            if (isWalletTopup) {
+            if (isWalletTopup || !meData) {
                 setUserData(null);
                 setWalletBalanceLoading(false);
                 return;
             }
 
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
             setUserData(meData);
-            await loadWalletBalance();
+
+            setWalletBalanceLoading(false);
+            if (typeof walletBalanceData?.balance === 'number') {
+                setWalletBalance(walletBalanceData.balance);
+            } else {
+                setWalletBalance(null);
+                setWalletBalanceError(t('wallet_balance_unavailable'));
+            }
+
             if (meData.is_reseller) {
                 await loadResellerAccount();
             }
@@ -287,7 +306,7 @@ export function Checkout() {
         } finally {
             setLoading(false);
         }
-    }, [hasValidTopUpAmount, initData, isWalletTopup, loadResellerAccount, loadWalletBalance, planIndex, t, tg]);
+    }, [hasValidTopUpAmount, initData, isWalletTopup, loadResellerAccount, planIndex, t, tg, userProfile]);
 
     useEffect(() => {
         void loadCheckoutData();
@@ -386,6 +405,9 @@ export function Checkout() {
             setActivePurchase(data);
 
             if (action === 'wallet') {
+                // A wallet payment changes the balance and the key list, so screens
+                // reached afterwards must not read the profile cached before it.
+                userProfile.invalidate();
                 setVerificationResult({
                     status: 'success',
                     message: t('wallet_pay_success'),
@@ -394,6 +416,7 @@ export function Checkout() {
                 });
             }
             if (action === 'postpaid') {
+                userProfile.invalidate();
                 setVerificationResult({
                     status: 'success',
                     message: t('postpaid_pay_success'),
@@ -412,7 +435,7 @@ export function Checkout() {
         } finally {
             setCreatingPurchase(false);
         }
-    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCodeFromUrl, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t, userData?.is_reseller]);
+    }, [creatingPurchase, extendKeyId, hasValidTopUpAmount, initData, isWalletTopup, parsedTopUpAmount, promoCodeFromUrl, resolvedPlan.legacyIndex, selectedPlan, setActivePurchase, t, userData?.is_reseller, userProfile]);
 
     const cancelPendingPayment = useCallback(async () => {
         if (!initData || !purchase || cancellingPayment) return;

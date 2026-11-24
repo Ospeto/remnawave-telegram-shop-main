@@ -11,11 +11,13 @@ import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { resolveSupportUrl } from '../lib/externalLinks';
 import { APIError, isAPIStatus } from '../lib/http';
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
+import { useUserProfile } from '../lib/userData';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
     const { t, language, setLanguage } = useLanguage();
+    const userProfile = useUserProfile();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -31,18 +33,14 @@ export function Home() {
     const headingRef = useRef<HTMLHeadingElement>(null);
     const { playClick } = useMXBrownSound();
 
-    const loadData = useCallback(async () => {
+    const loadData = useCallback(async (options: { force?: boolean } = {}) => {
         if (!initData) { setLoading(false); return; }
 
         setLoading(true);
         setError(null);
         setAuthExpired(false);
         try {
-            const meData = await fetchUserScopedJSONWithTelegramAuth<UserData>(
-                '/api/me',
-                initData,
-                tg?.initDataUnsafe?.user?.id,
-            );
+            const meData = await userProfile.load(initData, tg?.initDataUnsafe?.user?.id, { force: options.force });
             setData(meData);
         } catch (err) {
             if (isAPIStatus(err, 401)) {
@@ -58,7 +56,7 @@ export function Home() {
         } finally {
             setLoading(false);
         }
-    }, [initData, tg]);
+    }, [initData, tg, userProfile]);
 
     useEffect(() => {
         if (tg) tg.BackButton.hide();
@@ -106,6 +104,8 @@ export function Home() {
                 return;
             }
             if (res.ok) {
+                // The key list changed; other screens must not reuse the cached profile.
+                userProfile.invalidate();
                 // Optimistic update — flip the local state immediately
                 setData(prev => {
                     if (!prev) return prev;
@@ -147,7 +147,7 @@ export function Home() {
             }
             if (!res.ok) throw new Error(`${res.status}`);
             // Re-fetch data instead of reloading the page
-            await loadData();
+            await loadData({ force: true });
         } catch {
             setTrialError(t('trial_error'));
         } finally {
@@ -189,6 +189,7 @@ export function Home() {
             await fetchJSONWithTelegramAuth(`/api/keys/${keyId}/hide`, initData, {
                 method: 'POST',
             });
+            userProfile.invalidate();
             setKeyToRemove(null);
             setData(prev => {
                 if (!prev) return prev;
@@ -239,7 +240,7 @@ export function Home() {
     if (error) return (
         <ErrorScreen
             message={`${t('error_prefix')} ${error}`}
-            onRetry={() => { void loadData(); }}
+            onRetry={() => { void loadData({ force: true }); }}
             retryLabel={t('retry')}
         />
     );

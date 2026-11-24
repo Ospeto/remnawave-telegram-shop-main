@@ -1156,4 +1156,113 @@ describe('Checkout', () => {
         expect(screen.queryByRole('button', { name: /Buy on credit/i })).toBeNull();
         expect(fetchMock.mock.calls.find(([url]) => String(url) === '/api/reseller/account')).toBeUndefined();
     });
+
+    it('starts the plan, profile and wallet reads together instead of serially', async () => {
+        const resolvers = new Map<string, () => void>();
+        const bodies: Record<string, unknown> = {
+            '/api/plans': [{ id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 }],
+            '/api/me': {
+                user: { id: 1, telegram_id: 42 },
+                keys: [],
+                is_active: false,
+                expire_at: null,
+                days_remaining: 0,
+                trial_eligible: false,
+                trial_days: 0,
+            },
+            '/api/wallet': { balance: 4200, currency: 'MMK' },
+        };
+
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            const body = bodies[url];
+            if (!body) throw new Error(`Unhandled fetch: ${url}`);
+            await new Promise<void>((resolve) => { resolvers.set(url, resolve); });
+            return jsonResponse(body);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        // All three reads are in flight before any one of them resolves.
+        await waitFor(() => {
+            expect(resolvers.size).toBe(3);
+        });
+        expect([...resolvers.keys()].sort()).toEqual(['/api/me', '/api/plans', '/api/wallet']);
+
+        resolvers.forEach((resolve) => resolve());
+        // Balance 4,200 < 5,000 plan price: the wallet option renders as low balance,
+        // which proves the pre-fetched balance reached the page.
+        expect(await screen.findByText('Wallet balance is not enough for wallet payment')).toBeTruthy();
+        expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/me')).toHaveLength(1);
+    });
+
+    it('shows the expired-session screen when the plan read reports 401', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/session') {
+                return jsonResponse({ token: 'fresh-token', expires_at: '2999-01-01T00:00:00.000Z' });
+            }
+            if (url === '/api/plans') return jsonResponse('unauthorized', 401);
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') return jsonResponse({ balance: 0, currency: 'MMK' });
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        expect(await screen.findByRole('heading', { name: 'Session expired' })).toBeTruthy();
+    });
+
+    it('degrades a failed wallet balance read to the unavailable note instead of failing the page', async () => {
+        fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/plans') {
+                return jsonResponse([
+                    { id: 'plan-30', label: '1 Month', days: 30, price: 5000, traffic_limit_gb: 0, currency: 'MMK', active: true, sort_order: 0 },
+                ]);
+            }
+            if (url === '/api/me') {
+                return jsonResponse({
+                    user: { id: 1, telegram_id: 42 },
+                    keys: [],
+                    is_active: false,
+                    expire_at: null,
+                    days_remaining: 0,
+                    trial_eligible: false,
+                    trial_days: 0,
+                });
+            }
+            if (url === '/api/wallet') return jsonResponse('boom', 500);
+            throw new Error(`Unhandled fetch: ${url}`);
+        });
+
+        renderWithAppProviders([
+            { path: '/checkout/:planIndex', element: <Checkout /> },
+            { path: '/plans', element: <div>Plans</div> },
+            { path: '/wallet', element: <div>Wallet</div> },
+        ], ['/checkout/plan-30']);
+
+        // The balance read is optional: its failure must not replace the plan page.
+        expect(await screen.findByText('Wallet balance unavailable')).toBeTruthy();
+        expect(screen.queryByRole('heading', { name: 'Session expired' })).toBeNull();
+        expect(screen.queryByText('boom')).toBeNull();
+    });
 });
