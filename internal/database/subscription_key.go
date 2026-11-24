@@ -494,20 +494,29 @@ func (r *SubscriptionKeyRepository) ValidateExtendKeyTx(ctx context.Context, tx 
 	return nil
 }
 
-// FindExpiringAutoRenewKeys returns all active keys with auto_renew=true
-// whose expire_at is between 'after' and 'before'.
-// Used exclusively by the auto-renew cron job.
-func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]SubscriptionKey, error) {
-	query := sq.Select(subKeyColumns...).
+// buildFindExpiringAutoRenewKeysQuery builds the auto-renew eligibility query.
+// Extracted so the eligibility filter can be asserted without a live database.
+func buildFindExpiringAutoRenewKeysQuery(after time.Time, before time.Time) sq.SelectBuilder {
+	return sq.Select(subKeyColumns...).
 		From("subscription_key").
 		Where(sq.And{
 			sq.Eq{"auto_renew": true},
-			sq.Eq{"status": "active"},
+			sq.Eq{"status": []string{"active", "expired"}},
 			sq.NotEq{"expire_at": nil},
 			sq.Gt{"expire_at": after},
 			sq.LtOrEq{"expire_at": before},
 		}).
 		PlaceholderFormat(sq.Dollar)
+}
+
+// FindExpiringAutoRenewKeys returns all active or expired keys with auto_renew=true
+// whose expire_at is between 'after' and 'before'.
+// Used exclusively by the auto-renew cron job. Expired keys are included on purpose:
+// SyncKeys marks lapsed keys 'expired', and the lookback window exists to rescue keys
+// that expired inside it. It remains bounded to explicit known statuses, never a
+// wildcard, so a 'deleted' or 'hidden' key is never auto-renewed.
+func (r *SubscriptionKeyRepository) FindExpiringAutoRenewKeys(ctx context.Context, after time.Time, before time.Time) ([]SubscriptionKey, error) {
+	query := buildFindExpiringAutoRenewKeysQuery(after, before)
 
 	sql, args, err := query.ToSql()
 	if err != nil {
@@ -545,6 +554,22 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenew(ctx context.Context, keyID
 	return r.TryClaimAutoRenewWithTTL(ctx, keyID, expectedLast, AutoRenewClaimTTL)
 }
 
+// autoRenewClaimSQL claims one key for processing. It is declared separately so
+// the eligibility filter (auto_renew, status, cycle marker, stale claim) can be
+// asserted by tests without a live database.
+const autoRenewClaimSQL = `
+		UPDATE subscription_key
+		SET auto_renew_claimed_at = NOW()
+		WHERE id = $1
+		  AND auto_renew = TRUE
+		  AND status IN ('active', 'expired')
+		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
+		  AND (
+		        auto_renew_claimed_at IS NULL
+		        OR auto_renew_claimed_at <= NOW() - make_interval(secs => $3::double precision)
+		      )
+		RETURNING auto_renew_claimed_at`
+
 // TryClaimAutoRenewWithTTL is like TryClaimAutoRenew but accepts an explicit TTL
 // (for tests and shared constants).
 func (r *SubscriptionKeyRepository) TryClaimAutoRenewWithTTL(ctx context.Context, keyID int64, expectedLast *time.Time, claimTTL time.Duration) (*time.Time, bool, error) {
@@ -554,19 +579,7 @@ func (r *SubscriptionKeyRepository) TryClaimAutoRenewWithTTL(ctx context.Context
 	// Pass seconds as float so Postgres can build an interval without driver-specific types.
 	ttlSeconds := claimTTL.Seconds()
 	var claimedAt time.Time
-	err := r.pool.QueryRow(ctx, `
-		UPDATE subscription_key
-		SET auto_renew_claimed_at = NOW()
-		WHERE id = $1
-		  AND auto_renew = TRUE
-		  AND status = 'active'
-		  AND last_auto_renewed_at IS NOT DISTINCT FROM $2
-		  AND (
-		        auto_renew_claimed_at IS NULL
-		        OR auto_renew_claimed_at <= NOW() - make_interval(secs => $3::double precision)
-		      )
-		RETURNING auto_renew_claimed_at
-	`, keyID, expectedLast, ttlSeconds).Scan(&claimedAt)
+	err := r.pool.QueryRow(ctx, autoRenewClaimSQL, keyID, expectedLast, ttlSeconds).Scan(&claimedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, false, nil
