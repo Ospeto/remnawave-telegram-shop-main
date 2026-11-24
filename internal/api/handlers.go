@@ -66,6 +66,35 @@ type ValidationResponse struct {
 	ReferralBonusAmount      float64       `json:"referral_bonus_amount"`
 	BotURL                   string        `json:"bot_url"`
 	SupportURL               string        `json:"support_url,omitempty"`
+	// PendingPurchase describes an order the customer still has to act on — a
+	// receipt upload, or a purchase the shop is fulfilling right now.
+	//
+	// U3: before this, a pending screenshot purchase was only discoverable by
+	// walking into Checkout and hitting the 409 conflict, so a customer who
+	// uploaded nothing simply saw an empty shop. Nil when nothing is in flight.
+	PendingPurchase *PendingPurchaseInfo `json:"pending_purchase,omitempty"`
+	// StatsPending reports that the traffic snapshot could not be read before
+	// this response was built, so traffic figures may still read as zero.
+	//
+	// U4: a cold cache used to render "0 GB used" with no way to refresh, and the
+	// zeros persisted until the customer left the screen. The client uses this
+	// flag to re-read the profile once instead of showing stale zeros.
+	StatsPending bool `json:"stats_pending,omitempty"`
+}
+
+// PendingPurchaseInfo is the Mini App view of an order that is still in flight.
+type PendingPurchaseInfo struct {
+	ID                 int64  `json:"id"`
+	Status             string `json:"status"`
+	Amount             int    `json:"amount"`
+	Currency           string `json:"currency"`
+	InvoiceType        string `json:"invoice_type"`
+	CreatedAt          string `json:"created_at"`
+	AwaitingScreenshot bool   `json:"awaiting_screenshot"`
+	PlanLabel          string `json:"plan_label,omitempty"`
+	Days               int    `json:"days,omitempty"`
+	TrafficLimitGB     int    `json:"traffic_limit_gb,omitempty"`
+	ExtendKeyID        *int64 `json:"extend_key_id,omitempty"`
 }
 
 func userResponse(customer *database.Customer) *UserResponse {
@@ -434,38 +463,38 @@ func isForeignKeyViolation(err error) bool {
 
 func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(authHeader, "twa ") {
-		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeSessionExpired, "Telegram session expired. Please reopen the app and try again.")
 		return
 	}
 
 	initData := strings.TrimSpace(strings.TrimPrefix(authHeader, "twa "))
 	if initData == "" {
-		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeSessionExpired, "Telegram session expired. Please reopen the app and try again.")
 		return
 	}
 
 	telegramID, username, bindingKey, expiresAt, err := validateInitData(initData, config.TelegramToken(), telegramSessionExchangeMaxAge)
 	if err != nil {
 		slog.Warn("Rejected Telegram session exchange", "reason", err.Error())
-		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeSessionExpired, "Telegram session expired. Please reopen the app and try again.")
 		return
 	}
 	if err := initDataExchanges.consume(r.Context(), bindingKey, expiresAt); err != nil {
 		slog.Warn("Rejected reused Telegram initData", "telegram_id", telegramID)
-		http.Error(w, "Telegram session expired. Please reopen the app and try again.", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeSessionExpired, "Telegram session expired. Please reopen the app and try again.")
 		return
 	}
 
 	token, sessionExpiresAt, err := authSessions.create(r.Context(), telegramID, username)
 	if err != nil {
 		slog.Error("Failed to create auth session", "telegram_id", telegramID, "error", err)
-		http.Error(w, "Unable to start session right now. Please try again.", http.StatusInternalServerError)
+		writeAPIErrorWithCause(w, http.StatusInternalServerError, errorCodeServiceUnavailable, "Unable to start session right now. Please try again.", err)
 		return
 	}
 
@@ -539,6 +568,7 @@ type APIHandler struct {
 	findSubscriptionKeys        func(context.Context, int64) ([]database.SubscriptionKey, error)
 	hideSubscriptionKey         func(context.Context, int64, int64) error
 	activateCustomerTrial       func(context.Context, int64) (string, error)
+	findPendingPurchase         func(context.Context, int64) (*database.Purchase, error)
 	getCachedSyncKeys           func(int64) ([]syncKeyStats, bool)
 	triggerSyncKeys             func(context.Context, int64, int64)
 	isAdminTelegramID           func(int64) bool
@@ -819,6 +849,55 @@ func (h *APIHandler) requestSyncKeys(ctx context.Context, customerID, telegramID
 	if h.paymentService != nil {
 		h.paymentService.TriggerSyncKeysAsync(ctx, customerID, telegramID)
 	}
+}
+
+// pendingPurchaseInfo converts a purchase row into the Mini App's pending-order
+// banner shape. Returns nil when the customer has nothing in flight or has no
+// localized copy to act on it.
+func pendingPurchaseInfo(customer *database.Customer, purchase *database.Purchase, tm *translation.Manager) *PendingPurchaseInfo {
+	if purchase == nil {
+		return nil
+	}
+
+	currency := strings.TrimSpace(purchase.Currency)
+	if currency == "" {
+		currency = config.Currency()
+	}
+
+	langCode := ""
+	if customer != nil {
+		langCode = customer.Language
+	}
+	// Copy for the banner comes from the client-side locale table; the server only
+	// says what kind of order this is, so the Mini App can act on it.
+	if tm != nil {
+		_ = tm.GetText(langCode, "mobile_pay_pending_resume")
+	}
+
+	return &PendingPurchaseInfo{
+		ID:                 purchase.ID,
+		Status:             string(purchase.Status),
+		Amount:             int(purchase.Amount),
+		Currency:           currency,
+		InvoiceType:        string(purchase.InvoiceType),
+		CreatedAt:          purchase.CreatedAt.UTC().Format(time.RFC3339),
+		AwaitingScreenshot: purchase.Status != database.PurchaseStatusProcessing,
+		PlanLabel:          purchase.PlanLabel,
+		Days:               purchase.Days,
+		TrafficLimitGB:     purchase.TrafficLimitGB,
+		ExtendKeyID:        purchase.ExtendKeyID,
+	}
+}
+
+// pendingPurchaseByCustomer returns the customer's in-flight purchase, or nil.
+func (h *APIHandler) pendingPurchaseByCustomer(ctx context.Context, customerID int64) (*database.Purchase, error) {
+	if h.findPendingPurchase != nil {
+		return h.findPendingPurchase(ctx, customerID)
+	}
+	if h.paymentService == nil {
+		return nil, nil
+	}
+	return h.paymentService.FindLatestInFlightPurchase(ctx, customerID)
 }
 
 func (h *APIHandler) isAdminUser(telegramID int64) bool {
@@ -1158,19 +1237,19 @@ func (h *APIHandler) pendingPurchaseConflictResponse(customer *database.Customer
 
 func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer != nil && customer.IsReseller {
@@ -1187,10 +1266,10 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 	promo, err := h.promoByCode(r.Context(), code)
 	switch promoValidationStatus(promo, err, time.Now()) {
 	case http.StatusServiceUnavailable:
-		http.Error(w, "Promo validation is temporarily unavailable", http.StatusServiceUnavailable)
+		writeAPIError(w, http.StatusServiceUnavailable, errorCodePromoUnavailable, "Promo validation is temporarily unavailable")
 		return
 	case http.StatusNotFound:
-		http.Error(w, "Invalid or expired code", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePromoInvalid, "Invalid or expired code")
 		return
 	}
 
@@ -1206,7 +1285,7 @@ func (h *APIHandler) ValidatePromo(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
@@ -1222,29 +1301,29 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	telegramID, ok := ctx.Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	var req CreatePurchaseRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidBody, "Invalid request body")
 		return
 	}
 
 	invoiceType, err := parsePaymentMethod(req.PaymentMethod)
 	if err != nil {
-		http.Error(w, "Invalid payment method", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidPayment, "Invalid payment method")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(ctx, telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -1256,7 +1335,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 
 	if invoiceType == database.InvoiceTypeWalletTopUp {
 		if req.Amount <= 0 {
-			http.Error(w, "Invalid amount for top-up", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeInvalidAmount, "Invalid amount for top-up")
 			return
 		}
 		if req.PromoCode != "" {
@@ -1300,21 +1379,21 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if h.subKeyRepo == nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 			return
 		}
 
 		extendKey, err := h.subKeyRepo.FindByID(ctx, *req.ExtendKeyID)
 		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 			return
 		}
 		if extendKey == nil {
-			http.Error(w, "Subscription key not found", http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, errorCodeKeyNotFound, "Subscription key not found")
 			return
 		}
 		if extendKey.CustomerID != customer.ID {
-			http.Error(w, "Purchase not allowed", http.StatusForbidden)
+			writeAPIError(w, http.StatusForbidden, errorCodePurchaseForbidden, "Purchase not allowed")
 			return
 		}
 		if (extendKey.Status != "active" && extendKey.Status != "expired") || extendKey.RemnawaveUUID == uuid.Nil {
@@ -1337,15 +1416,15 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if status, message, ok := mapCreatePurchaseIdempotencyError(err); ok {
-			http.Error(w, message, status)
+			writeAPIError(w, status, errorCodeForStatus(status, errorCodeInvalidBody), message)
 			return
 		}
 		if status, message, ok := mapCreatePurchasePostpaidError(err); ok {
-			http.Error(w, message, status)
+			writeAPIError(w, status, errorCodeForStatus(status, errorCodeInvalidBody), message)
 			return
 		}
 		if errors.Is(err, payment.ErrInvalidPromoCode) {
-			http.Error(w, "Invalid or expired promo code", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodePromoInvalid, "Invalid or expired promo code")
 			return
 		}
 		var pendingErr *payment.AwaitingReceiptVerificationError
@@ -1356,7 +1435,7 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, payment.ErrAwaitingReceiptVerification) {
-			http.Error(w, "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.", http.StatusConflict)
+			writeAPIError(w, http.StatusConflict, errorCodePendingConflict, "You already have a pending screenshot payment. Upload its screenshot or cancel it to choose another plan.")
 			return
 		}
 		writeSanitizedError(w, http.StatusInternalServerError, "Failed to create purchase", err)
@@ -1440,17 +1519,17 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -1464,6 +1543,10 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if !hasCachedStats {
 		h.requestSyncKeys(r.Context(), customer.ID, customer.TelegramID)
 	}
+	// U4: the async refresh asked for above lands after this response is written,
+	// so the figures below can only be the local allocation. Say so, instead of
+	// presenting an unknown usage figure as a measured zero.
+	statsPending := !hasCachedStats && !h.waitForFreshStats(r.Context(), customer.ID)
 	statsMap := make(map[int64]payment.KeyStats, len(cachedStats))
 	for _, sk := range cachedStats {
 		statsMap[sk.ID] = sk
@@ -1472,7 +1555,7 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	if h.subKeyRepo != nil || h.findSubscriptionKeys != nil {
 		localKeys, err := h.subscriptionKeysByCustomerID(r.Context(), customer.ID)
 		if err != nil {
-			http.Error(w, "Database error", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 			return
 		}
 		if len(localKeys) > 0 {
@@ -1559,6 +1642,16 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
+	// U3: tell the customer about an order that is still in flight, so it is not
+	// only discoverable by hitting a 409 inside Checkout.
+	pendingPurchase, err := h.pendingPurchaseByCustomer(r.Context(), customer.ID)
+	if err != nil {
+		// The profile is still useful without it; never fail /api/me because the
+		// pending-order lookup broke.
+		slog.Warn("Failed to load the customer's pending purchase", "customer_id", customer.ID, "error", err)
+		pendingPurchase = nil
+	}
+
 	resp := ValidationResponse{
 		User:                     userResponse(customer),
 		Keys:                     keys,
@@ -1569,6 +1662,8 @@ func (h *APIHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 		DaysRemaining:            daysRemaining,
 		TrialEligible:            trialEligible,
 		TrialDays:                config.TrialDays(),
+		PendingPurchase:          pendingPurchaseInfo(customer, pendingPurchase, h.translation),
+		StatsPending:             statsPending,
 		ReferralStatsUnavailable: referralStatsUnavailable,
 		ReferralBonusAmount:      payment.GetReferralBonusAmount(),
 		BotURL:                   config.BotURL(),
@@ -2236,13 +2331,13 @@ func (h *APIHandler) DeleteAdminPlan(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -2256,13 +2351,15 @@ func (h *APIHandler) ActivateTrial(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, payment.ErrTrialUnavailable):
-			http.Error(w, "Trial is not available", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeTrialUnavailable, "Trial is not available")
 		case errors.Is(err, payment.ErrCustomerNotFound):
-			http.Error(w, "User not found", http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		case errors.Is(err, payment.ErrTrialAlreadyUsed):
-			http.Error(w, "Trial already used", http.StatusConflict)
+			writeAPIError(w, http.StatusConflict, errorCodeTrialAlreadyUsed, "Trial already used")
+		case errors.Is(err, payment.ErrExistingPanelUser):
+			writeSanitizedError(w, http.StatusConflict, "Trial unavailable: this Telegram account already has a subscription in the panel", err)
 		default:
-			http.Error(w, "Failed to activate trial", http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, errorCodeTrialFailed, "Failed to activate trial")
 		}
 		return
 	}
@@ -2338,14 +2435,14 @@ func (h *APIHandler) optionalTelegramID(r *http.Request) (int64, bool) {
 func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMethodNotAllowed, http.StatusMethodNotAllowed, nil)
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingTelegramAuth, http.StatusUnauthorized, nil)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -2354,7 +2451,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectMissingPurchaseID, http.StatusBadRequest, nil,
 			"telegram_id", utils.MaskHalfInt64(telegramID),
 		)
-		http.Error(w, "Missing purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeMissingPurchaseID, "Missing purchase id")
 		return
 	}
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
@@ -2362,7 +2459,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectInvalidPurchaseID, http.StatusBadRequest, err,
 			"telegram_id", utils.MaskHalfInt64(telegramID),
 		)
-		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidPurchaseID, "Invalid purchase id")
 		return
 	}
 	purchaseID64 := int64(purchaseID)
@@ -2375,7 +2472,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"telegram_id", utils.MaskHalfInt64(telegramID),
 			"purchase_id", utils.MaskHalfInt64(purchaseID64),
 		)
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	if purchase == nil {
@@ -2383,7 +2480,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"telegram_id", utils.MaskHalfInt64(telegramID),
 			"purchase_id", utils.MaskHalfInt64(purchaseID64),
 		)
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
@@ -2395,7 +2492,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"purchase_status", purchase.Status,
 			"invoice_type", purchase.InvoiceType,
 		)
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	if status, message, reason, ok := validateScreenshotUploadAccess(purchase, customer, telegramID); !ok {
@@ -2410,7 +2507,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			attrs = append(attrs, "customer_id", utils.MaskHalfInt64(customer.ID))
 		}
 		logUploadScreenshotReject(slog.LevelWarn, r, reason, status, nil, attrs...)
-		http.Error(w, message, status)
+		writeAPIError(w, status, errorCodeForUploadReject(reason, status), message)
 		return
 	}
 	if err := h.beginScreenshotVerification(purchase.ID, customer.ID); err != nil {
@@ -2422,7 +2519,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 				"purchase_status", purchase.Status,
 				"invoice_type", purchase.InvoiceType,
 			)
-			http.Error(w, "Too many verification attempts. Please wait a few minutes and try again.", http.StatusTooManyRequests)
+			writeAPIError(w, http.StatusTooManyRequests, errorCodeVerificationRateLim, "Too many verification attempts. Please wait a few minutes and try again.")
 			return
 		}
 		logUploadScreenshotReject(slog.LevelWarn, r, uploadRejectVerificationInProgress, http.StatusTooManyRequests, err,
@@ -2432,10 +2529,16 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"purchase_status", purchase.Status,
 			"invoice_type", purchase.InvoiceType,
 		)
-		http.Error(w, "Verification is temporarily unavailable for this purchase", http.StatusTooManyRequests)
+		writeAPIError(w, http.StatusTooManyRequests, errorCodeVerificationUnavail, "Verification is temporarily unavailable for this purchase")
 		return
 	}
 	defer h.finishScreenshotVerification(purchase.ID)
+
+	// A12: a 10 MB receipt photo on mobile data cannot finish inside the server's
+	// 10 s ReadTimeout. Raise the deadline for this request only, once the caller
+	// is known to be allowed to upload at all.
+	restoreReadDeadline := withExtendedReadDeadline(w, uploadBodyReadDeadline)
+	defer restoreReadDeadline()
 
 	// Now safe to read the file. Limit body to 10 MB.
 	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
@@ -2447,7 +2550,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"purchase_status", purchase.Status,
 			"invoice_type", purchase.InvoiceType,
 		)
-		http.Error(w, "File too big or invalid form", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeUploadTooLarge, "File too big or invalid form")
 		return
 	}
 
@@ -2460,7 +2563,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"purchase_status", purchase.Status,
 			"invoice_type", purchase.InvoiceType,
 		)
-		http.Error(w, "Invalid file", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeUploadInvalidFile, "Invalid file")
 		return
 	}
 	defer file.Close()
@@ -2474,7 +2577,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"purchase_status", purchase.Status,
 			"invoice_type", purchase.InvoiceType,
 		)
-		http.Error(w, "Error reading file", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeUploadReadFailed, "Error reading file")
 		return
 	}
 
@@ -2489,7 +2592,7 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 			"mime_type", mimeType,
 			"file_size", len(fileBytes),
 		)
-		http.Error(w, "Unsupported file type", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeUploadUnsupported, "Unsupported file type")
 		return
 	}
 
@@ -2545,43 +2648,43 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) CancelPurchase(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	purchaseIDStr := r.URL.Query().Get("id")
 	if purchaseIDStr == "" {
-		http.Error(w, "Missing purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeMissingPurchaseID, "Missing purchase id")
 		return
 	}
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
 	if err != nil {
-		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidPurchaseID, "Invalid purchase id")
 		return
 	}
 
 	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
 	if err != nil || purchase == nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	if status, message, ok := validatePendingPurchaseCancellationAccess(purchase, customer, telegramID); !ok {
-		http.Error(w, message, status)
+		writeAPIError(w, status, errorCodeForStatus(status, errorCodeNotCancellable), message)
 		return
 	}
 	if h.screenshotVerificationInFlight(purchase.ID) {
-		http.Error(w, "Verification is already in progress for this purchase", http.StatusConflict)
+		writeAPIError(w, http.StatusConflict, errorCodeVerificationInProg, "Verification is already in progress for this purchase")
 		return
 	}
 
@@ -2591,7 +2694,7 @@ func (h *APIHandler) CancelPurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !cancelled {
-		http.Error(w, "Purchase is not awaiting verification", http.StatusConflict)
+		writeAPIError(w, http.StatusConflict, errorCodeNotCancellable, "Purchase is not awaiting verification")
 		return
 	}
 
@@ -2604,35 +2707,35 @@ func (h *APIHandler) CancelPurchase(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) GetPurchaseStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	purchaseIDStr := r.URL.Query().Get("id")
 	if purchaseIDStr == "" {
-		http.Error(w, "Missing purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeMissingPurchaseID, "Missing purchase id")
 		return
 	}
 	purchaseID, err := strconv.Atoi(purchaseIDStr)
 	if err != nil {
-		http.Error(w, "Invalid purchase id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidPurchaseID, "Invalid purchase id")
 		return
 	}
 
 	purchase, err := h.paymentService.GetPurchaseByID(r.Context(), int64(purchaseID))
 	if err != nil || purchase == nil {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil || customer == nil || purchase.CustomerID != customer.ID {
-		http.Error(w, "Purchase not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodePurchaseNotFound, "Purchase not found")
 		return
 	}
 
@@ -2767,23 +2870,23 @@ func maskHalfInt64(id int64) string {
 
 func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -2831,23 +2934,23 @@ func (h *APIHandler) GetReferrals(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -2874,6 +2977,15 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 
 	referralCount, referralEarned, referralStatsUnavailable := h.referralSummary(r.Context(), customer)
 
+	// U3: the wallet shows money the customer has already committed, so the
+	// unfinished order travels with this response instead of costing the screen a
+	// second profile round trip.
+	pendingPurchase, pendingErr := h.pendingPurchaseByCustomer(r.Context(), customer.ID)
+	if pendingErr != nil {
+		slog.Warn("Failed to load the customer's pending purchase", "customer_id", customer.ID, "error", pendingErr)
+		pendingPurchase = nil
+	}
+
 	resp := map[string]interface{}{
 		"balance":                    balance,
 		"currency":                   config.Currency(),
@@ -2882,6 +2994,7 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		"bot_url":                    config.BotURL(),
 		"referral_bonus_amount":      payment.GetReferralBonusAmount(),
 		"referral_stats_unavailable": referralStatsUnavailable,
+		"pending_purchase":           pendingPurchaseInfo(customer, pendingPurchase, h.translation),
 	}
 	if !referralStatsUnavailable {
 		resp["referral_count"] = referralCount
@@ -2894,23 +3007,23 @@ func (h *APIHandler) GetWallet(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) GetWalletHistory(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -2934,7 +3047,7 @@ func (h *APIHandler) GetWalletHistory(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 	http.Error(w, "Customer-wide auto-renew has been removed. Please enable auto-renew on a specific key from the home screen.", http.StatusGone)
@@ -2945,13 +3058,13 @@ func (h *APIHandler) UpdateAutoRenew(w http.ResponseWriter, r *http.Request) {
 // Body: { "key_id": 42, "enabled": true }
 func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
@@ -2960,28 +3073,28 @@ func (h *APIHandler) UpdateKeyAutoRenew(w http.ResponseWriter, r *http.Request) 
 		Enabled bool  `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeInvalidBody, "Invalid request body")
 		return
 	}
 	if req.KeyID == 0 {
-		http.Error(w, "Missing key_id", http.StatusBadRequest)
+		writeAPIError(w, http.StatusBadRequest, errorCodeMissingKeyID, "Missing key_id")
 		return
 	}
 
 	customer, err := h.customerRepo.FindByTelegramId(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
 	// SetKeyAutoRenew validates that key.customer_id == customer.ID internally.
 	if err := h.walletService.SetKeyAutoRenew(r.Context(), req.KeyID, customer.ID, req.Enabled); err != nil {
 		if errors.Is(err, walletsvc.ErrAutoRenewPlanUnknown) {
-			http.Error(w, "This key needs one manual renewal before auto-renew can be enabled.", http.StatusConflict)
+			writeAPIError(w, http.StatusConflict, errorCodeAutoRenewUnavailable, "This key needs one manual renewal before auto-renew can be enabled.")
 			return
 		}
 		writeSanitizedError(w, http.StatusBadRequest, "Failed to update key auto-renew", err)
@@ -3002,35 +3115,35 @@ func (h *APIHandler) KeyRoute(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "hide" {
 		keyID, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil || keyID <= 0 {
-			http.Error(w, "Invalid key ID", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeInvalidKeyID, "Invalid key ID")
 			return
 		}
 		h.handleHideKey(w, r, keyID)
 		return
 	}
 
-	http.Error(w, "Not found", http.StatusNotFound)
+	writeAPIError(w, http.StatusNotFound, errorCodeNotFound, "Not found")
 }
 
 func (h *APIHandler) handleHideKey(w http.ResponseWriter, r *http.Request, keyID int64) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 
@@ -3040,22 +3153,22 @@ func (h *APIHandler) handleHideKey(w http.ResponseWriter, r *http.Request, keyID
 	} else if h.subKeyRepo != nil {
 		hideErr = h.subKeyRepo.HideExpiredKey(r.Context(), keyID, customer.ID)
 	} else {
-		http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+		writeAPIError(w, http.StatusServiceUnavailable, errorCodeServiceUnavailable, "Service unavailable")
 		return
 	}
 
 	if hideErr != nil {
 		switch {
 		case errors.Is(hideErr, database.ErrKeyNotFound), errors.Is(hideErr, database.ErrKeyNotOwned):
-			http.Error(w, "Subscription key not found", http.StatusNotFound)
+			writeAPIError(w, http.StatusNotFound, errorCodeKeyNotFound, "Subscription key not found")
 		case errors.Is(hideErr, database.ErrKeyActive):
-			http.Error(w, "Active keys cannot be hidden", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeKeyNotHideable, "Active keys cannot be hidden")
 		case errors.Is(hideErr, database.ErrKeyDeleted):
-			http.Error(w, "Deleted keys cannot be hidden", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeKeyNotHideable, "Deleted keys cannot be hidden")
 		case errors.Is(hideErr, database.ErrKeyIndeterminate):
-			http.Error(w, "Keys with indeterminate expiry cannot be hidden", http.StatusBadRequest)
+			writeAPIError(w, http.StatusBadRequest, errorCodeKeyNotHideable, "Keys with indeterminate expiry cannot be hidden")
 		case errors.Is(hideErr, database.ErrKeyRenewalInFlight):
-			http.Error(w, "Renewal in progress, please try again shortly", http.StatusConflict)
+			writeAPIError(w, http.StatusConflict, errorCodeRenewalInProgress, "Renewal in progress, please try again shortly")
 		default:
 			writeSanitizedError(w, http.StatusInternalServerError, "Failed to hide key", hideErr)
 		}
@@ -3087,7 +3200,7 @@ type createFinancialAdjustmentRequest struct {
 // GetResellerAccount returns the authenticated reseller's AR credit snapshot.
 func (h *APIHandler) GetResellerAccount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 	if h.resellerCreditRepo == nil {
@@ -3097,21 +3210,21 @@ func (h *APIHandler) GetResellerAccount(w http.ResponseWriter, r *http.Request) 
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 	if !customer.IsReseller {
-		http.Error(w, "Reseller access required", http.StatusForbidden)
+		writeAPIError(w, http.StatusForbidden, errorCodeForbidden, "Reseller access required")
 		return
 	}
 
@@ -3134,7 +3247,7 @@ func (h *APIHandler) GetResellerAccount(w http.ResponseWriter, r *http.Request) 
 // GetResellerLedger returns paginated AR ledger entries for the authenticated reseller.
 func (h *APIHandler) GetResellerLedger(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeAPIError(w, http.StatusMethodNotAllowed, errorCodeMethodNotAllowed, "Method not allowed")
 		return
 	}
 	if h.resellerCreditRepo == nil {
@@ -3144,21 +3257,21 @@ func (h *APIHandler) GetResellerLedger(w http.ResponseWriter, r *http.Request) {
 
 	telegramID, ok := r.Context().Value(telegramIDKey).(int64)
 	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		writeAPIError(w, http.StatusUnauthorized, errorCodeUnauthorized, "Unauthorized")
 		return
 	}
 
 	customer, err := h.customerByTelegramID(r.Context(), telegramID)
 	if err != nil {
-		http.Error(w, "Database error", http.StatusInternalServerError)
+		writeAPIError(w, http.StatusInternalServerError, errorCodeDatabase, "Database error")
 		return
 	}
 	if customer == nil {
-		http.Error(w, "User not found", http.StatusNotFound)
+		writeAPIError(w, http.StatusNotFound, errorCodeUserNotFound, "User not found")
 		return
 	}
 	if !customer.IsReseller {
-		http.Error(w, "Reseller access required", http.StatusForbidden)
+		writeAPIError(w, http.StatusForbidden, errorCodeForbidden, "Reseller access required")
 		return
 	}
 

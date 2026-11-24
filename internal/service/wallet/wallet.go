@@ -17,6 +17,11 @@ type WalletService struct {
 
 var ErrAutoRenewPlanUnknown = errors.New("auto-renew plan is not configured for this key yet")
 
+// ErrInsufficientBalance reports that the wallet balance cannot cover a charge.
+// Callers use it to tell a money problem (top up) from a panel or transport
+// failure (contact support), which need different customer guidance.
+var ErrInsufficientBalance = errors.New("insufficient balance")
+
 func NewWalletService(
 	paymentService *payment.PaymentService,
 	customerRepo *database.CustomerRepository,
@@ -76,7 +81,7 @@ func (s *WalletService) ExtendKeyWithBalance(ctx context.Context, keyID int64, c
 		return fmt.Errorf("customer not found")
 	}
 	if customer.Balance < planPrice {
-		return fmt.Errorf("insufficient balance: have %.2f, need %.2f", customer.Balance, planPrice)
+		return fmt.Errorf("%w: have %.2f, need %.2f", ErrInsufficientBalance, customer.Balance, planPrice)
 	}
 
 	// Ownership check: make sure the key belongs to this customer.

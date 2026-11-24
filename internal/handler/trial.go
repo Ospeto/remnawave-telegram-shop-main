@@ -218,7 +218,7 @@ func (h Handler) ActivateTrialCallbackHandler(ctx context.Context, b *bot.Bot, u
 	ctxWithUsername := context.WithValue(ctx, payment.UsernameCtxKey, update.CallbackQuery.From.Username)
 	subURL, err := h.paymentService.ActivateTrial(ctxWithUsername, update.CallbackQuery.From.ID)
 	if err != nil {
-		if errors.Is(err, payment.ErrTrialAlreadyUsed) || errors.Is(err, payment.ErrCustomerNotFound) {
+		if errors.Is(err, payment.ErrTrialAlreadyUsed) || errors.Is(err, payment.ErrExistingPanelUser) || errors.Is(err, payment.ErrCustomerNotFound) {
 			telegramID := update.CallbackQuery.From.ID
 			customer, _ := h.customerRepository.FindByTelegramId(ctx, telegramID)
 			if customer != nil {

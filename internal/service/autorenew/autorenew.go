@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -101,6 +102,20 @@ const autoRenewLookbackWindow = 48 * time.Hour
 // autoRenewClaimTTL aliases the DB lease duration so service + SQL stay aligned.
 const autoRenewClaimTTL = database.AutoRenewClaimTTL
 
+// autoRenewJobBudget is the wall-clock budget the cron grants this job. Each key
+// gets a slice of it instead of the whole budget, so one slow panel call cannot
+// consume the run and starve every remaining key.
+const autoRenewJobBudget = 2 * time.Minute
+
+// autoRenewKeyTimeout bounds one key's renewal. It must exceed the Remnawave
+// client timeout (15 s) plus the wallet work around it.
+const autoRenewKeyTimeout = 30 * time.Second
+
+// autoRenewParallelism is the bounded batch size. Kept small on purpose: the
+// panel and the wallet both take row locks, and the run must stay inside the
+// cron's SkipIfStillRunning window.
+const autoRenewParallelism = 4
+
 // autoRenewCycleGuardWindow is how far before expire_at a last_auto_renewed_at
 // stamp still counts as "already renewed this cycle".
 const autoRenewCycleGuardWindow = 4 * 24 * time.Hour
@@ -140,10 +155,20 @@ func New(
 	}
 }
 
+// autoRenewRunResult reports what one cron run managed to do. Skipped keys are
+// named rather than dropped: a key that never got a slice of the budget must be
+// visible in the logs, not silently forgotten.
+type autoRenewRunResult struct {
+	Processed int
+	Skipped   []int64
+}
+
 // Run processes auto-renewals for all eligible subscription keys.
 // Called by the cron scheduler.
 func (j *Job) Run(ctx context.Context) {
 	slog.Info("Auto-renew: per-key cron job started")
+
+	keyTimeout := j.keyTimeout(ctx)
 
 	now := j.nowFn()
 	threeDaysFromNow := now.Add(3 * 24 * time.Hour)
@@ -154,13 +179,79 @@ func (j *Job) Run(ctx context.Context) {
 		return
 	}
 
-	slog.Info("Auto-renew: found candidate keys", "count", len(keys))
+	slog.Info("Auto-renew: found candidate keys", "count", len(keys), "key_timeout", keyTimeout, "parallelism", autoRenewParallelism)
 
-	for _, key := range keys {
-		j.processKey(ctx, key)
+	result := j.processKeys(ctx, keys, keyTimeout)
+
+	slog.Info("Auto-renew: per-key cron job finished",
+		"candidates", len(keys),
+		"processed", result.Processed,
+		"skipped", len(result.Skipped),
+	)
+}
+
+// keyTimeout derives the per-key timeout from the run budget: never longer than
+// autoRenewKeyTimeout, and never longer than the budget the caller granted.
+func (j *Job) keyTimeout(ctx context.Context) time.Duration {
+	timeout := autoRenewKeyTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return time.Millisecond
+	}
+	return timeout
+}
+
+// processKeys renews keys in bounded parallel batches. Every key runs under its
+// own timeout so a single stuck panel call cannot eat the run, and any key that
+// no longer fits in the remaining budget is reported as skipped.
+func (j *Job) processKeys(ctx context.Context, keys []database.SubscriptionKey, keyTimeout time.Duration) autoRenewRunResult {
+	result := autoRenewRunResult{}
+	if len(keys) == 0 {
+		return result
 	}
 
-	slog.Info("Auto-renew: per-key cron job finished")
+	sem := make(chan struct{}, autoRenewParallelism)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, key := range keys {
+		select {
+		case <-ctx.Done():
+			result.Skipped = append(result.Skipped, key.ID)
+			continue
+		default:
+		}
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(key database.SubscriptionKey) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			keyCtx, cancel := context.WithTimeout(ctx, keyTimeout)
+			defer cancel()
+			j.processKey(keyCtx, key)
+
+			mu.Lock()
+			result.Processed++
+			mu.Unlock()
+		}(key)
+	}
+
+	wg.Wait()
+
+	if len(result.Skipped) > 0 {
+		slog.Warn("Auto-renew: keys skipped — no budget left in this run",
+			"skipped", len(result.Skipped),
+			"key_ids", result.Skipped,
+			"key_timeout", keyTimeout)
+	}
+
+	return result
 }
 
 // processKey handles renewal or low-balance warning for one subscription key.
@@ -263,6 +354,21 @@ func (j *Job) processKey(ctx context.Context, key database.SubscriptionKey) {
 			log.Error("Auto-renew: failed to clear cycle lock after extend failure",
 				"error", clearErr)
 		}
+
+		// U7: a balance shortfall is a money problem the customer can fix in one
+		// tap, not a support ticket. Tell them apart instead of sending the
+		// generic "contact support" copy for both.
+		if errors.Is(err, wallet.ErrInsufficientBalance) {
+			log.Warn("Auto-renew: balance moved below the plan price during renewal",
+				"balance", customer.Balance, "plan_price", amount)
+			refresh := *customer
+			if latest, findErr := j.customerRepo.FindById(ctx, customer.ID); findErr == nil && latest != nil {
+				refresh = *latest
+			}
+			j.handleInsufficientFunds(ctx, &refresh, &key, amount)
+			return
+		}
+
 		j.sendMessage(ctx, customer.TelegramID, customer.Language,
 			j.tm.GetText(customer.Language, "auto_renew_failed"))
 		return
@@ -312,10 +418,33 @@ func (j *Job) handleInsufficientFunds(ctx context.Context, customer *database.Cu
 		j.tm.GetText(customer.Language, "auto_renew_insufficient_balance_detail"),
 		shortfall,
 	)
-	j.handleBlockedRenewal(ctx, customer, key, msg)
+	j.handleBlockedRenewalWithMarkup(ctx, customer, key, msg, j.topUpMarkup(customer.Language))
+}
+
+// topUpMarkup is the one-tap fix for a shortfall: the Mini App wallet page when
+// configured, otherwise nothing extra (the message itself still explains it).
+func (j *Job) topUpMarkup(lang string) *models.InlineKeyboardMarkup {
+	miniAppURL := config.GetMiniAppURL()
+	if miniAppURL == "" {
+		return nil
+	}
+	return &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{
+					Text:   j.tm.GetText(lang, "auto_renew_topup_button"),
+					WebApp: &models.WebAppInfo{URL: miniAppURL + "/wallet"},
+				},
+			},
+		},
+	}
 }
 
 func (j *Job) handleBlockedRenewal(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, message string) {
+	j.handleBlockedRenewalWithMarkup(ctx, customer, key, message, nil)
+}
+
+func (j *Job) handleBlockedRenewalWithMarkup(ctx context.Context, customer *database.Customer, key *database.SubscriptionKey, message string, markup *models.InlineKeyboardMarkup) {
 	log := slog.With("key_id", key.ID, "customer_id", customer.ID)
 
 	if key.AutoRenewNotifiedAt != nil && j.nowFn().Sub(*key.AutoRenewNotifiedAt) < 24*time.Hour {
@@ -323,7 +452,7 @@ func (j *Job) handleBlockedRenewal(ctx context.Context, customer *database.Custo
 		return
 	}
 
-	if err := j.sendMessage(ctx, customer.TelegramID, customer.Language, message); err != nil {
+	if err := j.sendMessageWithMarkup(ctx, customer.TelegramID, message, markup); err != nil {
 		log.Error("Auto-renew: failed to send renewal warning", "error", err)
 		return
 	}
@@ -363,13 +492,24 @@ func (j *Job) blockedRenewalMessage(lang string, err error) string {
 
 // sendMessage is a best-effort Telegram notification helper.
 func (j *Job) sendMessage(ctx context.Context, chatID int64, _ string, text string) error {
+	return j.sendMessageWithMarkup(ctx, chatID, text, nil)
+}
+
+// sendMessageWithMarkup is sendMessage with an optional inline keyboard, used
+// when the message carries a one-tap fix (a top-up button).
+func (j *Job) sendMessageWithMarkup(ctx context.Context, chatID int64, text string, markup *models.InlineKeyboardMarkup) error {
 	if j.telegramBot == nil {
 		return nil
 	}
-	if _, err := j.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
+	params := &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   text,
-	}); err != nil {
+	}
+	if markup != nil {
+		params.ParseMode = models.ParseModeHTML
+		params.ReplyMarkup = *markup
+	}
+	if _, err := j.telegramBot.SendMessage(ctx, params); err != nil {
 		slog.Error("Auto-renew: failed to send notification", "chat_id", chatID, "error", err)
 		return err
 	}

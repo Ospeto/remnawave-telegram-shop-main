@@ -9,6 +9,11 @@ import { APIError, isAPIStatus } from '../lib/http';
 import { clearTelegramSession, fetchJSONWithTelegramAuth } from '../lib/auth';
 import { buildTelegramStartUrl } from '../lib/externalLinks';
 import { useUserProfile } from '../lib/userData';
+import { localizedAPIError } from '../lib/apiErrors';
+import { usePendingPurchase } from '../lib/pendingPurchase';
+import { PendingPurchaseBanner } from '../components/PendingPurchaseBanner';
+import { PendingPurchase } from '../lib/types';
+import { useSessionExpired } from '../lib/sessionExpiry';
 
 interface WalletData {
   balance: number;
@@ -20,6 +25,9 @@ interface WalletData {
   referral_earned?: number;
   referral_stats_unavailable?: boolean;
   referral_bonus_amount: number;
+  // U3: an unfinished order travels with the wallet response so this screen can
+  // show it without a second profile round trip.
+  pending_purchase?: PendingPurchase | null;
 }
 
 interface Transaction {
@@ -49,7 +57,8 @@ export function Wallet() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [referralLoadError, setReferralLoadError] = useState<string | null>(null);
-  const [authExpired, setAuthExpired] = useState(false);
+  const [authExpired, setAuthExpired] = useSessionExpired();
+  const [pendingPurchase, setPendingPurchase] = useState<PendingPurchase | null>(null);
 
   const handleBack = useCallback(() => navigate('/'), [navigate]);
   const referralTotalsUnavailable = Boolean(wallet?.referral_stats_unavailable);
@@ -92,6 +101,8 @@ export function Wallet() {
 
       setWallet(walletData);
       setTransactions(historyData || []);
+      setPendingPurchase(walletData.pending_purchase ?? null);
+
       if (referralResult.ok) {
         setReferrals(Array.isArray(referralResult.data) ? referralResult.data : []);
       } else {
@@ -107,14 +118,22 @@ export function Wallet() {
         return;
       }
       if (err instanceof APIError && err.body) {
-        setLoadError(err.body);
+        setLoadError(localizedAPIError(t, err, 'wallet_error'));
         return;
       }
       setLoadError(t('wallet_error'));
     } finally {
       setLoading(false);
     }
-  }, [initData, t, userProfile]);
+  }, [initData, t, tg, userProfile]);
+
+  // While this screen is open, a processing order clears itself once the shop
+  // finishes verifying it.
+  const livePendingPurchase = usePendingPurchase(
+    pendingPurchase,
+    initData,
+    useCallback(() => { void loadWalletData(); }, [loadWalletData]),
+  );
 
   useEffect(() => {
     if (!tg) return;
@@ -189,6 +208,13 @@ export function Wallet() {
           {t('wallet_subtitle')}
         </p>
       </div>
+
+      {/* Unfinished order (U3) */}
+      <PendingPurchaseBanner
+        pending={livePendingPurchase}
+        to="/plans"
+        onNavigate={() => { void loadWalletData(); }}
+      />
 
       {/* Balance Card - Premium */}
       <div style={{

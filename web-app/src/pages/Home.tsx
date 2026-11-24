@@ -10,9 +10,13 @@ import { SubscriptionKey, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { openHappLink } from '../lib/openHapp';
 import { resolveSupportUrl } from '../lib/externalLinks';
-import { APIError, isAPIStatus } from '../lib/http';
+import { isAPIStatus } from '../lib/http';
+import { localizedAPIError } from '../lib/apiErrors';
 import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchWithTelegramAuth } from '../lib/auth';
 import { useUserProfile } from '../lib/userData';
+import { PendingPurchaseBanner } from '../components/PendingPurchaseBanner';
+import { usePendingPurchase } from '../lib/pendingPurchase';
+import { useSessionExpired } from '../lib/sessionExpiry';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
@@ -21,7 +25,8 @@ export function Home() {
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [authExpired, setAuthExpired] = useState(false);
+    const [authExpired, setAuthExpired] = useSessionExpired();
+    const statsRetryRef = useRef(false);
     const [copiedId, setCopiedId] = useState<number | null>(null);
     const [trialLoading, setTrialLoading] = useState(false);
     const [trialError, setTrialError] = useState<string | null>(null);
@@ -48,15 +53,19 @@ export function Home() {
                 setAuthExpired(true);
                 return;
             }
-            if (err instanceof APIError) {
-                setError(err.body || `HTTP ${err.status}`);
-                return;
-            }
-            setError(err instanceof Error ? err.message : 'Unknown error');
+            setError(localizedAPIError(t, err, 'error_code_generic'));
         } finally {
             setLoading(false);
         }
-    }, [initData, tg, userProfile]);
+    }, [initData, t, tg, userProfile]);
+
+    // U3: the unfinished order surfaced by /api/me, kept current while this screen
+    // is open so the banner disappears the moment the shop finishes verifying.
+    const pendingPurchase = usePendingPurchase(
+        data?.pending_purchase,
+        initData,
+        useCallback(() => { void loadData({ force: true }); }, [loadData]),
+    );
 
     useEffect(() => {
         if (tg) tg.BackButton.hide();
@@ -65,6 +74,17 @@ export function Home() {
     useEffect(() => {
         void loadData();
     }, [loadData]);
+
+    // U4: a cold cache made this screen render "0.0 / N GB used" as if no traffic
+    // had been consumed. The server now says stats_pending in that case, so read
+    // the profile once more while the panel snapshot lands. One retry only: a
+    // panel that stays slow must not turn into a fetch loop.
+    useEffect(() => {
+        if (!data?.stats_pending || statsRetryRef.current) return;
+        statsRetryRef.current = true;
+        const timer = setTimeout(() => { void loadData({ force: true }); }, 1500);
+        return () => clearTimeout(timer);
+    }, [data?.stats_pending, loadData]);
 
     const handleCopy = (url: string, id: number) => {
         navigator.clipboard.writeText(url)
@@ -292,6 +312,7 @@ export function Home() {
 
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
+                <PendingPurchaseBanner pending={pendingPurchase} to="/plans" onNavigate={() => playClick()} />
                 <Link to="/wallet" className="digital-card animate-slide-up" style={{
                     padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 14,
                     textDecoration: 'none', color: 'var(--digital-card-text)',
@@ -611,6 +632,11 @@ export function Home() {
                                                         {key.traffic_used_gb.toFixed(1)} <span style={{ opacity: 0.5 }}>/</span> {key.traffic_limit_gb.toFixed(0)} GB
                                                     </span>
                                                 </div>
+                                                {data?.stats_pending && (
+                                                    <p className="text-hint" style={{ fontSize: 'var(--font-caption)', margin: '0 0 6px' }}>
+                                                        {t('stats_pending_note')}
+                                                    </p>
+                                                )}
                                                 <div
                                                     role="progressbar"
                                                     aria-valuemin={0}

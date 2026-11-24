@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, getTelegramAuthHeaders } from './auth';
+import { clearTelegramSession, fetchJSONWithTelegramAuth, fetchUserScopedJSONWithTelegramAuth, getTelegramAuthHeaders, TELEGRAM_SESSION_EXPIRED_EVENT } from './auth';
 
 describe('getTelegramAuthHeaders', () => {
     it('exchanges initData once and reuses the stored bearer token', async () => {
@@ -112,8 +112,7 @@ describe('getTelegramAuthHeaders', () => {
         expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
-    it('trusts the server-authenticated response even when the webview user hint differs', async () => {
-        const fetchMock = vi.fn()
+    it('trusts the server-authenticated response even when the webview user hint differs', async () => {        const fetchMock = vi.fn()
             .mockResolvedValueOnce(new Response(JSON.stringify({
                 token: 'session-token-1',
                 expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -135,5 +134,86 @@ describe('getTelegramAuthHeaders', () => {
 
         expect(data.user?.telegram_id).toBe(777);
         expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('expired session recovery', () => {
+    const sessionResponse = (token: string) => new Response(JSON.stringify({
+        token,
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+    const stubTelegramInitData = (initData: string) => {
+        (window as unknown as { Telegram?: unknown }).Telegram = {
+            WebApp: { initData, ready: () => {}, expand: () => {} },
+        };
+    };
+
+    it('retries with the WebView initData once Telegram has rotated it', async () => {
+        const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/session') {
+                return Promise.resolve(sessionResponse('session-rotated'));
+            }
+            // The first authenticated read is rejected, the retry after the
+            // initData refresh is accepted.
+            const calls = fetchMock.mock.calls.filter(([called]) => String(called) === '/api/me').length;
+            if (calls === 1) {
+                return Promise.resolve(new Response('Unauthorized', { status: 401 }));
+            }
+            return Promise.resolve(new Response(JSON.stringify({ user: { telegram_id: 42 } }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            }));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        stubTelegramInitData('fresh-init-data');
+        clearTelegramSession();
+
+        const expired = vi.fn();
+        window.addEventListener(TELEGRAM_SESSION_EXPIRED_EVENT, expired);
+
+        const data = await fetchUserScopedJSONWithTelegramAuth('/api/me', 'stale-init-data', 42);
+
+        expect(data.user?.telegram_id).toBe(42);
+        expect(expired).not.toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith('/api/session', expect.objectContaining({
+            headers: expect.objectContaining({ Authorization: 'twa fresh-init-data' }),
+        }));
+        window.removeEventListener(TELEGRAM_SESSION_EXPIRED_EVENT, expired);
+    });
+
+    it('announces an unrecoverable expiry instead of silently retrying', async () => {
+        const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === '/api/session') {
+                return Promise.resolve(sessionResponse('session-stale'));
+            }
+            // auth.ts must not burn a second identical attempt when the WebView
+            // still hands back the same initData; it announces the expiry so the
+            // screen can offer a reload.
+            return Promise.resolve(new Response('Unauthorized', { status: 401 }));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        stubTelegramInitData('stale-init-data');
+        clearTelegramSession();
+
+        const expired = vi.fn();
+        window.addEventListener(TELEGRAM_SESSION_EXPIRED_EVENT, expired);
+
+        await expect(fetchUserScopedJSONWithTelegramAuth('/api/me', 'stale-init-data', 42))
+            .rejects.toThrow();
+
+        expect(expired).toHaveBeenCalledTimes(1);
+        // Exactly one retry: a rejected session token and a rejected initData look
+        // identical from the client, so the retry re-exchanges initData once. The
+        // second rejection is what proves a reload is needed, and the loop stops
+        // there instead of hammering the API.
+        const dataReads = fetchMock.mock.calls.filter(([called]) => String(called) === '/api/me');
+        expect(dataReads).toHaveLength(2);
+        window.removeEventListener(TELEGRAM_SESSION_EXPIRED_EVENT, expired);
     });
 });

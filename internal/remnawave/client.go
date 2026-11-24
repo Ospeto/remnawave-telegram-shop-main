@@ -234,6 +234,11 @@ func (r *Client) DecreaseSubscription(ctx context.Context, telegramId int64, tra
 	return &updated.ExpireAt, nil
 }
 
+// ErrExistingPanelUser means the panel already holds a user for this Telegram id,
+// so a trial must not be minted on top of it. Returning a distinct error keeps the
+// caller from mistaking a pre-existing paid user for a freshly created trial.
+var ErrExistingPanelUser = errors.New("remnawave user already exists for this telegram id")
+
 func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, telegramId int64, trafficLimit int, days int, isTrialUser bool) (*remapi.User, error) {
 	users, err := r.GetUsersByTelegramId(ctx, telegramId)
 	if err != nil {
@@ -258,7 +263,7 @@ func (r *Client) CreateOrUpdateUser(ctx context.Context, customerId int64, teleg
 	}
 
 	if isTrialUser {
-		return existingUser, nil
+		return nil, ErrExistingPanelUser
 	}
 
 	return r.updateUser(ctx, existingUser, trafficLimit, days)

@@ -60,6 +60,7 @@ type Purchase struct {
 	PromoCodeID       *int64         `db:"promo_code_id"`
 	IdempotencyKey    *uuid.UUID     `db:"idempotency_key"`
 	PricingTier       string         `db:"pricing_tier"`
+	ProcessingAt      *time.Time     `db:"processing_at"`
 }
 
 type PurchaseRepository struct {
@@ -122,7 +123,7 @@ var purchaseColumns = []string{
 	"crypto_invoice_id", "crypto_invoice_url", "yookasa_url", "yookasa_id",
 	"traffic_limit_gb", "days", "extend_key_id",
 	"plan_label", "payment_method", "payment_phone", "verified_at", "transaction_id", "promo_code_id", "idempotency_key",
-	"pricing_tier",
+	"pricing_tier", "processing_at",
 }
 
 // scanPurchaseRow scans a single pgx.Row into a Purchase.
@@ -134,7 +135,7 @@ func scanPurchase(row pgx.Row) (*Purchase, error) {
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
 		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
-		&p.PricingTier,
+		&p.PricingTier, &p.ProcessingAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -155,7 +156,7 @@ func scanPurchaseRow(rows pgx.Rows) (*Purchase, error) {
 		&p.CryptoInvoiceID, &p.CryptoInvoiceLink, &p.YookasaURL, &p.YookasaID,
 		&p.TrafficLimitGB, &p.Days, &p.ExtendKeyID,
 		&p.PlanLabel, &p.PaymentMethod, &p.PaymentPhone, &p.VerifiedAt, &p.TransactionID, &p.PromoCodeID, &p.IdempotencyKey,
-		&p.PricingTier,
+		&p.PricingTier, &p.ProcessingAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan purchase row: %w", err)
@@ -235,6 +236,36 @@ func buildLatestAwaitingVerificationByCustomerSelect(customerID int64, now time.
 		PlaceholderFormat(sq.Dollar)
 }
 
+// FindLatestInFlightByCustomer returns the newest purchase the customer still
+// has to act on: awaiting a receipt upload (pending/new) or being fulfilled
+// right now (processing).
+//
+// A9: a purchase stuck in 'processing' used to be invisible to the Mini App, so
+// the customer saw a normal shop while one of their orders was in limbo. Unlike
+// buildLatestAwaitingVerificationByCustomerSelect — which gates purchase
+// creation and must not treat an in-flight fulfillment as acceptable — this
+// lookup only feeds the customer-facing status surface.
+func (cr *PurchaseRepository) FindLatestInFlightByCustomer(ctx context.Context, customerID int64) (*Purchase, error) {
+	buildSelect := sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.And{
+			sq.Eq{"customer_id": customerID},
+			sq.Eq{"invoice_type": []InvoiceType{InvoiceTypeMobileBanking, InvoiceTypeWalletTopUp}},
+			sq.Eq{"status": []PurchaseStatus{PurchaseStatusNew, PurchaseStatusPending, PurchaseStatusProcessing}},
+			sq.GtOrEq{"created_at": time.Now().Add(-promoReservationHoldWindow)},
+		}).
+		OrderBy("created_at DESC").
+		Limit(1).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	return scanPurchase(cr.pool.QueryRow(ctx, sql, args...))
+}
+
 func (cr *PurchaseRepository) FindById(ctx context.Context, id int64) (*Purchase, error) {
 	buildSelect := sq.Select(purchaseColumns...).
 		From("purchase").
@@ -268,7 +299,7 @@ var allowedPurchaseFields = map[string]bool{
 	"status": true, "paid_at": true, "crypto_invoice_url": true,
 	"crypto_invoice_id": true, "plan_label": true, "payment_phone": true,
 	"extend_key_id": true, "transaction_id": true, "payment_method": true,
-	"verified_at": true,
+	"verified_at": true, "processing_at": true,
 }
 
 func (p *PurchaseRepository) UpdateFields(ctx context.Context, id int64, updates map[string]interface{}) error {
@@ -338,16 +369,98 @@ func (pr *PurchaseRepository) CancelAwaitingVerification(ctx context.Context, pu
 // TryMarkAsProcessing atomically claims a purchase for fulfillment.
 // It returns false when another worker already won the race or the purchase
 // is already in a terminal or in-flight state.
+//
+// A9: the claim stamps processing_at so the stale-processing reaper can tell a
+// live in-flight fulfillment from one whose worker died.
 func (pr *PurchaseRepository) TryMarkAsProcessing(ctx context.Context, purchaseID int64) (bool, error) {
 	query := `
 		UPDATE purchase
-		SET status = $1
+		SET status = $1, processing_at = $5
 		WHERE id = $2 AND status IN ($3, $4)
 	`
 
-	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusProcessing, purchaseID, PurchaseStatusNew, PurchaseStatusPending)
+	tag, err := pr.pool.Exec(ctx, query, PurchaseStatusProcessing, purchaseID, PurchaseStatusNew, PurchaseStatusPending, time.Now())
 	if err != nil {
 		return false, fmt.Errorf("failed to claim purchase %d: %w", purchaseID, err)
+	}
+
+	return tag.RowsAffected() > 0, nil
+}
+
+// FindStaleProcessing lists purchases claimed for fulfillment whose claim is
+// older than cutoff. Legacy rows claimed before processing_at existed fall back
+// to created_at so they are not stuck forever.
+func (pr *PurchaseRepository) FindStaleProcessing(ctx context.Context, cutoff time.Time, limit int) ([]Purchase, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+
+	buildSelect := sq.Select(purchaseColumns...).
+		From("purchase").
+		Where(sq.And{
+			sq.Eq{"status": PurchaseStatusProcessing},
+			sq.Lt{"COALESCE(processing_at, created_at)": cutoff},
+		}).
+		OrderBy("COALESCE(processing_at, created_at)").
+		Limit(uint64(limit)).
+		PlaceholderFormat(sq.Dollar)
+
+	sql, args, err := buildSelect.ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := pr.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list stale processing purchases: %w", err)
+	}
+	defer rows.Close()
+
+	purchases := make([]Purchase, 0, limit)
+	for rows.Next() {
+		purchase, err := scanPurchaseRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		purchases = append(purchases, *purchase)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating stale processing purchases: %w", err)
+	}
+
+	return purchases, nil
+}
+
+// ReturnStaleProcessingToPending reverts one stale claim back to pending so the
+// customer can retry or cancel it. The predicate re-checks the claim age, so a
+// purchase that was re-claimed concurrently is left alone. Rows with a recorded
+// receipt verification are excluded in SQL: such a row may already have had
+// fulfillment side effects applied, and must never be resurrected.
+func (pr *PurchaseRepository) ReturnStaleProcessingToPending(ctx context.Context, purchaseID int64, cutoff time.Time) (bool, error) {
+	query := `
+		UPDATE purchase
+		SET status = $1, processing_at = NULL
+		WHERE id = $2
+		  AND status = $3
+		  AND COALESCE(processing_at, created_at) < $4
+		  AND invoice_type IN ($5, $6)
+		  AND NOT EXISTS (
+			SELECT 1 FROM mobile_payment_verification v WHERE v.purchase_id = purchase.id
+		  )
+	`
+
+	tag, err := pr.pool.Exec(
+		ctx,
+		query,
+		PurchaseStatusPending,
+		purchaseID,
+		PurchaseStatusProcessing,
+		cutoff,
+		InvoiceTypeMobileBanking,
+		InvoiceTypeWalletTopUp,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to return stale purchase %d to pending: %w", purchaseID, err)
 	}
 
 	return tag.RowsAffected() > 0, nil

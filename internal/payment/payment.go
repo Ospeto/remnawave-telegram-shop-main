@@ -60,6 +60,10 @@ var (
 	ErrTrialUnavailable = errors.New("trial is unavailable")
 	// ErrTrialAlreadyUsed means the customer has already consumed a trial or has prior subscription history.
 	ErrTrialAlreadyUsed = errors.New("trial already used")
+	// ErrExistingPanelUser means the panel already holds a Remnawave user for this
+	// Telegram id (for example a paid key), so a trial must not be minted on top of
+	// it. Distinct from ErrTrialAlreadyUsed: local history looks clean, the panel does not.
+	ErrExistingPanelUser = errors.New("customer already has a panel user")
 	// ErrCustomerNotFound means the customer record does not exist.
 	ErrCustomerNotFound = errors.New("customer not found")
 	// ErrSubscriptionKeyUnavailable means an extension target is no longer a
@@ -330,6 +334,8 @@ type PaymentService struct {
 	testModeMu          sync.RWMutex
 	syncCache           sync.Map // key: customerID int64, value: syncCacheEntry
 	syncInFlight        sync.Map // key: customerID int64, value: struct{}
+	syncFetchMu         sync.Mutex
+	syncFetches         map[int64]*syncFetchState // in-flight shared panel reads
 	visionAlertMu       sync.Mutex
 	visionAlertLastSent map[string]time.Time
 	now                 func() time.Time
@@ -389,6 +395,19 @@ func NewPaymentService(
 // Prefer this over exposing the raw repository.
 func (s *PaymentService) GetPurchaseByID(ctx context.Context, id int64) (*database.Purchase, error) {
 	return s.purchaseRepository.FindById(ctx, id)
+}
+
+// FindLatestInFlightPurchase returns the newest purchase the customer still has
+// to act on, or nil when there is none.
+//
+// A9/U3: this is what lets the Mini App show an order that is awaiting a receipt
+// or already being fulfilled, instead of silently showing a normal shop while a
+// purchase sits in limbo.
+func (s *PaymentService) FindLatestInFlightPurchase(ctx context.Context, customerID int64) (*database.Purchase, error) {
+	if s == nil || s.purchaseRepository == nil {
+		return nil, nil
+	}
+	return s.purchaseRepository.FindLatestInFlightByCustomer(ctx, customerID)
 }
 
 // GetRevenueSummary returns daily revenue aggregated over the last N days.
@@ -643,7 +662,50 @@ func (s *PaymentService) GetTestTransactionID() string {
 	return testTransactionID
 }
 
-const syncCacheTTL = 2 * time.Minute
+const (
+	// syncCacheTTL is how long a freshly synced key snapshot stays usable.
+	//
+	// P6: before this, every key expired from the cache after two minutes, so a
+	// shop with a few hundred customers re-read the whole panel fleet several
+	// times a minute — traffic that scales with customers rather than with real
+	// changes.
+	syncCacheTTL = 2 * time.Minute
+
+	// syncCacheFarFromExpiryTTL applies when no key is close to expiring. A key
+	// that is weeks from expiry does not need its usage figure re-read every two
+	// minutes; the numbers that actually decide anything (days left, status)
+	// change slowly.
+	syncCacheFarFromExpiryTTL = 15 * time.Minute
+
+	// syncCacheNearExpiryWindow is the window in which the shorter TTL is kept,
+	// because that is when a key flips to expired and the customer must see it.
+	syncCacheNearExpiryWindow = 24 * time.Hour
+)
+
+// syncCacheTTLFor picks a cache lifetime for one customer's key snapshot.
+//
+// Any key inside syncCacheNearExpiryWindow keeps the short TTL, and so does an
+// empty or expiryless snapshot, where the state is not known well enough to
+// trust a longer cache.
+func syncCacheTTLFor(keys []KeyStats, now time.Time) time.Duration {
+	if len(keys) == 0 {
+		return syncCacheTTL
+	}
+	for _, key := range keys {
+		if key.ExpireAt.IsZero() || key.ExpireAt.Sub(now) < syncCacheNearExpiryWindow {
+			return syncCacheTTL
+		}
+	}
+	return syncCacheFarFromExpiryTTL
+}
+
+// syncFetchState is one in-flight panel read shared by every caller that asked
+// for the same customer while the cache was cold.
+type syncFetchState struct {
+	done chan struct{}
+	keys []KeyStats
+	err  error
+}
 
 // FinalizeProcessingWalletTopUpIfSettled marks a stuck processing wallet top-up as
 // paid when local ledger proof shows the top-up already settled. It never credits
@@ -788,16 +850,66 @@ func settleWalletTopUp(
 // on every GET /api/me request.
 func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
 	// Return cached result if still fresh
-	if v, ok := s.syncCache.Load(customerID); ok {
-		entry := v.(syncCacheEntry)
-		if time.Now().Before(entry.expiresAt) {
-			return entry.keys, nil
-		}
+	if cached, ok := s.GetCachedSyncKeys(customerID); ok {
+		return cached, nil
 	}
 
 	if s.subKeyRepo == nil {
 		return nil, nil
 	}
+
+	// P6: a cold cache used to mean one panel read per request, so a burst of
+	// /api/me calls (Home, Wallet and Checkout polling at once) multiplied the
+	// same fleet read. Concurrent callers for one customer now share a single
+	// read instead of racing to start their own.
+	state, leader := s.beginSyncFetch(customerID)
+	if !leader {
+		select {
+		case <-state.done:
+			return state.keys, state.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	keys, err := s.syncKeysFromPanel(ctx, customerID, telegramID)
+	s.finishSyncFetch(customerID, state, keys, err)
+
+	return keys, err
+}
+
+// beginSyncFetch returns the shared in-flight read for a customer, or elects the
+// caller as the leader that performs it.
+func (s *PaymentService) beginSyncFetch(customerID int64) (*syncFetchState, bool) {
+	s.syncFetchMu.Lock()
+	defer s.syncFetchMu.Unlock()
+
+	if s.syncFetches == nil {
+		s.syncFetches = make(map[int64]*syncFetchState)
+	}
+	if state, ok := s.syncFetches[customerID]; ok {
+		return state, false
+	}
+
+	state := &syncFetchState{done: make(chan struct{})}
+	s.syncFetches[customerID] = state
+
+	return state, true
+}
+
+// finishSyncFetch hands the panel result to every waiting caller and clears the
+// in-flight slot.
+func (s *PaymentService) finishSyncFetch(customerID int64, state *syncFetchState, keys []KeyStats, err error) {
+	s.syncFetchMu.Lock()
+	delete(s.syncFetches, customerID)
+	s.syncFetchMu.Unlock()
+
+	state.keys, state.err = keys, err
+	close(state.done)
+}
+
+// syncKeysFromPanel performs the actual panel read and local reconciliation.
+func (s *PaymentService) syncKeysFromPanel(ctx context.Context, customerID int64, telegramID int64) ([]KeyStats, error) {
 
 	// 1. Fetch fresh keys from Remnawave
 	users, err := s.remnawaveClient.GetUsersByTelegramId(ctx, telegramID)
@@ -980,10 +1092,12 @@ func (s *PaymentService) SyncKeys(ctx context.Context, customerID int64, telegra
 		})
 	}
 
-	// Cache the result in the sync cache
+	// Cache the result in the sync cache, for longer when nothing is close to
+	// expiring.
+	now := time.Now()
 	s.syncCache.Store(customerID, syncCacheEntry{
 		keys:      result,
-		expiresAt: time.Now().Add(syncCacheTTL),
+		expiresAt: now.Add(syncCacheTTLFor(result, now)),
 	})
 
 	return result, nil
@@ -1144,9 +1258,9 @@ func (s *PaymentService) restorePurchaseState(ctx context.Context, purchaseID in
 	}
 }
 
-// applyWalletRefundIfNeeded is the A7 sequential best-effort duplicate-refund
-// guard. When alreadyRefunded is true, creditFn is not called. This is NOT fully
-// concurrent-safe without an atomic DB uniqueness constraint on refund rows.
+// applyWalletRefundIfNeeded is the sequential duplicate-refund guard used when no
+// wallet ledger is configured. When alreadyRefunded is true, creditFn is not
+// called. Production paths are additionally guarded by the database (A10).
 func applyWalletRefundIfNeeded(alreadyRefunded bool, creditFn func() error) (skipped bool, err error) {
 	if alreadyRefunded {
 		return true, nil
@@ -1157,55 +1271,121 @@ func applyWalletRefundIfNeeded(alreadyRefunded bool, creditFn func() error) (ski
 	return false, nil
 }
 
+// walletRefundTx is the transaction surface a wallet refund needs.
+type walletRefundTx interface {
+	Commit(ctx context.Context) error
+	Rollback(ctx context.Context) error
+}
+
+// walletRefundStore is the narrow persistence surface refundWalletCharge needs.
+type walletRefundStore interface {
+	BeginTx(ctx context.Context) (walletRefundTx, error)
+	ExistsRefund(ctx context.Context, purchaseID int64) (bool, error)
+	LogRefund(ctx context.Context, tx walletRefundTx, customerID int64, amount float64, purchaseID int64, description string) error
+	AddBalance(ctx context.Context, tx walletRefundTx, customerID int64, amount float64) error
+}
+
+// repositoryWalletRefundStore is the production walletRefundStore.
+type repositoryWalletRefundStore struct {
+	customerRepo *database.CustomerRepository
+	walletTxRepo *database.WalletTransactionRepository
+}
+
+func (s repositoryWalletRefundStore) BeginTx(ctx context.Context) (walletRefundTx, error) {
+	return s.customerRepo.BeginTx(ctx)
+}
+
+func (s repositoryWalletRefundStore) ExistsRefund(ctx context.Context, purchaseID int64) (bool, error) {
+	if s.walletTxRepo == nil {
+		return false, nil
+	}
+	return s.walletTxRepo.ExistsByPurchaseIDAndType(ctx, purchaseID, database.WalletTransactionTypeRefund)
+}
+
+func (s repositoryWalletRefundStore) LogRefund(ctx context.Context, tx walletRefundTx, customerID int64, amount float64, purchaseID int64, description string) error {
+	if s.walletTxRepo == nil {
+		return nil
+	}
+
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet refund transaction has unexpected type %T", tx)
+	}
+
+	_, err := s.walletTxRepo.CreateTx(ctx, pgxTx, &database.WalletTransaction{
+		CustomerID:  customerID,
+		Amount:      amount,
+		Type:        database.WalletTransactionTypeRefund,
+		PurchaseID:  &purchaseID,
+		Description: description,
+	})
+	return err
+}
+
+func (s repositoryWalletRefundStore) AddBalance(ctx context.Context, tx walletRefundTx, customerID int64, amount float64) error {
+	pgxTx, ok := tx.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("wallet refund transaction has unexpected type %T", tx)
+	}
+	return s.customerRepo.AddBalanceTx(ctx, pgxTx, customerID, amount)
+}
+
+// refundWalletCharge credits a customer's wallet back for a purchase.
+//
+// A10: double-refund safety is enforced by the database. Migration
+// 000038_wallet_refund_unique creates a partial unique index on
+// wallet_transaction (purchase_id) WHERE type = 'refund', so a competing or
+// repeated refund attempt fails inside the transaction and rolls the balance
+// credit back with it. The ledger insert is intentionally issued before the
+// balance credit so the index decides first.
 func (s *PaymentService) refundWalletCharge(ctx context.Context, customerID int64, amount float64, purchaseID int64, description string) error {
+	return s.refundWalletChargeWith(ctx, repositoryWalletRefundStore{
+		customerRepo: s.customerRepository,
+		walletTxRepo: s.walletTxRepo,
+	}, customerID, amount, purchaseID, description)
+}
+
+func (s *PaymentService) refundWalletChargeWith(ctx context.Context, store walletRefundStore, customerID int64, amount float64, purchaseID int64, description string) error {
 	refundCtx := context.WithoutCancel(ctx)
 
-	// A7: best-effort sequential guard — skip if a refund was already logged.
-	// Concurrent double-refund is still possible without atomic DB protection.
-	alreadyRefunded := false
-	if s.walletTxRepo != nil {
-		already, err := s.walletTxRepo.ExistsByPurchaseIDAndType(refundCtx, purchaseID, database.WalletTransactionTypeRefund)
-		if err != nil {
-			return fmt.Errorf("failed to check existing wallet refund: %w", err)
-		}
-		alreadyRefunded = already
-	}
-
-	skipped, err := applyWalletRefundIfNeeded(alreadyRefunded, func() error {
-		dbTx, err := s.customerRepository.BeginTx(refundCtx)
-		if err != nil {
-			return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
-		}
-		defer func() {
-			_ = dbTx.Rollback(refundCtx)
-		}()
-
-		if err := s.customerRepository.AddBalanceTx(refundCtx, dbTx, customerID, amount); err != nil {
-			return fmt.Errorf("failed to refund wallet balance: %w", err)
-		}
-
-		if s.walletTxRepo != nil {
-			if _, err := s.walletTxRepo.CreateTx(refundCtx, dbTx, &database.WalletTransaction{
-				CustomerID:  customerID,
-				Amount:      amount,
-				Type:        database.WalletTransactionTypeRefund,
-				PurchaseID:  &purchaseID,
-				Description: description,
-			}); err != nil {
-				return fmt.Errorf("failed to log wallet refund: %w", err)
-			}
-		}
-
-		if err := dbTx.Commit(refundCtx); err != nil {
-			return fmt.Errorf("failed to commit wallet refund: %w", err)
-		}
-		return nil
-	})
+	// Cheap sequential pre-check so an obviously repeated refund never opens a
+	// transaction. This is not the safety guarantee: the partial unique index is.
+	already, err := store.ExistsRefund(refundCtx, purchaseID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to check existing wallet refund: %w", err)
 	}
-	if skipped {
+	if already {
 		slog.Info("Skipping wallet refund; already refunded for purchase", "purchase_id", purchaseID, "customer_id", customerID)
+		return nil
+	}
+
+	dbTx, err := store.BeginTx(refundCtx)
+	if err != nil {
+		return fmt.Errorf("failed to begin wallet refund transaction: %w", err)
+	}
+	defer func() {
+		_ = dbTx.Rollback(refundCtx)
+	}()
+
+	// The partial unique index on (purchase_id) WHERE type = 'refund' is the
+	// authority: a second refund for this purchase fails right here.
+	if err := store.LogRefund(refundCtx, dbTx, customerID, amount, purchaseID, description); err != nil {
+		if isUniqueViolation(err) {
+			slog.Info("Skipping wallet refund; database refused a duplicate refund row",
+				"purchase_id", purchaseID,
+				"customer_id", customerID,
+			)
+			return nil
+		}
+		return fmt.Errorf("failed to log wallet refund: %w", err)
+	}
+
+	if err := store.AddBalance(refundCtx, dbTx, customerID, amount); err != nil {
+		return fmt.Errorf("failed to refund wallet balance: %w", err)
+	}
+
+	if err := dbTx.Commit(refundCtx); err != nil {
+		return fmt.Errorf("failed to commit wallet refund: %w", err)
 	}
 	return nil
 }
@@ -2296,12 +2476,30 @@ func (s *PaymentService) ActivateTrial(ctx context.Context, telegramId int64) (s
 	ctxWithUsername := context.WithValue(ctx, "username", trialUsername(ctx, telegramId))
 	user, err := s.remnawaveClient.CreateOrUpdateUser(ctxWithUsername, customer.ID, telegramId, config.TrialTrafficLimit(), config.TrialDays(), true)
 	if err != nil {
+		if errors.Is(err, remnawave.ErrExistingPanelUser) {
+			// A8: never mint a trial key on top of an existing panel user. The
+			// unique index on subscription_key.remnawave_uuid would fail anyway,
+			// but the operator needs a distinct, actionable error instead of a
+			// generic 500 after a half-applied write.
+			slog.Warn("Trial refused: telegram id already has a panel user", "customer_id", utils.MaskHalfInt64(customer.ID))
+			return "", ErrExistingPanelUser
+		}
 		slog.Error("Error creating user", "error", err)
 		return "", err
 	}
 
 	if user.UUID == uuid.Nil || strings.TrimSpace(user.SubscriptionUrl) == "" {
 		return "", ErrSubscriptionKeyUnavailable
+	}
+	existing, err := s.subKeyRepo.FindByRemnawaveUUID(ctx, user.UUID)
+	if err != nil {
+		return "", err
+	}
+	if existing != nil {
+		// A8: the local subscription_key row already owns this panel UUID, so a
+		// second row would collide on idx_sub_key_uuid.
+		slog.Warn("Trial refused: panel UUID already linked to a subscription key", "customer_id", utils.MaskHalfInt64(customer.ID))
+		return "", ErrExistingPanelUser
 	}
 	_, err = s.subKeyRepo.CreateTx(ctx, tx, &database.SubscriptionKey{
 		CustomerID:      customer.ID,

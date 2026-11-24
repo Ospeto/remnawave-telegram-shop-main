@@ -42,6 +42,16 @@ type Handler struct {
 
 	// Optional test seam for customer resolution in tests
 	testEnsureCustomer func(ctx context.Context, telegramID int64, langCode string) (*database.Customer, bool, error)
+
+	// Optional seams for the in-chat purchase cancellation flow, so the callback
+	// can be exercised without a live database.
+	testFindCustomer   func(ctx context.Context, telegramID int64) (*database.Customer, error)
+	testFindPurchase   func(ctx context.Context, purchaseID int64) (*database.Purchase, error)
+	testCancelPurchase func(ctx context.Context, purchaseID, customerID int64) (bool, error)
+
+	// Optional seam for the in-flight purchase lookup that explains why a second
+	// receipt photo was not verified (A9).
+	testFindInFlightPurchase func(ctx context.Context, customerID int64) (*database.Purchase, error)
 }
 
 func NewHandler(

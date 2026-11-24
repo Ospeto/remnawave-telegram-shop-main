@@ -687,9 +687,13 @@ func (r *SubscriptionKeyRepository) ReleaseAutoRenewClaim(ctx context.Context, k
 	return nil
 }
 
-// FindExpiringKeys returns all active keys whose expire_at is between startDate and endDate.
-func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]SubscriptionKey, error) {
-	query := sq.Select(subKeyColumns...).
+// buildFindExpiringKeysQuery builds the expiration-reminder selection.
+//
+// U8: the reminder cron runs hourly, so the dedupe that keeps a customer from
+// being told every hour is this predicate, not the schedule. It is factored out
+// so a test can prove the filter is present without a live database.
+func buildFindExpiringKeysQuery(startDate, endDate time.Time) sq.SelectBuilder {
+	return sq.Select(subKeyColumns...).
 		From("subscription_key").
 		Where(sq.And{
 			sq.Eq{"status": "active"},
@@ -699,6 +703,11 @@ func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startD
 			sq.Eq{"expiration_notified_at": nil},
 		}).
 		PlaceholderFormat(sq.Dollar)
+}
+
+// FindExpiringKeys returns all active keys whose expire_at is between startDate and endDate.
+func (r *SubscriptionKeyRepository) FindExpiringKeys(ctx context.Context, startDate, endDate time.Time) ([]SubscriptionKey, error) {
+	query := buildFindExpiringKeysQuery(startDate, endDate)
 
 	sql, args, err := query.ToSql()
 	if err != nil {

@@ -45,6 +45,15 @@ var (
 	BuildDate = "unknown"
 )
 
+// updateWorkers is how many Telegram updates the bot processes concurrently.
+//
+// P8: it was 3, which is smaller than the number of customers who plausibly tap a
+// button at the same time, and one slow handler held a third of the bot. Screenshot
+// verification now runs on its own pool (internal/handler/verification_pool.go),
+// so these workers only ever do short work: a database read, a panel call, a
+// message edit.
+const updateWorkers = 12
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -264,7 +273,11 @@ func main() {
 		)
 	}
 
-	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(3), bot.WithSkipGetMe(), bot.WithMiddlewares(handler.PanicRecoveryMiddleware))
+	// P8: three workers meant a single slow update — a 10 MB receipt photo, a
+	// panel call, an OCR round trip — stalled everyone else's button taps. The
+	// slow verification work now runs on its own pool, and the update workers are
+	// sized for concurrent chats rather than for the slowest possible handler.
+	b, err := bot.New(config.TelegramToken(), bot.WithWorkers(updateWorkers), bot.WithSkipGetMe(), bot.WithMiddlewares(handler.PanicRecoveryMiddleware))
 	if err != nil {
 		fatalStartup("telegram bot", err)
 	}
@@ -298,6 +311,27 @@ func main() {
 	}
 	autoRenewCron.Start()
 	defer autoRenewCron.Stop()
+
+	purchaseReaperCron := cron.New(
+		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
+	)
+	_, err = purchaseReaperCron.AddFunc("* * * * *", func() {
+		runCronJob(ctx, "purchase_processing_reaper", 2*time.Minute, func(cronCtx context.Context) {
+			// A9: a purchase whose fulfillment worker died used to stay in
+			// 'processing' forever, because neither the screenshot flow nor the
+			// Mini App will touch a processing row.
+			if recovered, err := paymentService.ReapStaleProcessingPurchases(cronCtx); err != nil {
+				slog.Error("Stale purchase reaper failed", "error", err)
+			} else if recovered > 0 {
+				slog.Info("Stale purchase reaper recovered purchases", "count", recovered)
+			}
+		})
+	})
+	if err != nil {
+		fatalStartup("purchase reaper cron", err)
+	}
+	purchaseReaperCron.Start()
+	defer purchaseReaperCron.Stop()
 
 	syncService := syncservice.NewSyncService(remnawaveClient, customerRepository, subKeyRepo)
 
@@ -520,6 +554,7 @@ func main() {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackSell, bot.MatchTypePrefix, h.SellCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackConnect, bot.MatchTypeExact, h.ConnectCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackPayment, bot.MatchTypePrefix, h.PaymentCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackCancelPendingPurchase, bot.MatchTypePrefix, h.CancelPendingPurchaseCallbackHandler, h.AcknowledgeCallbackQueryMiddleware, h.SuspiciousUserFilterMiddleware, h.CreateCustomerIfNotExistMiddleware)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handler.CallbackAdmin+":", bot.MatchTypePrefix, h.AdminCallbackHandler, h.AcknowledgeCallbackQueryMiddleware)
 
 	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
@@ -846,7 +881,11 @@ func subscriptionChecker(parent context.Context, subService *notification.Subscr
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
 
-	_, err := c.AddFunc("0 16 * * *", func() {
+	// U8: a single 16:00 pass meant a key that expires at 09:00 waited most of a
+	// day for its reminder. The pass is cheap (it reads only keys inside the
+	// three-day window) and repeat sends are already prevented durably by
+	// expiration_notified_at, so it can run every hour.
+	_, err := c.AddFunc("0 * * * *", func() {
 		runCronJob(parent, "subscription_expiration", 2*time.Minute, func(cronCtx context.Context) {
 			err := subService.ProcessSubscriptionExpirationWithContext(cronCtx)
 			if err != nil {

@@ -32,6 +32,27 @@ export interface SubscriptionKey {
     auto_renew: boolean;
 }
 
+/**
+ * An order the customer still has to act on.
+ *
+ * U3: `/api/me` reports it so Home and Wallet can show a banner instead of
+ * leaving an unfinished payment discoverable only by hitting the 409 in
+ * Checkout.
+ */
+export interface PendingPurchase {
+    id: number;
+    status: string;
+    amount: number;
+    currency: string;
+    invoice_type: string;
+    created_at: string;
+    awaiting_screenshot: boolean;
+    plan_label?: string;
+    days?: number;
+    traffic_limit_gb?: number;
+    extend_key_id?: number | null;
+}
+
 export interface UserData {
     user: {
         id: number;
@@ -51,6 +72,14 @@ export interface UserData {
     support_url?: string;
     is_admin?: boolean;
     is_reseller?: boolean;
+    pending_purchase?: PendingPurchase | null;
+    /**
+     * True when the traffic snapshot could not be fetched before this response
+     * was built, so the key figures may still read as zero.
+     *
+     * U4: the client re-fetches once instead of showing "0 GB used" forever.
+     */
+    stats_pending?: boolean;
 }
 
 export interface ResellerAccount {
