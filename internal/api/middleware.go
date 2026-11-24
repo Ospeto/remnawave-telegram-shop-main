@@ -86,6 +86,10 @@ func (rl *RateLimiter) cleanupLoop() {
 // Middleware wraps an http.Handler with per-IP rate limiting.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isRateLimitExempt(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		ip := getIP(r)
 		if !rl.GetLimiter(ip).Allow() {
 			http.Error(w, "Too many requests", http.StatusTooManyRequests)
@@ -93,6 +97,25 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isRateLimitExempt reports whether a path must never be throttled.
+//
+// Immutable build assets and health probes share the server with the API, so
+// throttling them breaks page loads and makes orchestrators mark the container
+// unhealthy under load — without protecting anything, since they are not a
+// abuse surface.
+func isRateLimitExempt(path string) bool {
+	if strings.HasPrefix(path, "/assets/") {
+		return true
+	}
+
+	switch path {
+	case "/livez", "/readyz", "/healthcheck":
+		return true
+	default:
+		return false
+	}
 }
 
 func SecurityHeadersMiddleware(next http.Handler) http.Handler {
@@ -122,7 +145,9 @@ func getIP(r *http.Request) string {
 	// Trust forwarded headers only when traffic comes from loopback/private
 	// networks (reverse proxy sidecars / same Docker network).
 	if parsedPeer := net.ParseIP(peerIP); parsedPeer != nil && isTrustedProxyIP(parsedPeer) {
-		if forwarded := firstForwardedIP(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		// Only the hop appended by our own proxy can be trusted: any element a
+		// client sends to the left of it is unauthenticated and spoofable.
+		if forwarded := lastForwardedIP(r.Header.Get("X-Forwarded-For")); forwarded != "" {
 			return forwarded
 		}
 		if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
@@ -135,14 +160,18 @@ func getIP(r *http.Request) string {
 	return peerIP
 }
 
-func firstForwardedIP(xff string) string {
+// lastForwardedIP returns the rightmost valid address in an X-Forwarded-For
+// chain. That entry is the one the trusted proxy appended when it received the
+// request, so a client cannot choose its own rate-limit bucket by prepending
+// fake hops.
+func lastForwardedIP(xff string) string {
 	if xff == "" {
 		return ""
 	}
 
 	parts := strings.Split(xff, ",")
-	for _, part := range parts {
-		candidate := strings.TrimSpace(part)
+	for i := len(parts) - 1; i >= 0; i-- {
+		candidate := strings.TrimSpace(parts[i])
 		if candidate == "" {
 			continue
 		}

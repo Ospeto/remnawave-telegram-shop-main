@@ -346,6 +346,15 @@ TRUST_PRIVATE_PROXY_HEADERS=true
 
 This matters when you put another private reverse proxy in front of the bot or Caddy.
 
+With the bundled Docker Compose + Caddy setup, Caddy reaches the bot over a private
+Docker network, so set `TRUST_PRIVATE_PROXY_HEADERS=true` there to get real client IPs
+in the rate limiter. The `.env.sample` default stays `false` because it is unsafe on a
+host where anything on a private network can reach the API directly.
+
+The limiter identifies a client by the **last** `X-Forwarded-For` hop (the one your
+proxy appends) or by `X-Real-IP`, never by the earlier client-supplied hops, and it
+does not throttle `/assets/*`, `/livez`, `/readyz` or `/healthcheck`.
+
 ## Payments and Checkout Flows
 
 ### Crypto Pay (disabled)
@@ -650,7 +659,10 @@ If you run another private reverse proxy in front of the app, set:
 TRUST_PRIVATE_PROXY_HEADERS=true
 ```
 
-Do not enable that blindly on untrusted networks.
+Do not enable that blindly on untrusted networks. Only the last `X-Forwarded-For` hop
+(the one your proxy appends) and `X-Real-IP` are trusted for client identity, so make
+sure the trusted proxy overwrites or appends those headers instead of forwarding a
+client-supplied chain verbatim.
 
 ### Bot image does not have the latest backup tooling
 
