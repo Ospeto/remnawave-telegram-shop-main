@@ -174,6 +174,12 @@ If you want the repository to manage HTTPS for you with bundled Caddy, also set:
 - `DOMAIN_NAME`
 - `ACME_EMAIL`
 
+`SESSION_SIGNING_SECRET` is optional but strongly recommended: it is the key that signs Mini App
+session tokens. When it is unset the key is derived from `TELEGRAM_TOKEN` and a warning is logged,
+which means a leaked bot token could forge Mini App sessions for any Telegram account, including the
+admin. Setting or changing it invalidates every live Mini App session exactly once at deploy;
+users just reopen the Mini App and a fresh session is issued.
+
 3. Start the application stack.
 
 ```bash
@@ -238,6 +244,7 @@ The full template lives in [.env.sample](.env.sample).
 | Variable | Purpose |
 | --- | --- |
 | `TELEGRAM_TOKEN` | Bot token from BotFather |
+| `SESSION_SIGNING_SECRET` | Optional key that signs Mini App session tokens and redirect grants. Set a long random value (never the bot token) so a leaked bot token cannot forge sessions; unset means it is derived from `TELEGRAM_TOKEN` with a startup warning. Setting or changing it invalidates every live Mini App session exactly once at deploy. |
 | `ADMIN_TELEGRAM_ID` | Telegram user ID allowed to run admin commands |
 | `REMNAWAVE_URL` | Remnawave panel base URL |
 | `REMNAWAVE_TOKEN` | Remnawave API token |

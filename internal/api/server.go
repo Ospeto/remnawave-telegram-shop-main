@@ -33,16 +33,6 @@ const (
 	telegramIDKey contextKey = "telegram_id"
 )
 
-func requestFingerprint(r *http.Request) string {
-	// Keep the bearer session stable across Telegram webview quirks. In
-	// production we've seen the Mini App present inconsistent request
-	// fingerprints across otherwise valid startup requests, which forces a
-	// session-expired loop on every open. We already validate signed initData
-	// during session exchange, so use a constant fingerprint here instead of a
-	// volatile transport hint.
-	return "telegram-webapp"
-}
-
 func isSupportedRedirectTarget(target string) bool {
 	return strings.HasPrefix(target, "happ://") || strings.HasPrefix(target, "happproxy://")
 }
@@ -382,12 +372,14 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-		session, err := authSessions.authenticate(r.Context(), token, requestFingerprint(r))
+		session, err := authSessions.authenticate(r.Context(), token)
 		if err != nil {
 			slog.Warn("Rejected bearer auth session", "reason", err.Error(), "path", r.URL.Path)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+		// Re-advertise the caller's token and its own expiry. A token is only
+		// rotated when the store determines its remaining life is nearly spent.
 		w.Header().Set(sessionTokenHeader, session.Token)
 		w.Header().Set(sessionExpiresHeader, session.ExpiresAt.UTC().Format(time.RFC3339))
 

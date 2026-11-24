@@ -473,7 +473,7 @@ func (h *APIHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, sessionExpiresAt, err := authSessions.create(r.Context(), telegramID, username, requestFingerprint(r))
+	token, sessionExpiresAt, err := authSessions.create(r.Context(), telegramID, username)
 	if err != nil {
 		slog.Error("Failed to create auth session", "telegram_id", telegramID, "error", err)
 		http.Error(w, "Unable to start session right now. Please try again.", http.StatusInternalServerError)
@@ -2339,7 +2339,7 @@ func (h *APIHandler) optionalTelegramID(r *http.Request) (int64, bool) {
 	if token == "" {
 		return 0, false
 	}
-	session, err := authSessions.authenticate(r.Context(), token, requestFingerprint(r))
+	session, err := authSessions.authenticate(r.Context(), token)
 	if err != nil {
 		return 0, false
 	}
