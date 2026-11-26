@@ -18,6 +18,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
 )
 
@@ -110,6 +111,24 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 
 	keyboard := h.buildPaymentMethodKeyboard(langCode, planIdx)
 
+	// Unit 2: with the in-chat chain switched off this screen used to hold only a
+	// Back button and no sentence explaining why the method list was empty, so a
+	// customer had to guess. Editing only the markup cannot say anything, so the
+	// switched-off state rewrites the message text and names the way forward.
+	if !config.IsMobileBankingEnabled() {
+		_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:      callback.Chat.ID,
+			MessageID:   callback.ID,
+			ParseMode:   models.ParseModeHTML,
+			Text:        h.paymentMethodUnavailableText(langCode),
+			ReplyMarkup: models.InlineKeyboardMarkup{InlineKeyboard: keyboard},
+		})
+		if err != nil {
+			slog.Error("Error sending payment-method unavailable notice", "error", err)
+		}
+		return
+	}
+
 	_, err := b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{
 		ChatID:    callback.Chat.ID,
 		MessageID: callback.ID,
@@ -123,6 +142,16 @@ func (h Handler) SellCallbackHandler(ctx context.Context, b *bot.Bot, update *mo
 	}
 }
 
+// paymentMethodUnavailableText explains a switched-off in-chat checkout instead
+// of leaving an empty method screen. When the Mini App is configured it names the
+// button below; otherwise it points at support, which is the only remaining door.
+func (h Handler) paymentMethodUnavailableText(langCode string) string {
+	if strings.TrimSpace(config.GetMiniAppURL()) != "" {
+		return h.translation.GetText(langCode, "payment_methods_unavailable_miniapp")
+	}
+	return h.translation.GetText(langCode, "payment_methods_unavailable")
+}
+
 func (h Handler) buildPaymentMethodKeyboard(langCode string, planIdx string) [][]models.InlineKeyboardButton {
 	var keyboard [][]models.InlineKeyboardButton
 
@@ -130,6 +159,19 @@ func (h Handler) buildPaymentMethodKeyboard(langCode string, planIdx string) [][
 		keyboard = append(keyboard, []models.InlineKeyboardButton{
 			{Text: h.translation.GetText(langCode, "mobile_banking_button"), CallbackData: fmt.Sprintf("%s?plan=%s&invoiceType=%s", CallbackPayment, planIdx, database.InvoiceTypeMobileBanking)},
 		})
+	} else if miniAppURL := config.GetMiniAppURL(); strings.TrimSpace(miniAppURL) != "" {
+		// The chain is off, so offer the surface that can actually take the order.
+		if plansURL := miniAppURLWithPath(miniAppURL, "/plans"); plansURL != "" {
+			keyboard = append(keyboard, []models.InlineKeyboardButton{{
+				Text:   h.translation.GetText(langCode, "buy_button"),
+				WebApp: &models.WebAppInfo{URL: plansURL},
+			}})
+		}
+	} else {
+		keyboard = append(keyboard, []models.InlineKeyboardButton{{
+			Text: h.translation.GetText(langCode, "support_button"),
+			URL:  notification.SupportURL(),
+		}})
 	}
 
 	keyboard = append(keyboard, []models.InlineKeyboardButton{
@@ -388,6 +430,15 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 	}
 	langCode := resolveEffectiveLanguage(customer, update.Message.From.LanguageCode)
 
+	// Unit 2: this handler used to be registered only while the in-chat chain was
+	// switched on, so a receipt photo taken in the switched-off state matched no
+	// handler at all and got no reply. It is now always registered and answers
+	// honestly, pointing the customer at the surface that can take the order.
+	if !config.IsMobileBankingEnabled() {
+		h.replyChatCheckoutDisabled(ctx, b, chatID, langCode)
+		return
+	}
+
 	// Check if this user has a pending mobile banking purchase
 	purchaseID, hasPending := h.mobilePayCache.Get(chatID)
 	var pendingPurchase *database.Purchase
@@ -446,6 +497,39 @@ func (h Handler) MobilePayScreenshotHandler(ctx context.Context, b *bot.Bot, upd
 			})
 		}
 		h.sendErrorReply(ctx, b, chatID, langCode, "mobile_pay_failed_generic", nil)
+	}
+}
+
+// replyChatCheckoutDisabled answers a receipt photo sent while the in-chat
+// payment chain is switched off, instead of dropping it silently.
+func (h Handler) replyChatCheckoutDisabled(ctx context.Context, b *bot.Bot, chatID int64, langCode string) {
+	if b == nil || h.translation == nil {
+		return
+	}
+
+	params := &bot.SendMessageParams{
+		ChatID:    chatID,
+		ParseMode: models.ParseModeHTML,
+		Text:      h.paymentMethodUnavailableText(langCode),
+	}
+	if miniAppURL := strings.TrimSpace(config.GetMiniAppURL()); miniAppURL != "" {
+		if plansURL := miniAppURLWithPath(miniAppURL, "/plans"); plansURL != "" {
+			params.ReplyMarkup = models.InlineKeyboardMarkup{
+				InlineKeyboard: [][]models.InlineKeyboardButton{{
+					{Text: h.translation.GetText(langCode, "buy_button"), WebApp: &models.WebAppInfo{URL: plansURL}},
+				}},
+			}
+		}
+	} else {
+		params.ReplyMarkup = models.InlineKeyboardMarkup{
+			InlineKeyboard: [][]models.InlineKeyboardButton{{
+				{Text: h.translation.GetText(langCode, "support_button"), URL: notification.SupportURL()},
+			}},
+		}
+	}
+
+	if _, err := b.SendMessage(ctx, params); err != nil {
+		slog.Error("Failed to answer a receipt photo sent while in-chat checkout is off", "chat_id", chatID, "error", err)
 	}
 }
 

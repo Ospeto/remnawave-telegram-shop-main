@@ -272,6 +272,17 @@ func IsMobileBankingEnabled() bool {
 	return conf.mobileBankingEnabled
 }
 
+// SetMobileBankingEnabledForTesting flips the in-chat payment chain for one test
+// and returns a func that restores the configured value.
+func SetMobileBankingEnabledForTesting(enabled bool) func() {
+	old := conf.mobileBankingEnabled
+	conf.mobileBankingEnabled = enabled
+
+	return func() {
+		conf.mobileBankingEnabled = old
+	}
+}
+
 func MobileBankingPhone() string {
 	return conf.mobileBankingPhone
 }

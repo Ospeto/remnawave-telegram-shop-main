@@ -55,7 +55,7 @@
   "access_denied": "⚠️ Access denied. Please update your profile information.",
   "mobile_banking_button": "📱 Pay via Mobile Banking",
   "mobile_pay_instructions": "<b>How to activate your key:</b>\n\n1️⃣ <b>Transfer exactly %d MMK using one of these accounts:</b>\n%s\n\n2️⃣ <b>⚠️ Important — remark field:</b>\nWrite ONLY: <code>Payment</code>\n<i>Do <b>NOT</b> write VPN, Wavy, Outline, or anything else</i>\n\n3️⃣ <b>Take a screenshot of the confirmation and send it below</b> 👇",
-  "mobile_pay_pending_resume": "You already have an unfinished payment for %d MMK. Upload that payment screenshot here, or open the app to cancel it and choose another plan.",
+  "mobile_pay_pending_resume": "You already have an unfinished payment for %d MMK. Upload that payment screenshot here — or tap ✖️ Cancel payment below to release it right here in this chat and pick another plan.",
   "mobile_pay_cancel_change_plan_button": "Cancel / Change Plan",
   "mobile_pay_verifying": "🔍 Verifying your payment screenshot...",
   "mobile_pay_success": "✅ Payment verified! Your key is being activated.",
@@ -96,5 +96,7 @@
   "wallet_empty_desc": "Your transaction history will appear here after your first top-up or purchase.",
   "home_empty_title": "Ready to Connect?",
   "home_empty_desc": "Get your private VPN key and start browsing freely.",
-  "home_empty_action": "🚀 Get My Key"
+  "home_empty_action": "🚀 Get My Key",
+  "payment_methods_unavailable": "⚠️ Card and mobile-banking checkout is switched off for this bot right now, so there are no payment methods to show here.\n\nPlease contact support and they will take your order directly.",
+  "payment_methods_unavailable_miniapp": "⚠️ In-chat checkout is switched off right now, so there are no payment methods to show here.\n\nTap the button below to choose a plan and pay inside the app — that is where orders are taken."
 }

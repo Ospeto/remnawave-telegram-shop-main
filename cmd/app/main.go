@@ -581,12 +581,16 @@ func main() {
 			!strings.HasPrefix(update.Message.Text, "/")
 	}, h.CustomerTextMessageHandler, h.SuspiciousUserFilterMiddleware)
 
-	// Register photo handler for mobile banking screenshot uploads
-	if config.IsMobileBankingEnabled() {
-		b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
-			return update.Message != nil && len(update.Message.Photo) > 0
-		}, h.MobilePayScreenshotHandler)
-	}
+	// Photo handler for mobile banking screenshot uploads.
+	//
+	// Unit 2: this was registered only while MOBILE_BANKING_ENABLED was true,
+	// while the Buy callback was registered unconditionally. A customer who took a
+	// receipt photo in the switched-off state matched no handler at all and got no
+	// reply. The handler is now always registered and answers honestly, pointing at
+	// the Mini App (or support) instead of accepting the photo.
+	b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+		return update.Message != nil && len(update.Message.Photo) > 0
+	}, h.MobilePayScreenshotHandler)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/livez", func(w http.ResponseWriter, _ *http.Request) {
