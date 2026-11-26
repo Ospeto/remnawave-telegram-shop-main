@@ -48,7 +48,7 @@ describe('operator link regressions', () => {
         seedTelegramSession();
     });
 
-    it('uses the configured support URL on Home and falls back to the shop bot URL', async () => {
+    it('uses the configured support URL on Home and falls back to the support account, not the bot', async () => {
         fetchMock.mockResolvedValueOnce(jsonResponse({
             user: { id: 1, telegram_id: 42 },
             keys: [],
@@ -89,7 +89,7 @@ describe('operator link regressions', () => {
             { path: '/wallet', element: <div>Wallet</div> },
         ], ['/']);
 
-        expect(await screen.findByRole('link', { name: /Contact Support/i })).toHaveAttribute('href', 'https://t.me/MyShopBot');
+        expect(await screen.findByRole('link', { name: /Contact Support/i })).toHaveAttribute('href', 'https://t.me/ospeto');
     });
 
     it('hides the wallet referral share button when the shop bot URL is missing', async () => {

@@ -12,8 +12,9 @@ import (
 	"remnawave-tg-shop-bot/internal/translation"
 )
 
-// DefaultSupportURL is the fallback when SUPPORT_URL is unset.
-const DefaultSupportURL = "https://t.me/ospeto"
+// DefaultSupportURL mirrors config.DefaultSupportURL so callers that already
+// import this package do not have to reach into config for the fallback.
+const DefaultSupportURL = config.DefaultSupportURL
 
 // Download URLs for the Happ proxy client.
 const (
@@ -45,11 +46,9 @@ func HappImportURL(subURL string) string {
 }
 
 // SupportURL resolves the operator's support contact with a working fallback.
+// The fallback lives in config so every surface resolves it identically.
 func SupportURL() string {
-	if trimmed := strings.TrimSpace(config.SupportURL()); trimmed != "" {
-		return trimmed
-	}
-	return DefaultSupportURL
+	return config.SupportURL()
 }
 
 // FormatKeyMessage renders a key-bearing message from a translation key. The

@@ -68,6 +68,24 @@ func isMeaningfulBuildValue(value string) bool {
 	return normalized != "" && normalized != "none" && normalized != "unknown" && normalized != "dev"
 }
 
+// botDefaultLanguage is the language the bot speaks when a customer has not chosen
+// otherwise. Burmese is the product default; English is the second supported
+// language.
+const botDefaultLanguage = "my"
+
+// menuButtonText is the label on the one persistent menu button.
+//
+// Telegram's setChatMenuButton accepts no language_code, so this single label
+// cannot follow each customer's resolved language the way the command list does.
+// It therefore reads from the catalogue in the product default language rather
+// than a hard-coded literal, so it stays in step with the bot's own copy.
+func menuButtonText(tm *translation.Manager) string {
+	if tm == nil {
+		return "ဒီမှာဝယ်ပါ"
+	}
+	return tm.GetText(botDefaultLanguage, "menu_button_text")
+}
+
 func versionedMiniAppURL(rawURL string) string {
 	base := strings.TrimSpace(rawURL)
 	if base == "" {
@@ -449,10 +467,18 @@ func main() {
 	if telegramAPIReady {
 		if miniAppURL != "" {
 			menuButtonURL := versionedMiniAppURL(miniAppURL)
+			// The label comes from the translation catalogue rather than a
+			// hard-coded Burmese literal, so the one persistent menu button reads
+			// from the same copy as the in-bot buy button.
+			//
+			// Telegram's setChatMenuButton accepts no language_code, so this single
+			// label cannot follow the customer's resolved language the way the
+			// command list does. The bot's default language is the honest choice
+			// here; per-customer menu labels would need one API call per update.
 			_, err = b.SetChatMenuButton(ctx, &bot.SetChatMenuButtonParams{
 				MenuButton: &models.MenuButtonWebApp{
 					Type: models.MenuButtonTypeWebApp,
-					Text: "ဒီမှာဝယ်ပါ",
+					Text: menuButtonText(tm),
 					WebApp: models.WebAppInfo{
 						URL: menuButtonURL,
 					},
@@ -474,21 +500,24 @@ func main() {
 	}
 
 	if telegramAPIReady {
-		// Set default bot commands (English fallback for all other locales).
+		// Burmese is the product default, so the language-less set is Burmese:
+		// every locale without its own set falls back to it. English is published
+		// alongside it so an English speaker's own locale resolves to English.
+		// Russian used to carry a third set; it described a language this product
+		// no longer speaks.
 		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-			Commands: handler.PublicBotCommands("en"),
+			Commands: handler.PublicBotCommands(botDefaultLanguage),
 		})
 		if err != nil {
 			slog.Warn("Failed to set default bot commands (non-fatal)", "error", err)
 		}
 
-		// Set public bot commands for Russian.
 		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-			Commands:     handler.PublicBotCommands("ru"),
-			LanguageCode: "ru",
+			Commands:     handler.PublicBotCommands("en"),
+			LanguageCode: "en",
 		})
 		if err != nil {
-			slog.Warn("Failed to set Russian bot commands (non-fatal)", "error", err)
+			slog.Warn("Failed to set English bot commands (non-fatal)", "error", err)
 		}
 	}
 
@@ -499,7 +528,7 @@ func main() {
 		}
 
 		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-			Commands: handler.AdminBotCommands("en"),
+			Commands: handler.AdminBotCommands(botDefaultLanguage),
 			Scope:    adminScope,
 		})
 		if err != nil {
@@ -507,12 +536,12 @@ func main() {
 		}
 
 		_, err = b.SetMyCommands(ctx, &bot.SetMyCommandsParams{
-			Commands:     handler.AdminBotCommands("ru"),
+			Commands:     handler.AdminBotCommands("en"),
 			Scope:        adminScope,
-			LanguageCode: "ru",
+			LanguageCode: "en",
 		})
 		if err != nil {
-			slog.Warn("Failed to set Russian admin bot commands (non-fatal)", "error", err)
+			slog.Warn("Failed to set English admin bot commands (non-fatal)", "error", err)
 		}
 	}
 

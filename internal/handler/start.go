@@ -14,22 +14,66 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/utils"
 )
 
+// resolveEffectiveLanguage decides which language a customer reads.
+//
+// A language already stored on the customer row is a real choice and wins. It
+// used to be discarded whenever it read "en", so an English customer was
+// silently served Burmese forever and no English surface could ever be reached.
+// Burmese stays the fallback default; Russian is no longer a supported language,
+// so a stored or Telegram "ru" resolves to the default instead of a third set.
 func resolveEffectiveLanguage(customer *database.Customer, telegramLang string) string {
-	if customer != nil && customer.Language != "" && customer.Language != "en" {
-		return customer.Language
+	if customer != nil {
+		if stored := normalizeSupportedLanguage(customer.Language); stored != "" {
+			return stored
+		}
 	}
-	base := strings.ToLower(strings.TrimSpace(telegramLang))
-	if strings.Contains(base, "-") {
-		base = strings.Split(base, "-")[0]
+
+	if fromTelegram := normalizeSupportedLanguage(telegramLang); fromTelegram != "" {
+		return fromTelegram
 	}
-	if base == "ru" {
-		return "ru"
+
+	return defaultLanguage
+}
+
+// defaultLanguage is recourse when nothing else is known: the product default.
+const defaultLanguage = "my"
+
+// normalizeSupportedLanguage maps a language tag onto a supported language, or
+// returns empty when the tag is unsupported. Tags arrive as "my", "my-MM",
+// "en-US" or empty; Russian is deliberately unsupported now.
+func normalizeSupportedLanguage(lang string) string {
+	base := strings.ToLower(strings.TrimSpace(lang))
+	if idx := strings.Index(base, "-"); idx >= 0 {
+		base = base[:idx]
 	}
-	return "my"
+	if idx := strings.Index(base, "_"); idx >= 0 {
+		base = base[:idx]
+	}
+
+	switch base {
+	case "my", "en":
+		return base
+	default:
+		return ""
+	}
+}
+
+// languageNeedsStorage reports whether the customer row must learn its language.
+//
+// Writing the resolved language back on every update used to overwrite a real
+// choice with a Telegram-derived guess, so the stored value could never differ
+// from what Telegram said. The row is only written when it has no supported
+// language yet; an existing choice is left alone.
+func languageNeedsStorage(customer *database.Customer) bool {
+	if customer == nil {
+		return false
+	}
+	return normalizeSupportedLanguage(customer.Language) == ""
 }
 
 func (h Handler) StartCommandHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -136,7 +180,7 @@ func (h Handler) ensureCustomer(ctx context.Context, telegramID int64, langCode 
 		return existingCustomer, true, nil
 	} else {
 		effectiveLang := resolveEffectiveLanguage(existingCustomer, langCode)
-		if existingCustomer.Language != effectiveLang {
+		if languageNeedsStorage(existingCustomer) && existingCustomer.Language != effectiveLang {
 			updates := map[string]interface{}{
 				"language": effectiveLang,
 			}
@@ -308,7 +352,7 @@ func (h Handler) sendStartMenu(ctx context.Context, b *bot.Bot, chatID int64, cu
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText(langCode, "greeting"),
+		Text: h.buildGreeting(langCode),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)
@@ -399,6 +443,19 @@ func (h Handler) buildStartKeyboard(existingCustomer *database.Customer, langCod
 	rows = append(rows, []models.InlineKeyboardButton{
 		buyButton,
 	})
+
+	// The support door is the captain's highest-value change: a customer who is
+	// stuck must be able to reach a human without hunting. It sits directly under
+	// the primary action, above referral. SUPPORT_URL wins when configured; the
+	// confirmed fallback is the operator's own Telegram account, never the bot's
+	// own URL, because the bot cannot answer for itself.
+	rows = append(rows, []models.InlineKeyboardButton{
+		{
+			Text: h.translation.GetText(langCode, "support_button"),
+			URL:  notification.SupportURL(),
+		},
+	})
+
 	rows = append(rows, []models.InlineKeyboardButton{
 		{
 			Text: h.translation.GetText(langCode, "referral_button"),

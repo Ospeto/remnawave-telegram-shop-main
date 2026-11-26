@@ -18,8 +18,10 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/funnel"
 	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
+	"remnawave-tg-shop-bot/utils"
 )
 
 func formatPrice(price int) string {
@@ -46,6 +48,13 @@ func planPriceLabel(plan config.Plan, isReseller bool) string {
 
 func (h Handler) BuyCallbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	callback := update.CallbackQuery.Message.Message
+
+	// Funnel stage 1 from the bot side: the customer opened the in-chat purchase
+	// surface. Nothing in the shop recorded this before, so every claim about
+	// where customers drop off was inference.
+	funnel.Emit(funnel.EventPurchaseOpened, funnel.SurfaceBot,
+		"telegram_id", callback.Chat.ID,
+	)
 
 	var customer *database.Customer
 	isReseller := false
@@ -252,6 +261,14 @@ func (h Handler) handleMobileBankingPayment(ctx context.Context, b *bot.Bot, cal
 
 	// Store pending state: telegramID → purchaseID
 	h.mobilePayCache.Set(callback.Chat.ID, int(purchaseId))
+
+	// Funnel stage 2 from the bot side: the in-chat chain produced a purchase row.
+	funnel.Emit(funnel.EventPurchaseCreated, funnel.SurfaceBot,
+		"purchase_id", purchaseId,
+		"customer_id", utils.MaskHalfInt64(customer.ID),
+		"invoice_type", database.InvoiceTypeMobileBanking,
+		"amount", amount,
+	)
 
 	// Instructions show resolved amount (wholesale for resellers when configured).
 	h.editMobileBankingInstructions(ctx, b, callback, amount, planIdx, langCode, false, purchaseId)

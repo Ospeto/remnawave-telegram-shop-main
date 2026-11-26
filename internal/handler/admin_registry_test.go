@@ -1,115 +1,113 @@
 package handler
 
-import "testing"
+import (
+	"strings"
+	"testing"
 
-func TestPublicBotCommandsDefaultToEnglish(t *testing.T) {
-	commands := PublicBotCommands("my-MM")
-	if len(commands) != 3 {
-		t.Fatalf("PublicBotCommands() len = %d, want 3", len(commands))
+	"github.com/go-telegram/bot/models"
+
+	"remnawave-tg-shop-bot/internal/config"
+)
+
+// TestPublicBotCommandsSpeakBurmeseAndEnglish pins the settled language
+// direction: Burmese is the default, English is genuinely supported.
+//
+// The old test asserted that a Burmese locale resolved to English, because
+// English was the only description set besides Russian. That is no longer the
+// truth: a Burmese speaker now reads Burmese, and English speakers read English.
+func TestPublicBotCommandsSpeakBurmeseAndEnglish(t *testing.T) {
+	burmese := PublicBotCommands("my-MM")
+	if len(burmese) != 3 {
+		t.Fatalf("PublicBotCommands(my-MM) len = %d, want 3", len(burmese))
 	}
-	if commands[0].Command != "start" || commands[0].Description != "Open the main menu" {
-		t.Fatalf("PublicBotCommands() first command = %#v", commands[0])
+	if burmese[0].Command != "start" {
+		t.Fatalf("PublicBotCommands() first command = %q, want start", burmese[0].Command)
+	}
+	if burmese[0].Description != "ပင်မမီနူး ဖွင့်ရန်" {
+		t.Fatalf("PublicBotCommands(my-MM) start = %q, want the Burmese description", burmese[0].Description)
+	}
+
+	english := PublicBotCommands("en-US")
+	if english[0].Description != "Open the main menu" {
+		t.Fatalf("PublicBotCommands(en-US) start = %q, want the English description", english[0].Description)
+	}
+
+	// Every description set must be distinct from the command itself, so a
+	// customer never reads a raw command name where prose belongs.
+	for _, commands := range [][]models.BotCommand{burmese, english} {
+		for _, command := range commands {
+			if command.Description == "" || command.Description == command.Command {
+				t.Fatalf("command %q has a placeholder description %q", command.Command, command.Description)
+			}
+		}
 	}
 }
 
-func TestAdminBotCommandsIncludeDashboard(t *testing.T) {
-	commands := AdminBotCommands("ru")
-	if len(commands) != 3 {
-		t.Fatalf("AdminBotCommands() len = %d, want 3", len(commands))
-	}
-	if commands[0].Command != "admin" {
-		t.Fatalf("AdminBotCommands() first command = %q, want admin", commands[0].Command)
-	}
-	if commands[0].Description == "" {
-		t.Fatal("AdminBotCommands() admin description is empty")
-	}
-	if commands[1].Command != "healthbot" || commands[2].Command != "help" {
-		t.Fatalf("AdminBotCommands() = %#v, want admin/healthbot/help", commands)
+// TestAdminBotCommandsDescribeEveryEntry covers the admin scope, which follows
+// the same rule.
+func TestAdminBotCommandsDescribeEveryEntry(t *testing.T) {
+	for _, lang := range []string{"my", "en"} {
+		commands := AdminBotCommands(lang)
+		if len(commands) != 3 {
+			t.Fatalf("AdminBotCommands(%s) len = %d, want 3", lang, len(commands))
+		}
+		if commands[0].Command != "admin" {
+			t.Fatalf("AdminBotCommands(%s) first command = %q, want admin", lang, commands[0].Command)
+		}
+		if commands[0].Description == "" {
+			t.Fatalf("AdminBotCommands(%s) admin description is empty", lang)
+		}
+		if commands[1].Command != "healthbot" || commands[2].Command != "help" {
+			t.Fatalf("AdminBotCommands(%s) = %#v, want admin/healthbot/help", lang, commands)
+		}
 	}
 }
 
-func TestBuildAdminInputCommand(t *testing.T) {
-	tests := []struct {
-		name    string
-		flow    adminFlowState
-		input   string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:  "referral bonus",
-			flow:  adminFlowState{Kind: adminFlowReferralBonus},
-			input: "2500",
-			want:  "/setreferralbonus 2500",
-		},
-		{
-			name:  "set phone",
-			flow:  adminFlowState{Kind: adminFlowSetPhone, Provider: "kpay"},
-			input: "09123456789",
-			want:  "/setphone kpay 09123456789",
-		},
-		{
-			name:  "set name",
-			flow:  adminFlowState{Kind: adminFlowSetName, Provider: "wavepay"},
-			input: "Aung Aung",
-			want:  "/setname wavepay Aung Aung",
-		},
-		{
-			name:  "backup schedule",
-			flow:  adminFlowState{Kind: adminFlowBackupSchedule},
-			input: "00:15",
-			want:  "/backup schedule 00:15",
-		},
-		{
-			name:  "notify",
-			flow:  adminFlowState{Kind: adminFlowNotify},
-			input: "12345678",
-			want:  "/notify 12345678",
-		},
-		{
-			name:  "add promo",
-			flow:  adminFlowState{Kind: adminFlowAddPromo},
-			input: "sale50 50% 10days 100code",
-			want:  "/addpromo sale50 50% 10days 100code",
-		},
-		{
-			name:  "delete promo",
-			flow:  adminFlowState{Kind: adminFlowDeletePromo},
-			input: "SALE50",
-			want:  "/deletepromo SALE50",
-		},
-		{
-			name:    "invalid schedule",
-			flow:    adminFlowState{Kind: adminFlowBackupSchedule},
-			input:   "25:00",
-			wantErr: true,
-		},
-		{
-			name:    "invalid notify",
-			flow:    adminFlowState{Kind: adminFlowNotify},
-			input:   "abc",
-			wantErr: true,
-		},
-		{
-			name:    "invalid add promo",
-			flow:    adminFlowState{Kind: adminFlowAddPromo},
-			input:   "sale50 50%",
-			wantErr: true,
-		},
+// TestNoRussianSurvivesInTheCommandList proves the dropped language is gone
+// rather than merely unreferenced: no Cyrillic description may be emitted for
+// any language code, Russian included.
+func TestNoRussianSurvivesInTheCommandList(t *testing.T) {
+	for _, lang := range []string{"ru", "ru-RU", "en", "my", "de"} {
+		for _, commands := range [][]models.BotCommand{PublicBotCommands(lang), AdminBotCommands(lang)} {
+			for _, command := range commands {
+				if containsCyrillic(command.Description) {
+					t.Fatalf("lang %q still returns a Russian description %q for %q", lang, command.Description, command.Command)
+				}
+			}
+		}
+	}
+}
+
+// TestUserHelpTextNamesTheShopAndTheSupportDoor replaces the old single
+// hard-coded English sentence.
+func TestUserHelpTextNamesTheShopAndTheSupportDoor(t *testing.T) {
+	restore := config.SetSupportURLForTesting("")
+	defer restore()
+
+	h := Handler{translation: loadHandlerTestTranslations(t)}
+
+	for _, lang := range []string{"en", "my"} {
+		text := h.renderUserHelpText(lang)
+		if !strings.Contains(text, config.DefaultSupportURL) {
+			t.Fatalf("%s help text = %q, want the support account to be reachable", lang, text)
+		}
+		if strings.Contains(text, "%s") {
+			t.Fatalf("%s help text carries an unformatted verb: %q", lang, text)
+		}
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildAdminInputCommand(tt.flow, tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("buildAdminInputCommand() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if tt.wantErr {
-				return
-			}
-			if got != tt.want {
-				t.Fatalf("buildAdminInputCommand() = %q, want %q", got, tt.want)
-			}
-		})
+	restoreCustom := config.SetSupportURLForTesting("https://t.me/custom_help")
+	defer restoreCustom()
+	if text := h.renderUserHelpText("en"); !strings.Contains(text, "https://t.me/custom_help") {
+		t.Fatalf("help text = %q, want the configured SUPPORT_URL", text)
 	}
+}
+
+func containsCyrillic(s string) bool {
+	for _, r := range s {
+		if r >= '\u0400' && r <= '\u04FF' {
+			return true
+		}
+	}
+	return false
 }

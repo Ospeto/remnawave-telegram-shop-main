@@ -90,7 +90,10 @@ func (h Handler) CreateCustomerIfNotExistMiddleware(next bot.HandlerFunc) bot.Ha
 				return
 			}
 		} else {
-			if existingCustomer.Language != effectiveLang {
+			// Only teach the row its language when it has none yet. This used to
+			// rewrite the stored choice on every single update, so `/api/me` could
+			// never carry a real choice and the Mini App and the bot drifted apart.
+			if languageNeedsStorage(existingCustomer) && existingCustomer.Language != effectiveLang {
 				updates := map[string]interface{}{
 					"language": effectiveLang,
 				}

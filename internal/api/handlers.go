@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/funnel"
 	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/internal/reporting"
 	walletsvc "remnawave-tg-shop-bot/internal/service/wallet"
@@ -48,6 +49,13 @@ type KeyResponse struct {
 type UserResponse struct {
 	ID         int64 `json:"id"`
 	TelegramID int64 `json:"telegram_id"`
+	// Language is the language the customer's row actually stores.
+	//
+	// The bot resolved a language for every reply and the Mini App kept its own
+	// copy in localStorage, so the two surfaces could disagree with nobody able
+	// to see it. Publishing the stored value lets the webview adopt the same
+	// choice the bot reads.
+	Language string `json:"language,omitempty"`
 }
 
 type ValidationResponse struct {
@@ -104,6 +112,7 @@ func userResponse(customer *database.Customer) *UserResponse {
 	return &UserResponse{
 		ID:         customer.ID,
 		TelegramID: customer.TelegramID,
+		Language:   customer.Language,
 	}
 }
 
@@ -1450,6 +1459,15 @@ func (h *APIHandler) CreatePurchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Funnel stage 2: a purchase row exists. Everything before this is intent;
+	// this is the first stage where the customer committed to a plan and amount.
+	funnel.Emit(funnel.EventPurchaseCreated, funnel.SurfaceMiniApp,
+		"purchase_id", purchase.ID,
+		"customer_id", utils.MaskHalfInt64(customer.ID),
+		"invoice_type", purchase.InvoiceType,
+		"amount", purchase.Amount,
+	)
+
 	// Only stamp plan_label/payment_phone when unset. Idempotent resumes must not
 	// rewrite the original purchase (especially after a body-mismatched attempt is
 	// rejected at the payment layer; same-body retries keep original fields).
@@ -2390,6 +2408,11 @@ func (h *APIHandler) GetPlans(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Funnel stage 1 from the Mini App side: the customer reached the purchase
+	// surface. Without this the shop could not tell a customer who never saw a
+	// price from one who saw prices and walked away.
+	funnel.Emit(funnel.EventPurchaseOpened, funnel.SurfaceMiniApp)
+
 	for _, p := range plans {
 		price := p.Price
 		pricingTier := ""
@@ -2609,6 +2632,25 @@ func (h *APIHandler) UploadScreenshot(w http.ResponseWriter, r *http.Request) {
 		)
 		writeSanitizedError(w, http.StatusInternalServerError, "Verification is temporarily unavailable right now. Please try again.", err)
 		return
+	}
+
+	// Funnel stage 3: a receipt was accepted for verification. This is the stage
+	// where the old shop went silent, so it is worth counting on its own.
+	funnel.Emit(funnel.EventScreenshotUploaded, funnel.SurfaceMiniApp,
+		"purchase_id", purchase.ID,
+		"customer_id", utils.MaskHalfInt64(customer.ID),
+		"invoice_type", purchase.InvoiceType,
+		"file_size", len(fileBytes),
+	)
+
+	if result.Success {
+		// Funnel stage 4: the receipt verified and the purchase was fulfilled.
+		funnel.Emit(funnel.EventVerificationSucceeded, funnel.SurfaceMiniApp,
+			"purchase_id", purchase.ID,
+			"customer_id", utils.MaskHalfInt64(customer.ID),
+			"invoice_type", purchase.InvoiceType,
+			"test_mode", result.TestModeBypass,
+		)
 	}
 
 	resp := UploadScreenshotResponse{Status: "failed"}

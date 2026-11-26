@@ -97,7 +97,7 @@ func (h Handler) HelpCommandHandler(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 
-	helpText := renderUserHelpText()
+	helpText := h.renderUserHelpText(resolveEffectiveLanguage(nil, updateLanguageCode(update)))
 	if h.isAdminUpdate(update) {
 		if update.Message != nil && update.Message.From != nil {
 			h.clearAdminFlow(update.Message.From.ID)

@@ -5,12 +5,14 @@ import (
 	"strings"
 
 	"github.com/go-telegram/bot/models"
+
+	"remnawave-tg-shop-bot/internal/config"
 )
 
 type botCommandDef struct {
 	Command string
 	English string
-	Russian string
+	Burmese string
 }
 
 type fallbackCommandDef struct {
@@ -18,16 +20,19 @@ type fallbackCommandDef struct {
 	Description string
 }
 
+// The bot publishes exactly two description sets: Burmese, which is the product
+// default, and English, which is genuinely supported. Russian used to carry a
+// third set that no longer described a language the product speaks.
 var publicBotCommandDefs = []botCommandDef{
-	{Command: "start", English: "Open the main menu", Russian: "Открыть главное меню"},
-	{Command: "connect", English: "Open connection options", Russian: "Показать способы подключения"},
-	{Command: "help", English: "Show help", Russian: "Показать справку"},
+	{Command: "start", English: "Open the main menu", Burmese: "ပင်မမီနူး ဖွင့်ရန်"},
+	{Command: "connect", English: "Open connection options", Burmese: "ချိတ်ဆက်နည်း ကြည့်ရန်"},
+	{Command: "help", English: "Show help", Burmese: "အကူအညီ ကြည့်ရန်"},
 }
 
 var adminBotCommandDefs = []botCommandDef{
-	{Command: "admin", English: "Open admin dashboard", Russian: "Открыть панель администратора"},
-	{Command: "healthbot", English: "Run bot E2E healthcheck", Russian: "Запустить сквозную проверку бота"},
-	{Command: "help", English: "Show admin help", Russian: "Показать помощь администратора"},
+	{Command: "admin", English: "Open admin dashboard", Burmese: "Admin dashboard ဖွင့်ရန်"},
+	{Command: "healthbot", English: "Run bot E2E healthcheck", Burmese: "Bot E2E healthcheck လုပ်ရန်"},
+	{Command: "help", English: "Show admin help", Burmese: "Admin အကူအညီ ကြည့်ရန်"},
 }
 
 var adminFallbackCommandDefs = []fallbackCommandDef{
@@ -86,9 +91,12 @@ func botCommandsForLanguage(defs []botCommandDef, lang string) []models.BotComma
 	return commands
 }
 
+// resolveCommandDescription picks the Burmese or English description. Burmese is
+// returned for the default and for any Burmese locale; everything else reads
+// English, which is the second supported language.
 func resolveCommandDescription(def botCommandDef, lang string) string {
-	if strings.EqualFold(lang, "ru") {
-		return def.Russian
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(lang)), "my") {
+		return def.Burmese
 	}
 	return def.English
 }
@@ -112,6 +120,16 @@ func renderAdminHelpText() string {
 	return sb.String()
 }
 
-func renderUserHelpText() string {
-	return "Use <code>/start</code> to open the bot and <code>/connect</code> to get your connection options."
+// renderUserHelpText describes this product and the ways out of it: the Mini App
+// where a customer buys and reads their key, and the support account where a
+// human answers.
+//
+// It used to be one hard-coded English sentence, so a Burmese-default customer
+// was handed English help with no support path at all.
+func (h Handler) renderUserHelpText(langCode string) string {
+	supportURL := config.SupportURL()
+	if h.translation == nil {
+		return fmt.Sprintf("Use /start to open the bot, /connect for your connection options, or %s for support.", supportURL)
+	}
+	return fmt.Sprintf(h.translation.GetText(langCode, "user_help_text"), supportURL)
 }

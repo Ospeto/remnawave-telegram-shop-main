@@ -8,6 +8,7 @@ import { Wallet } from './pages/Wallet';
 import { ThemeProvider } from './lib/ThemeProvider';
 import { UserDataProvider } from './lib/userData';
 import { RouteLoadingSkeleton } from './components/RouteLoadingSkeleton';
+import { LanguageSync } from './components/LanguageSync';
 
 // The admin and reseller surface is a large, rarely visited part of the app:
 // it is split out of the first-paint bundle and fetched on demand.
@@ -23,6 +24,7 @@ function App() {
     return (
         <ThemeProvider>
             <UserDataProvider>
+                <LanguageSync />
                 <BrowserRouter>
                     <Suspense fallback={<RouteLoadingSkeleton />}>
                         <Routes>

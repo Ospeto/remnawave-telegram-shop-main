@@ -103,5 +103,7 @@
   "greeting_ready": "<b>Have these ready before you pay:</b>\n• Happ Proxy installed on your phone\n• Your banking app\n• The exact plan amount\n• A screenshot of the confirmation after you pay",
   "greeting_steps": "<b>What happens when you tap Buy:</b>\n1. Choose a plan\n2. Transfer the exact amount\n3. Upload the payment screenshot\n4. Get your VPN key",
   "greeting_referral": "🤝 Refer a friend and you both receive <b>%s MMK</b> once they buy.",
-  "greeting_cta": "Tap <b>Get My VPN Key</b> below to get started."
+  "greeting_cta": "Tap <b>Get My VPN Key</b> below to get started.",
+  "user_help_text": "<b>About this shop</b>\n\nBuy or extend a VPN key in the shop's Mini App, then import it into Happ Proxy — the guide is sent to you right after payment.\n\n• /start — open the main menu\n• /connect — your key and connection steps\n• Support — reach a human: %s",
+  "menu_button_text": "Buy here"
 }
