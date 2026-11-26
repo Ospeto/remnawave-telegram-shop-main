@@ -57,29 +57,45 @@ func (h Handler) sendMissingCustomerHint(ctx context.Context, b *bot.Bot, chatID
 	}
 }
 
+// connectMarkup builds the /connect keyboard. The Mini App stays the primary
+// action; the one-click import is offered next to it whenever there is a live
+// SubscriptionLink, because the walkthrough text now always explains it.
+func (h Handler) connectMarkup(customer *database.Customer, langCode string) [][]models.InlineKeyboardButton {
+	var markup [][]models.InlineKeyboardButton
+
+	hasLiveLink := customer != nil && customer.SubscriptionLink != nil &&
+		*customer.SubscriptionLink != "" && customer.ExpireAt != nil && customer.ExpireAt.After(time.Now())
+
+	if config.GetMiniAppURL() != "" {
+		markup = append(markup, []models.InlineKeyboardButton{{
+			Text:   h.translation.GetText(langCode, "connect_button"),
+			WebApp: &models.WebAppInfo{URL: config.GetMiniAppURL()},
+		}})
+	} else if config.IsWebAppLinkEnabled() && hasLiveLink {
+		markup = append(markup, []models.InlineKeyboardButton{{
+			Text:   h.translation.GetText(langCode, "connect_button"),
+			WebApp: &models.WebAppInfo{URL: *customer.SubscriptionLink},
+		}})
+	}
+
+	if hasLiveLink {
+		markup = append(markup, []models.InlineKeyboardButton{{
+			Text: h.translation.GetText(langCode, "happ_proxy_button"),
+			URL:  buildOneClickHappURL(*customer.SubscriptionLink),
+		}})
+	}
+
+	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
+
+	return markup
+}
+
 func (h Handler) sendConnectionMessage(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
 	if b == nil {
 		return
 	}
 	langCode = resolveEffectiveLanguage(customer, langCode)
-	var markup [][]models.InlineKeyboardButton
-	if config.GetMiniAppURL() != "" {
-		markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
-			WebApp: &models.WebAppInfo{
-				URL: config.GetMiniAppURL(),
-			}}})
-	} else if config.IsWebAppLinkEnabled() {
-		if customer.SubscriptionLink != nil && customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
-			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
-				WebApp: &models.WebAppInfo{
-					URL: *customer.SubscriptionLink,
-				}}})
-			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
-				URL: buildOneClickHappURL(*customer.SubscriptionLink),
-			}})
-		}
-	}
-	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
+	markup := h.connectMarkup(customer, langCode)
 
 	isDisabled := true
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -116,25 +132,7 @@ func (h Handler) ConnectCallbackHandler(ctx context.Context, b *bot.Bot, update 
 	h.applyCanonicalConnectState(ctx, customer)
 
 	langCode := resolveEffectiveLanguage(customer, update.CallbackQuery.From.LanguageCode)
-
-	var markup [][]models.InlineKeyboardButton
-	if config.GetMiniAppURL() != "" {
-		markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
-			WebApp: &models.WebAppInfo{
-				URL: config.GetMiniAppURL(),
-			}}})
-	} else if config.IsWebAppLinkEnabled() {
-		if customer.SubscriptionLink != nil && customer.ExpireAt != nil && customer.ExpireAt.After(time.Now()) {
-			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "connect_button"),
-				WebApp: &models.WebAppInfo{
-					URL: *customer.SubscriptionLink,
-				}}})
-			markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "happ_proxy_button"),
-				URL: buildOneClickHappURL(*customer.SubscriptionLink),
-			}})
-		}
-	}
-	markup = append(markup, []models.InlineKeyboardButton{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackStart}})
+	markup := h.connectMarkup(customer, langCode)
 
 	isDisabled := true
 	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
@@ -185,11 +183,14 @@ func buildConnectText(customer *database.Customer, langCode string) string {
 			info.WriteString(fmt.Sprintf(subscriptionActiveText, formattedDate))
 
 			if customer.SubscriptionLink != nil && *customer.SubscriptionLink != "" {
-				if config.GetMiniAppURL() == "" {
-					subscriptionLinkText := tm.GetText(langCode, "subscription_link")
-					info.WriteString(fmt.Sprintf(subscriptionLinkText, *customer.SubscriptionLink))
-					info.WriteString(tm.GetText(langCode, "happ_proxy_instructions"))
-				}
+				// The walkthrough used to render only when the Mini App URL was empty,
+				// so the one command a stuck paying customer reaches for stopped
+				// teaching as soon as the Mini App was configured. The key and the
+				// steps are the answer to "/connect", so they always render; the
+				// keyboard still leads with the Mini App.
+				subscriptionLinkText := tm.GetText(langCode, "subscription_link")
+				info.WriteString(fmt.Sprintf(subscriptionLinkText, *customer.SubscriptionLink))
+				info.WriteString(tm.GetText(langCode, "happ_proxy_instructions"))
 			}
 		} else {
 			noSubscriptionText := tm.GetText(langCode, "no_subscription")

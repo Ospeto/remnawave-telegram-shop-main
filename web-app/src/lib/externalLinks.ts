@@ -18,8 +18,18 @@ export function sanitizeExternalUrl(value?: string | null): string | null {
     }
 }
 
-export function resolveSupportUrl(supportUrl?: string | null, botUrl?: string | null): string | null {
-    return sanitizeExternalUrl(supportUrl) ?? sanitizeExternalUrl(botUrl);
+/**
+ * The support account, used when the shop has no SUPPORT_URL configured.
+ *
+ * This mirrors the bot's own fallback so /help, the paid activation guide and
+ * the Mini App's contact link all resolve to the same door. Falling back to the
+ * shop's bot URL was a different destination, so a customer who asked for help
+ * from the webview landed somewhere the bot never points at.
+ */
+export const DEFAULT_SUPPORT_URL = 'https://t.me/ospeto';
+
+export function resolveSupportUrl(supportUrl?: string | null, _botUrl?: string | null): string | null {
+    return sanitizeExternalUrl(supportUrl) ?? DEFAULT_SUPPORT_URL;
 }
 
 export function buildTelegramStartUrl(botUrl?: string | null, startParam?: string | null): string | null {

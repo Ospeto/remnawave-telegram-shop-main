@@ -85,6 +85,11 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 		"telegram_id", chatID,
 	)
 
+	// Unit 2: the labels and their targets were swapped. "✖️ Cancel payment"
+	// carried CallbackStart, so tapping it took the customer home and no
+	// cancellation ever happened, while "← Back" carried CallbackBuy. Each label
+	// now points at its own action: cancel asks for confirmation through the same
+	// handler, back returns to the plan list.
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:    chatID,
 		MessageID: message.ID,
@@ -92,8 +97,11 @@ func (h Handler) CancelPendingPurchaseCallbackHandler(ctx context.Context, b *bo
 		Text:      h.translation.GetText(langCode, "cancel_pending_done"),
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: [][]models.InlineKeyboardButton{
+				{{
+					Text:         h.translation.GetText(langCode, "cancel_pending_button"),
+					CallbackData: fmt.Sprintf("%s?id=%d", CallbackCancelPendingPurchase, purchase.ID),
+				}},
 				{{Text: h.translation.GetText(langCode, "back_button"), CallbackData: CallbackBuy}},
-				{{Text: h.translation.GetText(langCode, "cancel_pending_button"), CallbackData: CallbackStart}},
 			},
 		},
 	}); err != nil {

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useTelegram } from '../lib/twa';
 import { Link } from 'react-router-dom';
 import { useLanguage } from '../lib/LanguageContext';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
@@ -20,7 +21,7 @@ import { useSessionExpired } from '../lib/sessionExpiry';
 
 export function Home() {
     const { initData, tg, close } = useTelegram();
-    const { t, language, setLanguage } = useLanguage();
+    const { t, language } = useLanguage();
     const userProfile = useUserProfile();
     const [data, setData] = useState<UserData | null>(null);
     const [loading, setLoading] = useState(true);
@@ -142,10 +143,6 @@ export function Home() {
         } finally {
             setTogglingAutoRenewId(null);
         }
-    };
-
-    const toggleLanguage = () => {
-        setLanguage(language === 'en' ? 'my' : 'en');
     };
 
     const handleTrialActivation = async () => {
@@ -299,14 +296,7 @@ export function Home() {
                     </p>
                 </div>
                 {/* Language Switcher */}
-                <button
-                    onClick={() => { playClick(); toggleLanguage(); }}
-                    className="btn-secondary"
-                    aria-label={language === 'en' ? 'Switch to Myanmar' : 'Switch to English'}
-                    style={{ width: 'auto', padding: '8px 12px', fontSize: 'var(--font-body)', borderRadius: 20 }}
-                >
-                    {language === 'en' ? '🇺🇸 EN' : '🇲🇲 MY'}
-                </button>
+                <LanguageSwitcher />
             </div>
 
 

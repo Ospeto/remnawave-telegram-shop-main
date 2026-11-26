@@ -6,6 +6,7 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { Plan, ResellerAccount, UserData } from '../lib/types';
 import { openHappLink } from '../lib/openHapp';
@@ -666,6 +667,12 @@ export function Checkout() {
 
     return (
         <div className="page-wrapper animate-fade-in" style={{ gap: 16 }}>
+            {/* The switcher is here too: a customer arriving from a renewal
+                notification lands straight on Checkout and must be able to read
+                the screen in their own language without going home first. */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <LanguageSwitcher />
+            </div>
             {/* Step indicator */}
             {!isWalletTopup && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12 }}>

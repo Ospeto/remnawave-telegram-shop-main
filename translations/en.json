@@ -1,5 +1,5 @@
 {
-  "greeting": "Use Wavy for a fast and reliable internet connection.\n\n🎁 1-week free trial to test if it works for you\n🏪 24/7 easily accessible Mini App for purchases\n⚡ One-click system to import keys directly into the app\n🌍 5 stable servers optimized for both Data and WiFi\n🛡️ Strict No Log Policy for your privacy\n🎭 Advanced config that bypasses GFW detection\n\nOn top of this, if you refer your friends and they make a purchase, both of you will receive 1000 Kyats! Tap \u003cb\u003eBuy Now\u003c/b\u003e below to get started...",
+  "greeting": "Use Wavy for a fast and reliable internet connection.\n\n🏪 24/7 Mini App for purchases\n⚡ One-click import of your key into Happ\n🛡️ Strict No Log Policy for your privacy\n🎭 Advanced config that bypasses GFW detection",
   "buy_button": "⚡ Get My VPN Key",
   "connect_button": "🔌 Open App",
   "back_button": "← Back",
@@ -16,6 +16,7 @@
   "connect_no_customer": "We could not find your account yet. Tap Start below to set it up, then try Connect again.",
   "connect_no_customer_hint": "Tap Start below to create your account, then try Connect again.",
   "subscription_activated": "✅ Your VPN key is now active!",
+  "key_ready_message": "✅ <b>Your VPN key is active!</b>\n\nTap the code block below to copy your subscription key:\n\n<code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n📖 <b>Happ Proxy Quick Setup Guide</b>\n\n<b>Step 1 — Download Happ Proxy App:</b>\n• iOS users: Tap the <b>🍏 iOS (App Store)</b> button below\n• Android users: Tap the <b>⬇️ Android APK (Direct)</b> button below\n\n<b>Step 2 — Import Your Key (2 Methods):</b>\n• <i>Method 1 — Direct Import:</i>\n  Tap the <b>⚡ Import to Happ Proxy</b> button below to open Happ and auto-import your key.\n• <i>Method 2 — From Clipboard:</i>\n  Tap the <code>Code Block</code> above to copy, open Happ, and tap <b>\"Import from Clipboard\"</b> (or the <b>\"+\"</b> icon).\n\n<b>Step 3 — Connect:</b>\n• Select your imported server profile and tap <b>\"Connect\"</b> to start using the subscription you paid for.\n━━━━━━━━━━━━━━━━━━━━\n💬 Stuck at any step? Tap <b>Contact Support</b> below and we will help you.\n",
   "feedback_button": "⭐ Leave Feedback",
   "server_status_button": "🟢 Server Status",
   "support_button": "🆘 Contact Support",
@@ -54,7 +55,7 @@
   "access_denied": "⚠️ Access denied. Please update your profile information.",
   "mobile_banking_button": "📱 Pay via Mobile Banking",
   "mobile_pay_instructions": "<b>How to activate your key:</b>\n\n1️⃣ <b>Transfer exactly %d MMK using one of these accounts:</b>\n%s\n\n2️⃣ <b>⚠️ Important — remark field:</b>\nWrite ONLY: <code>Payment</code>\n<i>Do <b>NOT</b> write VPN, Wavy, Outline, or anything else</i>\n\n3️⃣ <b>Take a screenshot of the confirmation and send it below</b> 👇",
-  "mobile_pay_pending_resume": "You already have an unfinished payment for %d MMK. Upload that payment screenshot here, or open the app to cancel it and choose another plan.",
+  "mobile_pay_pending_resume": "You already have an unfinished payment for %d MMK. Upload that payment screenshot here — or tap ✖️ Cancel payment below to release it right here in this chat and pick another plan.",
   "mobile_pay_cancel_change_plan_button": "Cancel / Change Plan",
   "mobile_pay_verifying": "🔍 Verifying your payment screenshot...",
   "mobile_pay_success": "✅ Payment verified! Your key is being activated.",
@@ -95,5 +96,14 @@
   "wallet_empty_desc": "Your transaction history will appear here after your first top-up or purchase.",
   "home_empty_title": "Ready to Connect?",
   "home_empty_desc": "Get your private VPN key and start browsing freely.",
-  "home_empty_action": "🚀 Get My Key"
+  "home_empty_action": "🚀 Get My Key",
+  "payment_methods_unavailable": "⚠️ Card and mobile-banking checkout is switched off for this bot right now, so there are no payment methods to show here.\n\nPlease contact support and they will take your order directly.",
+  "payment_methods_unavailable_miniapp": "⚠️ In-chat checkout is switched off right now, so there are no payment methods to show here.\n\nTap the button below to choose a plan and pay inside the app — that is where orders are taken.",
+  "greeting_trial": "🎁 <b>%d-day free trial</b> so you can check it works for you before paying.",
+  "greeting_ready": "<b>Have these ready before you pay:</b>\n• Happ Proxy installed on your phone\n• Your banking app\n• The exact plan amount\n• A screenshot of the confirmation after you pay",
+  "greeting_steps": "<b>What happens when you tap Buy:</b>\n1. Choose a plan\n2. Transfer the exact amount\n3. Upload the payment screenshot\n4. Get your VPN key",
+  "greeting_referral": "🤝 Refer a friend and you both receive <b>%s MMK</b> once they buy.",
+  "greeting_cta": "Tap <b>Get My VPN Key</b> below to get started.",
+  "user_help_text": "<b>About this shop</b>\n\nBuy or extend a VPN key in the shop's Mini App, then import it into Happ Proxy — the guide is sent to you right after payment.\n\n• /start — open the main menu\n• /connect — your key and connection steps\n• Support — reach a human: %s",
+  "menu_button_text": "Buy here"
 }

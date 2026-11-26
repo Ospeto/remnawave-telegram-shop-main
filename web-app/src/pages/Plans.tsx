@@ -6,6 +6,7 @@ import { LoadingScreen } from '../components/LoadingScreen';
 import { ErrorScreen } from '../components/ErrorScreen';
 import { SessionExpiredScreen } from '../components/SessionExpiredScreen';
 import { TipBox } from '../components/TipBox';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 import { Plan, UserData } from '../lib/types';
 import { useMXBrownSound } from '../lib/useMXBrownSound';
 import { APIError, isAPIStatus } from '../lib/http';
@@ -234,6 +235,9 @@ export function Plans() {
         <div className="page-wrapper animate-fade-in" style={{ gap: 16 }}>
             {/* Header */}
             <div style={{ textAlign: 'center', padding: '8px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <LanguageSwitcher />
+                </div>
                 <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>
                     {isWalletTopup ? t('title_top_up') : (isExtend ? t('title_extend') : t('title_choose_plan'))}
                 </h1>
@@ -249,6 +253,25 @@ export function Plans() {
                     </div>
                 )}
             </div>
+
+            {/* Readiness — what to have ready before paying. A customer who pays
+                without Happ installed has to come back and cannot use the key
+                they just bought. */}
+            {!isExtend && !isWalletTopup && (
+                <div className="glass-card" style={{ padding: 14, display: 'grid', gap: 8 }}>
+                    <strong style={{ fontSize: 14 }}>{t('ready_title')}</strong>
+                    <span className="text-hint" style={{ fontSize: 12 }}>{t('download_text')}</span>
+                    <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 4 }}>
+                        <li style={{ fontSize: 12 }}>{t('ready_item_happ')}</li>
+                        <li style={{ fontSize: 12 }}>{t('ready_item_bank')}</li>
+                        <li style={{ fontSize: 12 }}>{t('ready_item_amount')}</li>
+                        <li style={{ fontSize: 12 }}>{t('ready_item_screenshot')}</li>
+                    </ul>
+                    <a href="#plan-list" className="btn-secondary" style={{ width: 'auto', justifySelf: 'start', padding: '8px 12px', fontSize: 12, borderRadius: 20, textDecoration: 'none' }}>
+                        {t('home_empty_action')}
+                    </a>
+                </div>
+            )}
 
             {/* Promo Code Input — hidden for resellers (server rejects reseller+promo) */}
             {showPromoSection && (
@@ -382,7 +405,7 @@ export function Plans() {
                     </span>
                 </div>
             ) : (
-                <div className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div id="plan-list" className="stagger" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                     {displayItems.map((item: Plan & { isTopUp?: boolean; discountedPrice?: number }, idx: number) => {
                     const price = item.discountedPrice || item.price;
                     const hasDiscount = item.discountedPrice !== undefined && item.discountedPrice < item.price;
@@ -430,7 +453,7 @@ export function Plans() {
                                         <div style={{ fontWeight: 600, fontSize: 15 }}>{item.label}</div>
                                         {!isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 12, marginTop: 3, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                                <span>📅 {item.days} {t('days_left').replace(' left', '')}</span>
+                                                <span>📅 {t('plan_days', { days: String(item.days) })}</span>
                                                 <span style={{ opacity: 0.3 }}>·</span>
                                                 <span style={item.traffic_limit_gb === 0 ? { color: 'var(--color-success)' } : {}}>
                                                     {item.traffic_limit_gb > 0 ? `📊 ${item.traffic_limit_gb} GB` : t('unlimited')}
@@ -478,7 +501,7 @@ export function Plans() {
                                         <div className="text-hint" style={{ fontSize: 11 }}>{item.currency}</div>
                                         {!isWalletTopup && (
                                             <div className="text-hint" style={{ fontSize: 9, marginTop: 2 }}>
-                                                {Math.round(price / item.days)} {t('per_day', { currency: item.currency.toLowerCase() })}
+                                                {Math.round(price / item.days)} {t('per_day_price', { amount: Math.round(price / item.days).toLocaleString() })}
                                             </div>
                                         )}
                                     </div>

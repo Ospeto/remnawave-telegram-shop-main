@@ -459,6 +459,15 @@ export const translations: Record<Language, Record<string, string>> = {
         // ── Stats refresh (U4) ──
         'stats_pending_note': 'Refreshing traffic data...',
         'stats_refresh': 'Refresh',
+        "switch_to_myanmar": "Switch to Myanmar",
+        "switch_to_english": "Switch to English",
+        "ready_title": "🎒 Before you pay, have these ready",
+        "ready_item_happ": "Happ Proxy app installed (free, under a minute)",
+        "ready_item_bank": "Your banking app open and ready to transfer",
+        "ready_item_amount": "The exact amount for the plan you choose",
+        "ready_item_screenshot": "A screenshot of the transfer receipt",
+        "plan_days": "{{days}} days",
+        "per_day_price": "about {{amount}} MMK/day",
     },
 
     my: {
@@ -917,5 +926,14 @@ export const translations: Record<Language, Record<string, string>> = {
         // ── Stats refresh (U4) ──
         'stats_pending_note': 'ဒေတာ အသုံးပြုမှု ပြန်လည် ရယူနေပါသည်...',
         'stats_refresh': 'ပြန်လည်ရယူရန်',
+        "switch_to_myanmar": "မြန်မာဘာသာသို့ ပြောင်းရန်",
+        "switch_to_english": "အင်္ဂလိပ်ဘာသာသို့ ပြောင်းရန်",
+        "ready_title": "🎒 မဝယ်ယူမီ ဤအရာများ အဆင်သင့်ရှိပါစေ",
+        "ready_item_happ": "Happ Proxy App ထည့်သွင်းပြီးဖြစ်ရန် (အခမဲ့၊ တစ်မိနစ်အောက်)",
+        "ready_item_bank": "ငွေလွှဲရန် Banking App ဖွင့်ထားရန်",
+        "ready_item_amount": "ရွေးချယ်မည့် Plan အတွက် ငွေပမာဏ အတိအကျ",
+        "ready_item_screenshot": "ငွေလွှဲပြီး ပြေစာ Screenshot",
+        "plan_days": "{{days}} ရက်",
+        "per_day_price": "တစ်ရက်လျှင် {{amount}} ကျပ်",
     }
 };

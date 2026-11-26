@@ -221,10 +221,11 @@ func TestStartCommandHandler_IneligibleCustomerShowsStartMenu(t *testing.T) {
 		t.Fatalf("captured calls = %d, want at least 2", len(*captured))
 	}
 
-	// Last call should be the start menu greeting (Burmese by default)
+	// Last call should be the start menu greeting. The Telegram client reports
+	// "en" and English is genuinely supported now, so the customer reads English.
 	lastCall := (*captured)[len(*captured)-1]
 	text, _ := lastCall.Body["text"].(string)
-	greeting := tm.GetText("my", "greeting")
+	greeting := tm.GetText("en", "greeting")
 	if !strings.Contains(text, greeting) {
 		t.Fatalf("last call text = %q, want greeting %q", text, greeting)
 	}
@@ -331,7 +332,7 @@ func TestCustomerTextMessageHandler_IneligibleCustomerNoSubShowsStartMenu(t *tes
 
 	lastCall := (*captured)[len(*captured)-1]
 	text, _ := lastCall.Body["text"].(string)
-	greeting := tm.GetText("my", "greeting")
+	greeting := tm.GetText("en", "greeting")
 	if !strings.Contains(text, greeting) {
 		t.Fatalf("last call text = %q, want greeting %q", text, greeting)
 	}
@@ -393,8 +394,8 @@ func TestCustomerTextMessageHandler_CustomerWithActiveSubShowsConnectionInfo(t *
 
 	call := (*captured)[0]
 	text, _ := call.Body["text"].(string)
-	burmeseActive := tm.GetText("my", "subscription_active")
-	subTextPrefix := strings.Split(burmeseActive, ":")[0]
+	englishActive := tm.GetText("en", "subscription_active")
+	subTextPrefix := strings.Split(englishActive, ":")[0]
 	if !strings.Contains(text, subTextPrefix) || !strings.Contains(text, activeLink) {
 		t.Fatalf("text = %q, want active subscription info with activeLink %q", text, activeLink)
 	}
@@ -503,10 +504,16 @@ func TestResolveEffectiveLanguage(t *testing.T) {
 		want         string
 	}{
 		{
-			name:         "telegram en defaults to my",
+			name:         "telegram en resolves to en",
 			customer:     nil,
 			telegramLang: "en",
-			want:         "my",
+			want:         "en",
+		},
+		{
+			name:         "telegram en-US resolves to en",
+			customer:     nil,
+			telegramLang: "en-US",
+			want:         "en",
 		},
 		{
 			name:         "telegram empty defaults to my",
@@ -515,28 +522,22 @@ func TestResolveEffectiveLanguage(t *testing.T) {
 			want:         "my",
 		},
 		{
-			name:         "telegram ru preserved as ru",
+			name:         "unsupported telegram language defaults to my",
 			customer:     nil,
 			telegramLang: "ru",
-			want:         "ru",
-		},
-		{
-			name:         "telegram ru-RU preserved as ru",
-			customer:     nil,
-			telegramLang: "ru-RU",
-			want:         "ru",
-		},
-		{
-			name:         "customer language en defaults to my",
-			customer:     &database.Customer{Language: "en"},
-			telegramLang: "en",
 			want:         "my",
 		},
 		{
-			name:         "customer language en with empty telegram defaults to my",
+			name:         "customer language en wins over telegram my",
+			customer:     &database.Customer{Language: "en"},
+			telegramLang: "my",
+			want:         "en",
+		},
+		{
+			name:         "customer language en survives an empty telegram tag",
 			customer:     &database.Customer{Language: "en"},
 			telegramLang: "",
-			want:         "my",
+			want:         "en",
 		},
 		{
 			name:         "customer language my returns my",
@@ -545,10 +546,16 @@ func TestResolveEffectiveLanguage(t *testing.T) {
 			want:         "my",
 		},
 		{
-			name:         "customer language ru returns ru",
+			name:         "customer language ru is no longer supported so telegram decides",
 			customer:     &database.Customer{Language: "ru"},
 			telegramLang: "en",
-			want:         "ru",
+			want:         "en",
+		},
+		{
+			name:         "customer language ru with no telegram tag falls back to my",
+			customer:     &database.Customer{Language: "ru"},
+			telegramLang: "",
+			want:         "my",
 		},
 	}
 
@@ -562,7 +569,7 @@ func TestResolveEffectiveLanguage(t *testing.T) {
 	}
 }
 
-func TestStartCommandHandler_DefaultsTelegramEnToBurmese(t *testing.T) {
+func TestStartCommandHandler_TelegramEnReadsEnglish(t *testing.T) {
 	restoreTrial := config.SetTrialConfigForTesting(7, 10)
 	defer restoreTrial()
 
@@ -607,8 +614,11 @@ func TestStartCommandHandler_DefaultsTelegramEnToBurmese(t *testing.T) {
 	}
 
 	text, _ := (*captured)[0].Body["text"].(string)
-	// Must contain Burmese trial text rather than English
-	if !strings.Contains(text, "အခမဲ့ စမ်းသပ်အသုံးပြုခွင့်") {
-		t.Fatalf("message text = %q, want Burmese trial success text", text)
+	// A stored/Telegram "en" is a real choice now: the customer reads English.
+	if !strings.Contains(text, "Your Free Trial is Active") {
+		t.Fatalf("message text = %q, want the English trial success text", text)
+	}
+	if strings.Contains(text, "အခမဲ့ စမ်းသပ်အသုံးပြုခွင့်") {
+		t.Fatalf("message text = %q, want no Burmese copy for an English customer", text)
 	}
 }

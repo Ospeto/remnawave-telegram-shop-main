@@ -57,6 +57,14 @@ export interface UserData {
     user: {
         id: number;
         telegram_id: number;
+        /**
+         * The language the customer's row stores.
+         *
+         * The bot resolved a language for every reply while the Mini App kept
+         * its own copy in localStorage, so the two surfaces could disagree with
+         * nobody noticing. This lets the webview adopt the same choice.
+         */
+        language?: string;
     };
     keys: SubscriptionKey[];
     is_active: boolean;

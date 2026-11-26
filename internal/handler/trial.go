@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -15,6 +13,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/payment"
 )
 
@@ -335,61 +334,9 @@ func (h Handler) TryAutoActivateAndSendTrial(ctx context.Context, b *bot.Bot, ch
 }
 
 func buildOneClickHappURL(subURL string) string {
-	baseURL := strings.TrimSpace(config.GetMiniAppURL())
-	if baseURL == "" || subURL == "" {
-		return subURL
-	}
-
-	parsed, err := url.Parse(baseURL)
-	if err != nil {
-		return subURL
-	}
-
-	parsed.RawQuery = ""
-	parsed.Path = "/redirect"
-	query := url.Values{}
-	query.Set("sub", subURL)
-	parsed.RawQuery = query.Encode()
-
-	return parsed.String()
+	return notification.HappImportURL(subURL)
 }
 
 func (h Handler) buildDirectSubscriptionKeyboard(lang string, subURL string) [][]models.InlineKeyboardButton {
-	var markup [][]models.InlineKeyboardButton
-
-	if subURL != "" {
-		markup = append(markup, []models.InlineKeyboardButton{
-			{Text: h.translation.GetText(lang, "happ_proxy_button"), URL: buildOneClickHappURL(subURL)},
-		})
-	}
-
-	markup = append(markup, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(lang, "download_happ_ios"), URL: "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"},
-		{Text: h.translation.GetText(lang, "download_happ_android"), URL: "https://sub.wavypremium.xyz/downloads/Happ.apk"},
-	})
-
-	markup = append(markup, h.resolveConnectButton(lang))
-
-	supportURL := strings.TrimSpace(config.SupportURL())
-	if supportURL == "" {
-		supportURL = "https://t.me/ospeto"
-	}
-	markup = append(markup, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(lang, "trial_support_button"), URL: supportURL},
-	})
-
-	markup = append(markup, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(lang, "back_button"), CallbackData: CallbackStart},
-	})
-	return markup
-}
-
-func (h Handler) createConnectKeyboard(lang string) [][]models.InlineKeyboardButton {
-	var inlineCustomerKeyboard [][]models.InlineKeyboardButton
-	inlineCustomerKeyboard = append(inlineCustomerKeyboard, h.resolveConnectButton(lang))
-
-	inlineCustomerKeyboard = append(inlineCustomerKeyboard, []models.InlineKeyboardButton{
-		{Text: h.translation.GetText(lang, "back_button"), CallbackData: CallbackStart},
-	})
-	return inlineCustomerKeyboard
+	return notification.BuildSubscriptionGuidanceKeyboard(h.translation, lang, subURL)
 }

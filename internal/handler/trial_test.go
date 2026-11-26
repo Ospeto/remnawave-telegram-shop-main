@@ -155,15 +155,15 @@ func TestResolveEffectiveLanguage_Trial(t *testing.T) {
 		telegramLang string
 		want         string
 	}{
-		{"en lang defaults to my", nil, "en", "my"},
+		{"en lang resolves to en", nil, "en", "en"},
 		{"empty lang defaults to my", nil, "", "my"},
-		{"ru lang returns ru", nil, "ru", "ru"},
-		{"ru-RU lang returns ru", nil, "ru-RU", "ru"},
-		{"customer en with telegram en defaults to my", &database.Customer{Language: "en"}, "en", "my"},
-		{"customer en with telegram empty defaults to my", &database.Customer{Language: "en"}, "", "my"},
-		{"customer en with telegram ru returns ru", &database.Customer{Language: "en"}, "ru", "ru"},
+		{"unsupported ru lang defaults to my", nil, "ru", "my"},
+		{"unsupported ru-RU lang defaults to my", nil, "ru-RU", "my"},
+		{"customer en wins over telegram en", &database.Customer{Language: "en"}, "en", "en"},
+		{"customer en survives an empty telegram tag", &database.Customer{Language: "en"}, "", "en"},
+		{"customer en ignores an unsupported telegram tag", &database.Customer{Language: "en"}, "ru", "en"},
 		{"customer my returns my", &database.Customer{Language: "my"}, "en", "my"},
-		{"customer ru returns ru", &database.Customer{Language: "ru"}, "en", "ru"},
+		{"customer ru is unsupported so telegram decides", &database.Customer{Language: "ru"}, "en", "en"},
 	}
 
 	for _, tt := range tests {

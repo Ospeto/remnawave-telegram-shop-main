@@ -203,8 +203,19 @@ func ServerStatusURL() string {
 }
 
 func SupportURL() string {
-	return conf.supportURL
+	if trimmed := strings.TrimSpace(conf.supportURL); trimmed != "" {
+		return trimmed
+	}
+	return DefaultSupportURL
 }
+
+// DefaultSupportURL is who a customer reaches when SUPPORT_URL is unset.
+//
+// The bot's own URL is not a substitute: a customer already talking to the bot
+// needs a human, and the shop bot cannot answer itself. Every support surface
+// (the start menu, /help, the paid activation guide, and the Mini App's contact
+// link) resolves through SupportURL so they can never point at different places.
+const DefaultSupportURL = "https://t.me/ospeto"
 
 func TosURL() string {
 	return conf.tosURL
@@ -270,6 +281,17 @@ func TrafficLimitResetStrategy() string {
 
 func IsMobileBankingEnabled() bool {
 	return conf.mobileBankingEnabled
+}
+
+// SetMobileBankingEnabledForTesting flips the in-chat payment chain for one test
+// and returns a func that restores the configured value.
+func SetMobileBankingEnabledForTesting(enabled bool) func() {
+	old := conf.mobileBankingEnabled
+	conf.mobileBankingEnabled = enabled
+
+	return func() {
+		conf.mobileBankingEnabled = old
+	}
 }
 
 func MobileBankingPhone() string {
