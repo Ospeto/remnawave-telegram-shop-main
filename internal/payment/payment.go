@@ -11,6 +11,7 @@ import (
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
 	"remnawave-tg-shop-bot/internal/gemini"
+	"remnawave-tg-shop-bot/internal/notification"
 	"remnawave-tg-shop-bot/internal/remnawave"
 	"remnawave-tg-shop-bot/internal/translation"
 	"remnawave-tg-shop-bot/utils"
@@ -1875,15 +1876,7 @@ func (s *PaymentService) ProcessPurchaseById(ctx context.Context, purchaseId int
 	}
 	notifyCustomer = customerForPostPurchaseNotifications(customer, refreshedCustomer)
 
-	if _, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: notifyCustomer.TelegramID,
-		Text:   s.translation.GetText(notifyCustomer.Language, "subscription_activated"),
-		ReplyMarkup: models.InlineKeyboardMarkup{
-			InlineKeyboard: s.createConnectKeyboard(notifyCustomer),
-		},
-	}); err != nil {
-		slog.Error("Failed to send activation message (non-fatal)", "error", err, "purchase_id", purchaseId)
-	}
+	s.sendKeyReadyMessage(ctx, notifyCustomer, purchaseId)
 
 	// Referral bonus — completely non-fatal; only for positive cash-paid service purchases (A5).
 	if triggersReferralConversion(purchase.InvoiceType, purchase.Amount) {
@@ -2252,6 +2245,41 @@ func (s *PaymentService) processReferralBonus(ctx context.Context, customer *dat
 	}
 
 	slog.Info("[REFERRAL-DEBUG] processReferralBonus completed")
+}
+
+// sendKeyReadyMessage hands a paying customer the same guidance a trial
+// customer already receives: the key itself plus the setup steps around it.
+//
+// Before this, a completed purchase sent one line and a single button, so the
+// customer who had just paid got less help than someone on a free trial. The
+// call is best-effort like every other operation in this block: a notification
+// failure must never fail or reverse a purchase.
+func (s *PaymentService) sendKeyReadyMessage(ctx context.Context, customer *database.Customer, purchaseID int64) {
+	if s.telegramBot == nil || s.translation == nil || customer == nil {
+		return
+	}
+
+	subURL := ""
+	if customer.SubscriptionLink != nil {
+		subURL = strings.TrimSpace(*customer.SubscriptionLink)
+	}
+
+	text := notification.FormatKeyMessage(s.translation, customer.Language, "key_ready_message", subURL)
+	isDisabled := true
+
+	if _, err := s.telegramBot.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:    customer.TelegramID,
+		Text:      text,
+		ParseMode: models.ParseModeHTML,
+		LinkPreviewOptions: &models.LinkPreviewOptions{
+			IsDisabled: &isDisabled,
+		},
+		ReplyMarkup: models.InlineKeyboardMarkup{
+			InlineKeyboard: notification.BuildSubscriptionGuidanceKeyboard(s.translation, customer.Language, subURL),
+		},
+	}); err != nil {
+		slog.Error("Failed to send key-ready message (non-fatal)", "error", err, "purchase_id", purchaseID)
+	}
 }
 
 func (s *PaymentService) createConnectKeyboard(customer *database.Customer) [][]models.InlineKeyboardButton {

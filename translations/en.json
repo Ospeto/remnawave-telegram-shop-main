@@ -16,6 +16,7 @@
   "connect_no_customer": "We could not find your account yet. Tap Start below to set it up, then try Connect again.",
   "connect_no_customer_hint": "Tap Start below to create your account, then try Connect again.",
   "subscription_activated": "✅ Your VPN key is now active!",
+  "key_ready_message": "✅ <b>Your VPN key is active!</b>\n\nTap the code block below to copy your subscription key:\n\n<code>%s</code>\n\n━━━━━━━━━━━━━━━━━━━━\n📖 <b>Happ Proxy Quick Setup Guide</b>\n\n<b>Step 1 — Download Happ Proxy App:</b>\n• iOS users: Tap the <b>🍏 iOS (App Store)</b> button below\n• Android users: Tap the <b>⬇️ Android APK (Direct)</b> button below\n\n<b>Step 2 — Import Your Key (2 Methods):</b>\n• <i>Method 1 — Direct Import:</i>\n  Tap the <b>⚡ Import to Happ Proxy</b> button below to open Happ and auto-import your key.\n• <i>Method 2 — From Clipboard:</i>\n  Tap the <code>Code Block</code> above to copy, open Happ, and tap <b>\"Import from Clipboard\"</b> (or the <b>\"+\"</b> icon).\n\n<b>Step 3 — Connect:</b>\n• Select your imported server profile and tap <b>\"Connect\"</b> to start using the subscription you paid for.\n━━━━━━━━━━━━━━━━━━━━\n💬 Stuck at any step? Tap <b>Contact Support</b> below and we will help you.\n",
   "feedback_button": "⭐ Leave Feedback",
   "server_status_button": "🟢 Server Status",
   "support_button": "🆘 Contact Support",
