@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 	"remnawave-tg-shop-bot/internal/config"
 	"remnawave-tg-shop-bot/internal/database"
+	"remnawave-tg-shop-bot/internal/payment"
 	"remnawave-tg-shop-bot/utils"
 )
 
@@ -248,6 +250,38 @@ func (h Handler) processReferral(ctx context.Context, messageText string, existi
 	}
 }
 
+// buildGreeting composes the start menu text instead of shipping one fixed blob
+// of prose.
+//
+// Two promises in the old greeting could not be kept. It advertised a free trial
+// on every deploy while .env.sample ships TRIAL_DAYS=0, and it claimed "5 stable
+// servers" that no configuration backs. It also hard-coded the referral amount.
+// The trial line now appears only when a trial can actually activate, the referral
+// amount comes from the configured bonus, and the server count is gone.
+//
+// It also orients the customer at the purchase handoff: what to have ready and
+// what happens after the tap, mirroring the Mini App's own step_1..step_4.
+func (h Handler) buildGreeting(langCode string) string {
+	if h.translation == nil {
+		return ""
+	}
+
+	parts := []string{h.translation.GetText(langCode, "greeting")}
+
+	if days := config.TrialDays(); days > 0 {
+		parts = append(parts, fmt.Sprintf(h.translation.GetText(langCode, "greeting_trial"), days))
+	}
+
+	parts = append(parts,
+		h.translation.GetText(langCode, "greeting_ready"),
+		h.translation.GetText(langCode, "greeting_steps"),
+		fmt.Sprintf(h.translation.GetText(langCode, "greeting_referral"), formatPrice(int(payment.GetReferralBonusAmount()))),
+		h.translation.GetText(langCode, "greeting_cta"),
+	)
+
+	return strings.Join(parts, "\n\n")
+}
+
 func (h Handler) sendStartMenu(ctx context.Context, b *bot.Bot, chatID int64, customer *database.Customer, langCode string) {
 	inlineKeyboard := h.buildStartKeyboard(customer, langCode)
 
@@ -307,7 +341,7 @@ func (h Handler) StartCallbackHandler(ctx context.Context, b *bot.Bot, update *m
 		ReplyMarkup: models.InlineKeyboardMarkup{
 			InlineKeyboard: inlineKeyboard,
 		},
-		Text: h.translation.GetText(langCode, "greeting"),
+		Text: h.buildGreeting(langCode),
 	})
 	if err != nil {
 		slog.Error("Error sending /start message", "error", err)

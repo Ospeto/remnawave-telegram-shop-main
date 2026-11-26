@@ -1,5 +1,5 @@
 {
-  "greeting": "Use Wavy for a fast and reliable internet connection.\n\n🎁 1-week free trial to test if it works for you\n🏪 24/7 easily accessible Mini App for purchases\n⚡ One-click system to import keys directly into the app\n🌍 5 stable servers optimized for both Data and WiFi\n🛡️ Strict No Log Policy for your privacy\n🎭 Advanced config that bypasses GFW detection\n\nOn top of this, if you refer your friends and they make a purchase, both of you will receive 1000 Kyats! Tap \u003cb\u003eBuy Now\u003c/b\u003e below to get started...",
+  "greeting": "Use Wavy for a fast and reliable internet connection.\n\n🏪 24/7 Mini App for purchases\n⚡ One-click import of your key into Happ\n🛡️ Strict No Log Policy for your privacy\n🎭 Advanced config that bypasses GFW detection",
   "buy_button": "⚡ Get My VPN Key",
   "connect_button": "🔌 Open App",
   "back_button": "← Back",
@@ -98,5 +98,10 @@
   "home_empty_desc": "Get your private VPN key and start browsing freely.",
   "home_empty_action": "🚀 Get My Key",
   "payment_methods_unavailable": "⚠️ Card and mobile-banking checkout is switched off for this bot right now, so there are no payment methods to show here.\n\nPlease contact support and they will take your order directly.",
-  "payment_methods_unavailable_miniapp": "⚠️ In-chat checkout is switched off right now, so there are no payment methods to show here.\n\nTap the button below to choose a plan and pay inside the app — that is where orders are taken."
+  "payment_methods_unavailable_miniapp": "⚠️ In-chat checkout is switched off right now, so there are no payment methods to show here.\n\nTap the button below to choose a plan and pay inside the app — that is where orders are taken.",
+  "greeting_trial": "🎁 <b>%d-day free trial</b> so you can check it works for you before paying.",
+  "greeting_ready": "<b>Have these ready before you pay:</b>\n• Happ Proxy installed on your phone\n• Your banking app\n• The exact plan amount\n• A screenshot of the confirmation after you pay",
+  "greeting_steps": "<b>What happens when you tap Buy:</b>\n1. Choose a plan\n2. Transfer the exact amount\n3. Upload the payment screenshot\n4. Get your VPN key",
+  "greeting_referral": "🤝 Refer a friend and you both receive <b>%s MMK</b> once they buy.",
+  "greeting_cta": "Tap <b>Get My VPN Key</b> below to get started."
 }
